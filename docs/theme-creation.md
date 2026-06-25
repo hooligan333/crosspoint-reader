@@ -385,9 +385,65 @@ Reference them from `theme.json`:
 }
 ```
 
+## FreeInkUI compatibility
+
+CrossPoint builds against the `freeink-sdk` submodule and includes the FreeInkUI and Icons libraries. Existing CrossPoint screens still consume the fields documented above, while compatible apps can use the same SD theme package to discover FreeInkUI component intent and Lucide icon names.
+
+Declare the FreeInkUI components a theme is designed for:
+
+```json
+"freeInkUI": {
+  "components": [
+    "header",
+    "status-bar",
+    "list",
+    "tab-bar",
+    "button",
+    "button-hints",
+    "progress-bar",
+    "popup"
+  ]
+}
+```
+
+Declare Lucide icon names with `assets.freeInkIcons`. Keys use the same semantic icon names as `assets.icons`; values are Lucide icon names to generate with `freeink-sdk/libs/assets/Icons/tools/gen_icons.py`:
+
+```json
+"assets": {
+  "icons": {
+    "folder": "icons/folder.bmp",
+    "book": "icons/book.bmp"
+  },
+  "freeInkIcons": {
+    "folder": "folder",
+    "book": "book-open",
+    "settings": "settings"
+  }
+}
+```
+
+Device overrides can replace either field:
+
+```json
+"devices": {
+  "x4": {
+    "freeInkUI": {
+      "components": ["header", "cover-carousel", "list", "button-hints"]
+    },
+    "assets": {
+      "freeInkIcons": {
+        "recent": "clock-3"
+      }
+    }
+  }
+}
+```
+
+CrossPoint validates these names and exposes them through `UITheme::getFreeInkComponents()` and `UITheme::getFreeInkIcons()`. It does not generate icons at runtime; firmware or apps that need compiled FreeInk icons should generate a small header from the Lucide names they use.
+
 ## CrossInk and extension fields
 
-CrossPoint only consumes the fields documented above. Unknown fields are ignored, so theme authors can include extra data for compatible apps and firmware.
+CrossPoint only consumes the fields documented above, including the FreeInkUI compatibility metadata. Unknown fields are ignored, so theme authors can include extra data for compatible apps and firmware.
 
 Put app-specific fields under `extensions.<namespace>`:
 
@@ -430,7 +486,7 @@ Put app-specific fields under `extensions.<namespace>`:
 
 Recommended extension rules:
 
-- Keep CrossPoint layout fields in `metrics`, `components`, `assets`, and `devices`.
+- Keep shared layout and asset fields in `metrics`, `components`, `assets`, `freeInkUI`, and `devices`.
 - Keep CrossInk-only fields under `extensions.crossink`.
 - Add an extension-local `schema` when the app-specific format may evolve.
 - Prefer declarative fields such as `placement`, `font`, `show`, and `labels` over code-like strings.

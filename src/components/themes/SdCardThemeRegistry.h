@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,9 @@ struct SdThemeDeviceConstraints {
   int frontButtons = 0;
   std::string sideButtons;
 };
+
+using ThemeFreeInkComponentList = std::vector<std::string>;
+using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
 
 struct SdCardThemeInfo {
   std::string id;
@@ -26,6 +30,8 @@ struct SdCardThemeInfo {
   ThemeTabBarSpec tabBar;
   ThemeHeaderSpec header;
   ThemeIconMap icons;
+  ThemeFreeInkComponentList freeInkComponents;
+  ThemeFreeInkIconMap freeInkIcons;
   SdThemeDeviceConstraints constraints;
 };
 

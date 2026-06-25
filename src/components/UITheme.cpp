@@ -75,6 +75,8 @@ void UITheme::reload() {
     currentSdHeader = themeInfo->header;
     currentSdThemePath = themeInfo->path;
     currentSdIcons = themeInfo->icons;
+    currentSdFreeInkComponents = themeInfo->freeInkComponents;
+    currentSdFreeInkIcons = themeInfo->freeInkIcons;
     const bool inheritsClassic = themeInfo->inherits == "classic";
     themeRegistry.clear();
     if (inheritsClassic) {
@@ -141,6 +143,8 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentSdHeader = ThemeHeaderSpec{};
   currentSdThemePath.clear();
   currentSdIcons.clear();
+  currentSdFreeInkComponents.clear();
+  currentSdFreeInkIcons.clear();
   themeRegistry.clear();
 }
 

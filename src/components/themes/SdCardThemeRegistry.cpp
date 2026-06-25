@@ -383,6 +383,16 @@ bool iconForKey(const char* key, UIIcon& out) {
   return true;
 }
 
+bool isSafeFreeInkName(const char* value) {
+  if (value == nullptr || value[0] == '\0') return false;
+  if (strstr(value, "..") != nullptr || strchr(value, '/') != nullptr || strchr(value, '\\') != nullptr) return false;
+  for (const char* p = value; *p != '\0'; ++p) {
+    const char c = *p;
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') return false;
+  }
+  return true;
+}
+
 void parseIconMap(JsonObjectConst obj, ThemeIconMap& icons) {
   if (obj.isNull()) return;
   for (JsonPairConst kv : obj) {
@@ -391,6 +401,29 @@ void parseIconMap(JsonObjectConst obj, ThemeIconMap& icons) {
     if (iconForKey(kv.key().c_str(), icon) && path != nullptr && ThemeInstaller::isValidRelativePath(path)) {
       if (strstr(kv.key().c_str(), "24") != nullptr && icons.find(icon) != icons.end()) continue;
       icons[icon] = path;
+    }
+  }
+}
+
+void parseFreeInkComponents(JsonArrayConst arr, ThemeFreeInkComponentList& components) {
+  if (arr.isNull()) return;
+  components.clear();
+  components.reserve(std::min<size_t>(arr.size(), 24));
+  for (JsonVariantConst value : arr) {
+    const char* component = value.as<const char*>();
+    if (isSafeFreeInkName(component)) {
+      components.emplace_back(component);
+    }
+  }
+}
+
+void parseFreeInkIconMap(JsonObjectConst obj, ThemeFreeInkIconMap& icons) {
+  if (obj.isNull()) return;
+  for (JsonPairConst kv : obj) {
+    UIIcon icon = UIIcon::None;
+    const char* lucideName = kv.value().as<const char*>();
+    if (iconForKey(kv.key().c_str(), icon) && isSafeFreeInkName(lucideName)) {
+      icons[icon] = lucideName;
     }
   }
 }
@@ -479,6 +512,10 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
     parseIconMap(doc["assets"]["icons"].as<JsonObjectConst>(), out.icons);
     parseIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.icons);
   }
+  parseFreeInkComponents(doc["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
+  parseFreeInkComponents(deviceObj["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
+  parseFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);
+  parseFreeInkIconMap(deviceObj["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);
   if (out.homeRecents.type == ThemeHomeRecentsType::CoverStrip) {
     out.metrics.homeRecentBooksCount = std::max(1, out.homeRecents.maxBooks);
   } else if (out.homeRecents.type == ThemeHomeRecentsType::None) {

@@ -20,6 +20,8 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
+  const ThemeFreeInkComponentList& getFreeInkComponents() const { return currentSdFreeInkComponents; }
+  const ThemeFreeInkIconMap& getFreeInkIcons() const { return currentSdFreeInkIcons; }
   std::vector<int> getHomeCoverThumbHeights() const;
   SdCardThemeRegistry& registry() { return themeRegistry; }
   void refreshRegistry();
@@ -48,6 +50,8 @@ class UITheme {
   ThemeHeaderSpec currentSdHeader;
   std::string currentSdThemePath;
   ThemeIconMap currentSdIcons;
+  ThemeFreeInkComponentList currentSdFreeInkComponents;
+  ThemeFreeInkIconMap currentSdFreeInkIcons;
   std::unique_ptr<BaseTheme> currentTheme;
   SdCardThemeRegistry themeRegistry;
 };
