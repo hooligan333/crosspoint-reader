@@ -528,13 +528,14 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         props.selectedIndex = selectorIndex < count ? selectorIndex : -1;
         props.titleText = textStyleFor(item);
         props.titleText.font = freeink::ui::GfxRendererTarget::FONT_SMALL;
+        props.titleText.maxLines = 2;
         props.cellStyles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
         props.columns = static_cast<uint8_t>(std::max(1, item.columns));
         props.coverSize = {static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : 78),
                            static_cast<int16_t>(item.coverHeight > 0 ? item.coverHeight : 110)};
         props.rowHeight = static_cast<int16_t>(item.height > 0 ? item.height : props.coverSize.height + 22);
         props.gap = static_cast<int16_t>(std::max(0, item.gap));
-        props.labelHeight = item.showTitle ? 20 : 0;
+        props.labelHeight = item.showTitle ? 38 : 0;
         freeink::ui::coverGrid(frame, rect, props);
         const int cellW = (rect.width - (props.columns - 1) * props.gap) / props.columns;
         for (int i = 0; i < count; ++i) {
