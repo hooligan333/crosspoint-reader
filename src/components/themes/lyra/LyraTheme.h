@@ -79,7 +79,9 @@ class LyraTheme : public BaseTheme {
                      const ThemeListSpec* list = nullptr, const ThemeButtonHintsSpec* buttonHints = nullptr,
                      const ThemeTabBarSpec* tabBar = nullptr, const ThemeHeaderSpec* header = nullptr,
                      const char* assetRoot = nullptr, const ThemeIconMap* icons = nullptr,
-                     const ThemeFreeInkIconMap* freeInkIcons = nullptr)
+                     const ThemeFreeInkIconMap* freeInkIcons = nullptr,
+                     const ThemeNamedIconMap* namedIcons = nullptr,
+                     const ThemeNamedFreeInkIconMap* namedFreeInkIcons = nullptr)
       : metrics_(metrics),
         homeRecents_(homeRecents),
         buttonMenu_(buttonMenu),
@@ -89,7 +91,9 @@ class LyraTheme : public BaseTheme {
         header_(header),
         assetRoot_(assetRoot),
         icons_(icons),
-        freeInkIcons_(freeInkIcons) {}
+        freeInkIcons_(freeInkIcons),
+        namedIcons_(namedIcons),
+        namedFreeInkIcons_(namedFreeInkIcons) {}
 
   // Component drawing methods
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
@@ -130,9 +134,12 @@ class LyraTheme : public BaseTheme {
   const char* assetRoot_;
   const ThemeIconMap* icons_;
   const ThemeFreeInkIconMap* freeInkIcons_;
+  const ThemeNamedIconMap* namedIcons_;
+  const ThemeNamedFreeInkIconMap* namedFreeInkIcons_;
   const ThemeMetrics& metrics() const { return metrics_ ? *metrics_ : LyraMetrics::values; }
   bool hasThemeIcon(UIIcon icon) const;
   bool drawThemeIcon(const GfxRenderer& renderer, UIIcon icon, int x, int y, int size) const;
+  bool drawNamedThemeIcon(const GfxRenderer& renderer, const char* key, int x, int y, int size) const;
   void drawCoverStripRecents(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                              int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool bufferRestored,
                              std::function<bool()> storeCoverBuffer, bool coverStripSelected) const;

@@ -107,7 +107,7 @@ enum class ThemeBookRef { Previous, Selected, Next, Index };
 enum class ThemeSlotX { Padding, Center, RightPadding };
 enum class ThemeSlotY { Top, Center };
 enum class ThemeMenuSelectionStyle { Fill, Outline, Triangle, Underline, Pill };
-enum class ThemeButtonHintsStyle { Buttons, Shapes, Groups };
+enum class ThemeButtonHintsStyle { Buttons, Shapes, Groups, Icons };
 
 struct ThemeTitleSpec {
   bool enabled = false;
@@ -241,14 +241,25 @@ enum UIIcon { None = 0, Folder, Text, Image, Book, File, Recent, Settings, Trans
 
 using ThemeIconMap = std::map<UIIcon, std::string>;
 using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
+using ThemeNamedIconMap = std::map<std::string, std::string>;
+using ThemeNamedFreeInkIconMap = std::map<std::string, std::string>;
 using ThemeFreeInkComponentList = std::vector<std::string>;
 
-enum class ThemeHomeElementType { Box, Divider, Label, TabBar, BookCard, CoverGrid, MenuGrid, MetricCards };
+enum class ThemeHomeElementType {
+  Box,
+  Divider,
+  Label,
+  TabBar,
+  BookCard,
+  CoverGrid,
+  MenuGrid,
+  MetricCards,
+  Rows,
+  Columns
+};
 
 struct ThemeHomeElementSpec {
   ThemeHomeElementType type = ThemeHomeElementType::Box;
-  int x = 0;
-  int y = 0;
   int width = 0;
   int height = 0;
   int radius = 0;
@@ -268,9 +279,14 @@ struct ThemeHomeElementSpec {
   int coverWidth = 0;
   int coverHeight = 0;
   int columns = 4;
+  int paddingTop = 0;
+  int paddingRight = 0;
+  int paddingBottom = 0;
+  int paddingLeft = 0;
   bool showTitle = true;
   bool showAuthor = true;
   bool showProgress = true;
+  std::vector<ThemeHomeElementSpec> children;
 };
 
 struct ThemeHomeLayoutSpec {

@@ -312,6 +312,9 @@ void parseButtonHintsSpec(JsonObjectConst obj, ThemeButtonHintsSpec& spec) {
     } else if (strcmp(hintLayout, "groups") == 0) {
       spec.style = ThemeButtonHintsStyle::Groups;
       spec.shapes = false;
+    } else if (strcmp(hintLayout, "icons") == 0) {
+      spec.style = ThemeButtonHintsStyle::Icons;
+      spec.shapes = false;
     } else {
       spec.style = ThemeButtonHintsStyle::Buttons;
     }
@@ -409,6 +412,16 @@ void parseIconMap(JsonObjectConst obj, ThemeIconMap& icons) {
   }
 }
 
+void parseNamedIconMap(JsonObjectConst obj, ThemeNamedIconMap& icons) {
+  if (obj.isNull()) return;
+  for (JsonPairConst kv : obj) {
+    const char* path = kv.value().as<const char*>();
+    if (isSafeFreeInkName(kv.key().c_str()) && path != nullptr && ThemeInstaller::isValidRelativePath(path)) {
+      icons[kv.key().c_str()] = path;
+    }
+  }
+}
+
 void parseFreeInkComponents(JsonArrayConst arr, ThemeFreeInkComponentList& components) {
   if (arr.isNull()) return;
   components.clear();
@@ -432,6 +445,16 @@ void parseFreeInkIconMap(JsonObjectConst obj, ThemeFreeInkIconMap& icons) {
   }
 }
 
+void parseNamedFreeInkIconMap(JsonObjectConst obj, ThemeNamedFreeInkIconMap& icons) {
+  if (obj.isNull()) return;
+  for (JsonPairConst kv : obj) {
+    const char* lucideName = kv.value().as<const char*>();
+    if (isSafeFreeInkName(kv.key().c_str()) && isSafeFreeInkName(lucideName)) {
+      icons[kv.key().c_str()] = lucideName;
+    }
+  }
+}
+
 void parseUiFontFamily(JsonObjectConst obj, std::string& family) {
   if (obj.isNull()) return;
   const char* value = obj["uiFontFamily"] | obj["fontFamily"] | obj["fonts"]["ui"]["family"] | nullptr;
@@ -440,8 +463,12 @@ void parseUiFontFamily(JsonObjectConst obj, std::string& family) {
   }
 }
 
-ThemeHomeElementType parseHomeElementType(const char* value) {
+ThemeHomeElementType parseLayoutElementType(const char* value) {
   if (value == nullptr) return ThemeHomeElementType::Box;
+  if (strcmp(value, "rows") == 0 || strcmp(value, "vstack") == 0 || strcmp(value, "column") == 0)
+    return ThemeHomeElementType::Rows;
+  if (strcmp(value, "columns") == 0 || strcmp(value, "hstack") == 0 || strcmp(value, "row") == 0)
+    return ThemeHomeElementType::Columns;
   if (strcmp(value, "box") == 0 || strcmp(value, "rect") == 0 || strcmp(value, "panel") == 0)
     return ThemeHomeElementType::Box;
   if (strcmp(value, "divider") == 0 || strcmp(value, "line") == 0) return ThemeHomeElementType::Divider;
@@ -454,61 +481,95 @@ ThemeHomeElementType parseHomeElementType(const char* value) {
   return ThemeHomeElementType::Box;
 }
 
+void parsePadding(JsonVariantConst value, ThemeHomeElementSpec& item) {
+  if (value.is<int>()) {
+    const int padding = value.as<int>();
+    item.padding = padding;
+    item.paddingTop = padding;
+    item.paddingRight = padding;
+    item.paddingBottom = padding;
+    item.paddingLeft = padding;
+    return;
+  }
+
+  JsonObjectConst obj = value.as<JsonObjectConst>();
+  if (obj.isNull()) return;
+  const int x = obj["x"] | obj["horizontal"] | 0;
+  const int y = obj["y"] | obj["vertical"] | 0;
+  item.paddingTop = obj["top"] | y;
+  item.paddingRight = obj["right"] | x;
+  item.paddingBottom = obj["bottom"] | y;
+  item.paddingLeft = obj["left"] | x;
+}
+
+bool parseLayoutElement(JsonObjectConst itemObj, ThemeHomeElementSpec& item, int depth = 0) {
+  if (itemObj.isNull() || depth > 4) return false;
+  item.type = parseLayoutElementType(itemObj["type"].as<const char*>());
+  item.width = itemObj["width"] | itemObj["w"] | item.width;
+  item.height = itemObj["height"] | itemObj["h"] | item.height;
+  item.radius = itemObj["radius"] | item.radius;
+  item.lineWidth = itemObj["lineWidth"] | itemObj["strokeWidth"] | item.lineWidth;
+  item.fill = itemObj["fill"] | item.fill;
+  item.outline = itemObj["outline"] | itemObj["border"] | item.outline;
+  applyFontSpec(itemObj, item.fontId, item.bold);
+  item.text = itemObj["text"] | "";
+  item.source = itemObj["source"] | "";
+  item.selectedIndex = itemObj["selectedIndex"] | item.selectedIndex;
+  item.count = itemObj["count"] | item.count;
+  item.gap = itemObj["gap"] | item.gap;
+  parsePadding(itemObj["padding"], item);
+  item.coverWidth = itemObj["coverWidth"] | item.coverWidth;
+  item.coverHeight = itemObj["coverHeight"] | item.coverHeight;
+  item.columns = itemObj["columns"] | item.columns;
+  item.showTitle = itemObj["showTitle"] | item.showTitle;
+  item.showAuthor = itemObj["showAuthor"] | item.showAuthor;
+  item.showProgress = itemObj["showProgress"] | item.showProgress;
+
+  JsonArrayConst labels = itemObj["labels"].as<JsonArrayConst>();
+  if (!labels.isNull()) {
+    item.labels.reserve(std::min<size_t>(labels.size(), 12));
+    for (JsonVariantConst labelValue : labels) {
+      if (item.labels.size() >= 12) break;
+      const char* label = labelValue.as<const char*>();
+      if (label != nullptr) item.labels.emplace_back(label);
+    }
+  }
+  JsonArrayConst icons = itemObj["icons"].as<JsonArrayConst>();
+  if (!icons.isNull()) {
+    item.icons.reserve(std::min<size_t>(icons.size(), 12));
+    for (JsonVariantConst iconValue : icons) {
+      if (item.icons.size() >= 12) break;
+      const char* icon = iconValue.as<const char*>();
+      if (isSafeFreeInkName(icon)) item.icons.emplace_back(icon);
+    }
+  }
+
+  JsonArrayConst children = itemObj["children"].as<JsonArrayConst>();
+  if (children.isNull()) children = itemObj["items"].as<JsonArrayConst>();
+  if (!children.isNull()) {
+    item.children.reserve(std::min<size_t>(children.size(), 32));
+    for (JsonObjectConst childObj : children) {
+      if (item.children.size() >= 32) break;
+      ThemeHomeElementSpec child;
+      if (parseLayoutElement(childObj, child, depth + 1)) item.children.push_back(std::move(child));
+    }
+  }
+  return true;
+}
+
 void parseHomeLayout(JsonObjectConst obj, ThemeHomeLayoutSpec& layout) {
   if (obj.isNull()) return;
-  JsonArrayConst elements = obj["layout"].as<JsonArrayConst>();
-  if (elements.isNull()) elements = obj["elements"].as<JsonArrayConst>();
-  if (elements.isNull()) return;
-
-  layout.enabled = true;
   layout.elements.clear();
-  layout.elements.reserve(std::min<size_t>(elements.size(), 32));
-  for (JsonObjectConst itemObj : elements) {
-    if (layout.elements.size() >= 32) break;
-    ThemeHomeElementSpec item;
-    item.type = parseHomeElementType(itemObj["type"].as<const char*>());
-    item.x = itemObj["x"] | item.x;
-    item.y = itemObj["y"] | item.y;
-    item.width = itemObj["width"] | itemObj["w"] | item.width;
-    item.height = itemObj["height"] | itemObj["h"] | item.height;
-    item.radius = itemObj["radius"] | item.radius;
-    item.lineWidth = itemObj["lineWidth"] | itemObj["strokeWidth"] | item.lineWidth;
-    item.fill = itemObj["fill"] | item.fill;
-    item.outline = itemObj["outline"] | itemObj["border"] | item.outline;
-    applyFontSpec(itemObj, item.fontId, item.bold);
-    item.text = itemObj["text"] | "";
-    item.source = itemObj["source"] | "";
-    item.selectedIndex = itemObj["selectedIndex"] | item.selectedIndex;
-    item.count = itemObj["count"] | item.count;
-    item.gap = itemObj["gap"] | item.gap;
-    item.padding = itemObj["padding"] | item.padding;
-    item.coverWidth = itemObj["coverWidth"] | item.coverWidth;
-    item.coverHeight = itemObj["coverHeight"] | item.coverHeight;
-    item.columns = itemObj["columns"] | item.columns;
-    item.showTitle = itemObj["showTitle"] | item.showTitle;
-    item.showAuthor = itemObj["showAuthor"] | item.showAuthor;
-    item.showProgress = itemObj["showProgress"] | item.showProgress;
 
-    JsonArrayConst labels = itemObj["labels"].as<JsonArrayConst>();
-    if (!labels.isNull()) {
-      item.labels.reserve(std::min<size_t>(labels.size(), 12));
-      for (JsonVariantConst labelValue : labels) {
-        if (item.labels.size() >= 12) break;
-        const char* label = labelValue.as<const char*>();
-        if (label != nullptr) item.labels.emplace_back(label);
-      }
-    }
-    JsonArrayConst icons = itemObj["icons"].as<JsonArrayConst>();
-    if (!icons.isNull()) {
-      item.icons.reserve(std::min<size_t>(icons.size(), 12));
-      for (JsonVariantConst iconValue : icons) {
-        if (item.icons.size() >= 12) break;
-        const char* icon = iconValue.as<const char*>();
-        if (isSafeFreeInkName(icon)) item.icons.emplace_back(icon);
-      }
-    }
-    layout.elements.push_back(std::move(item));
+  JsonObjectConst rootObj = obj["layout"].as<JsonObjectConst>();
+  if (rootObj.isNull()) {
+    layout.enabled = false;
+    return;
   }
+
+  ThemeHomeElementSpec root;
+  layout.enabled = parseLayoutElement(rootObj, root);
+  if (layout.enabled) layout.elements.push_back(std::move(root));
 }
 
 ThemeMetrics defaultMetrics() { return LyraMetrics::values; }
@@ -597,12 +658,16 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
     parseIconMap(doc["assets"]["icons"].as<JsonObjectConst>(), out.icons);
     parseIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.icons);
   }
+  parseNamedIconMap(doc["assets"]["icons"].as<JsonObjectConst>(), out.namedIcons);
+  parseNamedIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.namedIcons);
   parseUiFontFamily(doc["assets"].as<JsonObjectConst>(), out.uiFontFamily);
   parseUiFontFamily(deviceObj["assets"].as<JsonObjectConst>(), out.uiFontFamily);
   parseFreeInkComponents(doc["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
   parseFreeInkComponents(deviceObj["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
   parseFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);
+  parseNamedFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.namedFreeInkIcons);
   parseFreeInkIconMap(deviceObj["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);
+  parseNamedFreeInkIconMap(deviceObj["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.namedFreeInkIcons);
   if (out.homeRecents.type == ThemeHomeRecentsType::CoverStrip) {
     out.metrics.homeRecentBooksCount = std::max(1, out.homeRecents.maxBooks);
   } else if (out.homeRecents.type == ThemeHomeRecentsType::None) {

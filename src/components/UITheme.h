@@ -64,8 +64,10 @@ class UITheme {
   int currentMediumFontId = UI_10_FONT_ID;
   int currentLargeFontId = UI_12_FONT_ID;
   ThemeIconMap currentSdIcons;
+  ThemeNamedIconMap currentSdNamedIcons;
   ThemeFreeInkComponentList currentSdFreeInkComponents;
   ThemeFreeInkIconMap currentSdFreeInkIcons;
+  ThemeNamedFreeInkIconMap currentSdNamedFreeInkIcons;
   std::unique_ptr<BaseTheme> currentTheme;
   SdCardThemeRegistry themeRegistry;
   SdCardFontManager themeFontManager;

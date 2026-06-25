@@ -178,8 +178,10 @@ void UITheme::reload() {
     currentSdThemePath = themeInfo->path;
     currentSdUiFontFamily = themeInfo->uiFontFamily;
     currentSdIcons = themeInfo->icons;
+    currentSdNamedIcons = themeInfo->namedIcons;
     currentSdFreeInkComponents = themeInfo->freeInkComponents;
     currentSdFreeInkIcons = themeInfo->freeInkIcons;
+    currentSdNamedFreeInkIcons = themeInfo->namedFreeInkIcons;
     currentSdInheritsClassic = themeInfo->inherits == "classic";
     themeRegistry.clear();
     buildCurrentSdTheme();
@@ -238,8 +240,10 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentMediumFontId = UI_10_FONT_ID;
   currentLargeFontId = UI_12_FONT_ID;
   currentSdIcons.clear();
+  currentSdNamedIcons.clear();
   currentSdFreeInkComponents.clear();
   currentSdFreeInkIcons.clear();
+  currentSdNamedFreeInkIcons.clear();
   themeRegistry.clear();
 }
 
@@ -258,7 +262,8 @@ void UITheme::buildCurrentSdTheme() {
   const ThemeHeaderSpec* header = currentSdHeader.enabled ? &currentSdHeader : nullptr;
   currentTheme =
       std::make_unique<LyraTheme>(&currentSdMetrics, homeRecents, buttonMenu, list, buttonHints, tabBar, header,
-                                  currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons);
+                                  currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons,
+                                  &currentSdNamedIcons, &currentSdNamedFreeInkIcons);
   currentMetrics = &currentSdMetrics;
 }
 

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -115,6 +116,37 @@ ButtonHintShape shapeForButtonHintLabel(const char* label) {
   return ButtonHintShape::None;
 }
 
+const char* namedIconKeyForButtonHintLabel(const char* label) {
+  if (label == nullptr || label[0] == '\0') return nullptr;
+  if (matchesLabel(label, "Menu")) return "hintMenu";
+  if (matchesLabel(label, tr(STR_CANCEL))) return "hintCancel";
+  if (matchesLabel(label, tr(STR_BACK)) || matchesLabel(label, tr(STR_HOME))) return "hintBack";
+  if (matchesLabel(label, tr(STR_OPEN))) return "hintOpen";
+  if (matchesLabel(label, tr(STR_OK_BUTTON))) return "hintOk";
+  if (matchesLabel(label, tr(STR_SELECT)) || matchesLabel(label, tr(STR_CONFIRM)) ||
+      matchesLabel(label, tr(STR_DONE)) || matchesLabel(label, tr(STR_TOGGLE))) {
+    return "hintSelect";
+  }
+  if (matchesLabel(label, tr(STR_DIR_UP))) return "hintUp";
+  if (matchesLabel(label, tr(STR_DIR_DOWN))) return "hintDown";
+  if (matchesLabel(label, tr(STR_DIR_LEFT)) || strcmp(label, "<") == 0 || strcmp(label, "-") == 0) {
+    return "hintLeft";
+  }
+  if (matchesLabel(label, tr(STR_DIR_RIGHT)) || strcmp(label, ">") == 0 || strcmp(label, "+") == 0) {
+    return "hintRight";
+  }
+  if (matchesLabel(label, "Save")) return "hintSave";
+  if (matchesLabel(label, "Enter")) return "hintEnter";
+  return nullptr;
+}
+
+const char* sideNamedIconKeyForButtonHintLabel(const char* label) {
+  if (label == nullptr || label[0] == '\0') return nullptr;
+  if (strcmp(label, ">") == 0 || matchesLabel(label, tr(STR_DIR_RIGHT))) return "hintUp";
+  if (strcmp(label, "<") == 0 || matchesLabel(label, tr(STR_DIR_LEFT))) return "hintDown";
+  return namedIconKeyForButtonHintLabel(label);
+}
+
 void fillCircle(const GfxRenderer& renderer, int cx, int cy, int radius) {
   const int r2 = radius * radius;
   for (int y = -radius; y <= radius; ++y) {
@@ -180,40 +212,80 @@ bool LyraTheme::hasThemeIcon(UIIcon icon) const {
 }
 
 bool LyraTheme::drawThemeIcon(const GfxRenderer& renderer, UIIcon icon, int x, int y, int size) const {
-  if (freeInkIcons_ != nullptr) {
-    const auto freeInkIt = freeInkIcons_->find(icon);
-    if (freeInkIt != freeInkIcons_->end() && !freeInkIt->second.empty()) {
-      const freeink::Icon* freeInkIcon = findFreeInkThemeIcon(freeInkIt->second.c_str(), size);
-      if (freeInkIcon != nullptr) {
-        renderer.drawFreeInkIcon(*freeInkIcon, x, y, size, size);
-        return true;
+  if (assetRoot_ != nullptr && icons_ != nullptr && isBmpIconSize(size)) {
+    const auto it = icons_->find(icon);
+    if (it != icons_->end() && !it->second.empty()) {
+      std::string path = assetRoot_;
+      if (!path.empty() && path.back() != '/') path += "/";
+      path += it->second;
+
+      HalFile file;
+      if (Storage.openFileForRead("THEME", path.c_str(), file)) {
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          float scale = 1.0f;
+          if (bitmap.getWidth() > size) {
+            scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getWidth()));
+          }
+          if (bitmap.getHeight() > size) {
+            scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getHeight()));
+          }
+          const int drawnWidth = std::max(1, static_cast<int>(std::floor(bitmap.getWidth() * scale)));
+          const int drawnHeight = std::max(1, static_cast<int>(std::floor(bitmap.getHeight() * scale)));
+          renderer.drawBitmap(bitmap, x + (size - drawnWidth) / 2, y + (size - drawnHeight) / 2, drawnWidth,
+                              drawnHeight);
+          return true;
+        }
       }
     }
   }
 
-  if (assetRoot_ == nullptr || icons_ == nullptr || !isBmpIconSize(size)) return false;
-  const auto it = icons_->find(icon);
-  if (it == icons_->end() || it->second.empty()) return false;
+  if (freeInkIcons_ == nullptr) return false;
+  const auto freeInkIt = freeInkIcons_->find(icon);
+  if (freeInkIt == freeInkIcons_->end() || freeInkIt->second.empty()) return false;
+  const freeink::Icon* freeInkIcon = findFreeInkThemeIcon(freeInkIt->second.c_str(), size);
+  if (freeInkIcon == nullptr) return false;
+  renderer.drawFreeInkIcon(*freeInkIcon, x, y, size, size);
+  return true;
+}
 
-  std::string path = assetRoot_;
-  if (!path.empty() && path.back() != '/') path += "/";
-  path += it->second;
+bool LyraTheme::drawNamedThemeIcon(const GfxRenderer& renderer, const char* key, int x, int y, int size) const {
+  if (key == nullptr || key[0] == '\0') return false;
 
-  HalFile file;
-  if (!Storage.openFileForRead("THEME", path.c_str(), file)) return false;
-  Bitmap bitmap(file);
-  if (bitmap.parseHeaders() != BmpReaderError::Ok) return false;
+  if (assetRoot_ != nullptr && namedIcons_ != nullptr && isBmpIconSize(size)) {
+    const auto it = namedIcons_->find(key);
+    if (it != namedIcons_->end() && !it->second.empty()) {
+      std::string path = assetRoot_;
+      if (!path.empty() && path.back() != '/') path += "/";
+      path += it->second;
 
-  float scale = 1.0f;
-  if (bitmap.getWidth() > size) {
-    scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getWidth()));
+      HalFile file;
+      if (Storage.openFileForRead("THEME", path.c_str(), file)) {
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          float scale = 1.0f;
+          if (bitmap.getWidth() > size) {
+            scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getWidth()));
+          }
+          if (bitmap.getHeight() > size) {
+            scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getHeight()));
+          }
+          const int drawnWidth = std::max(1, static_cast<int>(std::floor(bitmap.getWidth() * scale)));
+          const int drawnHeight = std::max(1, static_cast<int>(std::floor(bitmap.getHeight() * scale)));
+          renderer.drawBitmap(bitmap, x + (size - drawnWidth) / 2, y + (size - drawnHeight) / 2, drawnWidth,
+                              drawnHeight);
+          return true;
+        }
+      }
+    }
   }
-  if (bitmap.getHeight() > size) {
-    scale = std::min(scale, static_cast<float>(size) / static_cast<float>(bitmap.getHeight()));
-  }
-  const int drawnWidth = std::max(1, static_cast<int>(std::floor(bitmap.getWidth() * scale)));
-  const int drawnHeight = std::max(1, static_cast<int>(std::floor(bitmap.getHeight() * scale)));
-  renderer.drawBitmap(bitmap, x + (size - drawnWidth) / 2, y + (size - drawnHeight) / 2, drawnWidth, drawnHeight);
+
+  if (namedFreeInkIcons_ == nullptr) return false;
+  const auto freeInkIt = namedFreeInkIcons_->find(key);
+  if (freeInkIt == namedFreeInkIcons_->end() || freeInkIt->second.empty()) return false;
+  const freeink::Icon* freeInkIcon = findFreeInkThemeIcon(freeInkIt->second.c_str(), size);
+  if (freeInkIcon == nullptr) return false;
+  renderer.drawFreeInkIcon(*freeInkIcon, x, y, size, size);
   return true;
 }
 
@@ -696,6 +768,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   const ThemeButtonHintsStyle hintStyle =
       buttonHints_ != nullptr && buttonHints_->enabled ? buttonHints_->style : ThemeButtonHintsStyle::Buttons;
   const bool shapes = hintStyle == ThemeButtonHintsStyle::Shapes;
+  const bool icons = hintStyle == ThemeButtonHintsStyle::Icons;
   const int shapeSize = buttonHints_ != nullptr && buttonHints_->enabled ? buttonHints_->shapeSize : 18;
   if (hintStyle == ThemeButtonHintsStyle::Groups) {
     const int sidePadding = buttonHints_->sidePadding;
@@ -746,6 +819,14 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
                             pageHeight - buttonY + buttonHeight / 2, shapeSize);
         continue;
       }
+      if (icons) {
+        const int iconSize = std::max(12, shapeSize);
+        if (drawNamedThemeIcon(renderer, namedIconKeyForButtonHintLabel(labels[i]),
+                               x + (buttonWidth - iconSize) / 2,
+                               pageHeight - buttonY + (buttonHeight - iconSize) / 2, iconSize)) {
+          continue;
+        }
+      }
       if (buttonHints_ == nullptr || !buttonHints_->enabled || buttonHints_->fill) {
         renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, buttonCornerRadius, Color::White);
       }
@@ -784,6 +865,7 @@ void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   const ThemeButtonHintsStyle hintStyle =
       buttonHints_ != nullptr && buttonHints_->enabled ? buttonHints_->style : ThemeButtonHintsStyle::Buttons;
   const bool shapes = hintStyle == ThemeButtonHintsStyle::Shapes;
+  const bool icons = hintStyle == ThemeButtonHintsStyle::Icons;
   const int shapeSize = buttonHints_ != nullptr && buttonHints_->enabled ? buttonHints_->shapeSize : 18;
 
   auto drawSideHint = [&](const int x, const int y, const char* label, const bool leftOpen, const bool rightOpen) {
@@ -798,6 +880,14 @@ void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
       }
       drawButtonHintShape(renderer, shape, x + buttonWidth / 2, y + buttonHeight / 2, shapeSize);
       return;
+    }
+
+    if (icons) {
+      const int iconSize = std::max(12, shapeSize);
+      if (drawNamedThemeIcon(renderer, sideNamedIconKeyForButtonHintLabel(label), x + (buttonWidth - iconSize) / 2,
+                             y + (buttonHeight - iconSize) / 2, iconSize)) {
+        return;
+      }
     }
 
     if (buttonHints_ == nullptr || !buttonHints_->enabled || buttonHints_->fill) {

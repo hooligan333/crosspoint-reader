@@ -81,6 +81,41 @@
       "textOffsetY": 7
     }
   },
+  "screens": {
+    "home": {
+      "layout": {
+        "type": "rows",
+        "padding": {
+          "x": 60,
+          "top": 120,
+          "bottom": 120
+        },
+        "gap": 0,
+        "children": [
+          {
+            "type": "box",
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "menu-grid",
+            "h": 220,
+            "columns": 1,
+            "gap": 8,
+            "font": "medium",
+            "radius": 0,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "box",
+            "outline": false,
+            "fill": false
+          }
+        ]
+      }
+    }
+  },
   "devices": {
     "x3": {
       "constraints": {

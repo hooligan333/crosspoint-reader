@@ -28,9 +28,11 @@ struct SdCardThemeInfo {
   ThemeHeaderSpec header;
   ThemeHomeLayoutSpec homeLayout;
   ThemeIconMap icons;
+  ThemeNamedIconMap namedIcons;
   std::string uiFontFamily;
   ThemeFreeInkComponentList freeInkComponents;
   ThemeFreeInkIconMap freeInkIcons;
+  ThemeNamedFreeInkIconMap namedFreeInkIcons;
   SdThemeDeviceConstraints constraints;
 };
 

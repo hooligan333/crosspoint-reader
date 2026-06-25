@@ -183,8 +183,8 @@
       "fill": true,
       "outline": false,
       "drawEmpty": false,
-      "layout": "shapes",
-      "shapeSize": 16,
+      "layout": "icons",
+      "shapeSize": 24,
       "textOffsetY": 6
     }
   },
@@ -202,96 +202,133 @@
   },
   "screens": {
     "home": {
-      "layout": [
-        {
-          "type": "tab-bar",
-          "x": 90,
-          "y": 6,
-          "w": 324,
-          "h": 38,
-          "labels": [
-            "reading",
-            "library",
-            "network",
-            "settings"
-          ],
-          "icons": [
-            "book-open",
-            "library",
-            "wifi",
-            "sliders-horizontal"
-          ],
-          "selectedIndex": 0,
-          "font": "small",
-          "style": "bold",
-          "gap": 4,
-          "radius": 4,
-          "outline": false
-        },
-        {
-          "type": "label",
+      "layout": {
+        "type": "rows",
+        "padding": {
           "x": 36,
-          "y": 66,
-          "w": 180,
-          "h": 18,
-          "text": "currently reading",
-          "font": "medium",
-          "style": "bold"
+          "top": 6
         },
-        {
-          "type": "book-card",
-          "x": 36,
-          "y": 116,
-          "w": 408,
-          "h": 150,
-          "coverWidth": 86,
-          "coverHeight": 122,
-          "padding": 10,
-          "radius": 4,
-          "font": "medium"
-        },
-        {
-          "type": "cover-grid",
-          "x": 36,
-          "y": 292,
-          "w": 408,
-          "h": 184,
-          "columns": 3,
-          "count": 3,
-          "coverHeight": 132,
-          "gap": 14,
-          "font": "small",
-          "radius": 0,
-          "outline": false,
-          "fill": false
-        },
-        {
-          "type": "label",
-          "x": 36,
-          "y": 500,
-          "w": 180,
-          "h": 18,
-          "text": "reading stats",
-          "font": "medium",
-          "style": "bold"
-        },
-        {
-          "type": "metric-cards",
-          "x": 36,
-          "y": 548,
-          "w": 408,
-          "h": 118,
-          "count": 3,
-          "labels": [
-            "last read",
-            "total read",
-            "completed"
-          ],
-          "gap": 8,
-          "font": "small",
-          "radius": 4
-        }
-      ]
+        "gap": 0,
+        "children": [
+          {
+            "type": "columns",
+            "h": 38,
+            "gap": 0,
+            "children": [
+              {
+                "type": "box",
+                "outline": false,
+                "fill": false
+              },
+              {
+                "type": "tab-bar",
+                "w": 324,
+                "labels": [
+                  "reading",
+                  "library",
+                  "network",
+                  "settings"
+                ],
+                "icons": [
+                  "book-open",
+                  "library",
+                  "wifi",
+                  "sliders-horizontal"
+                ],
+                "selectedIndex": 0,
+                "font": "small",
+                "style": "bold",
+                "gap": 4,
+                "radius": 4,
+                "outline": false
+              },
+              {
+                "type": "box",
+                "outline": false,
+                "fill": false
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "h": 22,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "label",
+            "h": 18,
+            "text": "currently reading",
+            "font": "medium",
+            "style": "bold"
+          },
+          {
+            "type": "box",
+            "h": 32,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "book-card",
+            "h": 150,
+            "coverWidth": 86,
+            "coverHeight": 122,
+            "padding": 10,
+            "radius": 4,
+            "font": "medium"
+          },
+          {
+            "type": "box",
+            "h": 26,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "cover-grid",
+            "h": 184,
+            "columns": 3,
+            "count": 3,
+            "coverHeight": 132,
+            "gap": 14,
+            "font": "small",
+            "radius": 0,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "box",
+            "h": 24,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "label",
+            "h": 18,
+            "text": "reading stats",
+            "font": "medium",
+            "style": "bold"
+          },
+          {
+            "type": "box",
+            "h": 30,
+            "outline": false,
+            "fill": false
+          },
+          {
+            "type": "metric-cards",
+            "h": 118,
+            "count": 3,
+            "labels": [
+              "last read",
+              "total read",
+              "completed"
+            ],
+            "gap": 8,
+            "font": "small",
+            "radius": 4
+          }
+        ]
+      }
     }
   },
   "assets": {
@@ -304,7 +341,42 @@
       "folder": "folder",
       "wifi": "wifi",
       "hotspot": "router",
-      "bookmark": "bookmark"
+      "bookmark": "bookmark",
+      "hintMenu": "menu",
+      "hintBack": "arrow-left",
+      "hintOpen": "folder-open",
+      "hintSelect": "check",
+      "hintSave": "save",
+      "hintUp": "arrow-up",
+      "hintDown": "arrow-down",
+      "hintCancel": "x",
+      "hintOk": "check",
+      "hintEnter": "corner-down-left",
+      "hintLeft": "arrow-left",
+      "hintRight": "arrow-right"
+    },
+    "icons": {
+      "book": "icons/book.bmp",
+      "bookmark": "icons/bookmark.bmp",
+      "folder": "icons/folder.bmp",
+      "hintBack": "icons/hintBack.bmp",
+      "hintCancel": "icons/hintCancel.bmp",
+      "hintDown": "icons/hintDown.bmp",
+      "hintEnter": "icons/hintEnter.bmp",
+      "hintLeft": "icons/hintLeft.bmp",
+      "hintMenu": "icons/hintMenu.bmp",
+      "hintOk": "icons/hintOk.bmp",
+      "hintOpen": "icons/hintOpen.bmp",
+      "hintRight": "icons/hintRight.bmp",
+      "hintSave": "icons/hintSave.bmp",
+      "hintSelect": "icons/hintSelect.bmp",
+      "hintUp": "icons/hintUp.bmp",
+      "hotspot": "icons/hotspot.bmp",
+      "library": "icons/library.bmp",
+      "recent": "icons/recent.bmp",
+      "settings": "icons/settings.bmp",
+      "transfer": "icons/transfer.bmp",
+      "wifi": "icons/wifi.bmp"
     }
   },
   "devices": {

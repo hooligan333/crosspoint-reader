@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -299,14 +300,6 @@ void HomeActivity::loop() {
 namespace {
 using FIFrame = freeink::ui::Frame<32>;
 
-freeink::ui::Rect fiRect(const freeink::ui::Rect& safe, const ThemeHomeElementSpec& item) {
-  const int16_t x = static_cast<int16_t>(safe.x + item.x);
-  const int16_t y = static_cast<int16_t>(safe.y + item.y);
-  const int16_t w = static_cast<int16_t>(item.width > 0 ? item.width : safe.right() - x);
-  const int16_t h = static_cast<int16_t>(item.height > 0 ? item.height : safe.bottom() - y);
-  return freeink::ui::Rect{x, y, w, h};
-}
-
 freeink::ui::FontId fontTokenFor(int fontId) {
   if (fontId == SMALL_FONT_ID) return freeink::ui::GfxRendererTarget::FONT_SMALL;
   if (fontId == UI_12_FONT_ID) return freeink::ui::GfxRendererTarget::FONT_TITLE;
@@ -452,9 +445,31 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
                                         tr(STR_SETTINGS_TITLE)};
   if (hasOpdsServers) menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
 
-  for (const auto& item : layout.elements) {
-    const auto rect = fiRect(safe, item);
+  std::function<void(const ThemeHomeElementSpec&, freeink::ui::Rect)> renderElement;
+  renderElement = [&](const ThemeHomeElementSpec& item, const freeink::ui::Rect rect) {
     switch (item.type) {
+      case ThemeHomeElementType::Rows:
+      case ThemeHomeElementType::Columns: {
+        const freeink::ui::Rect content = rect.inset(
+            freeink::ui::Insets{static_cast<int16_t>(item.paddingTop), static_cast<int16_t>(item.paddingRight),
+                                static_cast<int16_t>(item.paddingBottom), static_cast<int16_t>(item.paddingLeft)});
+        freeink::ui::Stack<32> stack(
+            content, item.type == ThemeHomeElementType::Columns ? freeink::ui::Axis::Row : freeink::ui::Axis::Column,
+            static_cast<int16_t>(std::max(0, item.gap)));
+        for (const auto& child : item.children) {
+          const int basis = item.type == ThemeHomeElementType::Columns ? child.width : child.height;
+          if (basis > 0) {
+            stack.fixed(static_cast<int16_t>(basis));
+          } else {
+            stack.flex(1);
+          }
+        }
+        stack.layout();
+        for (size_t i = 0; i < item.children.size() && i < stack.count(); ++i) {
+          renderElement(item.children[i], stack.rect(static_cast<uint8_t>(i)));
+        }
+        break;
+      }
       case ThemeHomeElementType::Box:
         if (item.fill) target.fill(rect, freeink::ui::Paint::dither(freeink::ui::Color::LightGray), item.radius);
         if (item.outline) {
@@ -575,7 +590,8 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
           freeink::ui::ButtonProps props;
           props.label = menuItems[i].c_str();
           props.text = textStyleFor(item);
-          props.styles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+          props.styles =
+              item.outline || item.fill ? cardStyles(static_cast<uint8_t>(std::max(0, item.radius))) : unframedStyles();
           props.state = selectorIndex - static_cast<int>(recentBooks.size()) == i ? freeink::ui::StateSelected
                                                                                   : freeink::ui::StateNormal;
           freeink::ui::button(
@@ -611,7 +627,10 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         break;
       }
     }
-  }
+  };
+
+  if (layout.elements.empty()) return false;
+  renderElement(layout.elements.front(), safe);
 
   renderer.displayBuffer();
   if (!firstRenderDone) {

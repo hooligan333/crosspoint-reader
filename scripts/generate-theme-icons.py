@@ -140,6 +140,8 @@ def collect_freeink_icon_names(theme_root: Path):
 
 
 def icon_size_for_key(key: str, default_size: int) -> int:
+    if key.startswith("hint"):
+        return 24
     return DEFAULT_ICON_SIZES.get(key, default_size)
 
 
