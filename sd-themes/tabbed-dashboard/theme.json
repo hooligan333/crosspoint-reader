@@ -275,20 +275,22 @@
             "coverHeight": 122,
             "padding": 10,
             "radius": 4,
-            "font": "medium"
+            "font": "medium",
+            "outline": false,
+            "fill": false
           },
           {
             "type": "box",
-            "h": 26,
+            "h": 18,
             "outline": false,
             "fill": false
           },
           {
             "type": "cover-grid",
-            "h": 184,
+            "h": 222,
             "columns": 3,
             "count": 3,
-            "coverHeight": 132,
+            "coverHeight": 166,
             "gap": 14,
             "font": "small",
             "radius": 0,
