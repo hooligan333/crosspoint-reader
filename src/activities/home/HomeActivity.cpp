@@ -335,6 +335,20 @@ freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
   return styles;
 }
 
+freeink::ui::StyleSet unframedStyles() {
+  freeink::ui::StyleSet styles;
+  styles.normal.background = freeink::ui::Paint::solid(freeink::ui::Color::White);
+  styles.normal.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.normal.border = freeink::ui::Paint{};
+  styles.selected.background = freeink::ui::Paint::solid(freeink::ui::Color::White);
+  styles.selected.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.selected.border = freeink::ui::Paint{};
+  styles.focused.background = freeink::ui::Paint::solid(freeink::ui::Color::White);
+  styles.focused.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.focused.border = freeink::ui::Paint{};
+  return styles;
+}
+
 void drawFreeInkIconInk(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
                         const int maxWidth, const int maxHeight, const bool black) {
   if (icon.bits == nullptr || icon.w == 0 || icon.h == 0 || maxWidth <= 0 || maxHeight <= 0) return;
@@ -529,15 +543,16 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         props.titleText = textStyleFor(item);
         props.titleText.font = freeink::ui::GfxRendererTarget::FONT_SMALL;
         props.titleText.maxLines = 2;
-        props.cellStyles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+        props.cellStyles =
+            item.outline || item.fill ? cardStyles(static_cast<uint8_t>(std::max(0, item.radius))) : unframedStyles();
         props.columns = static_cast<uint8_t>(std::max(1, item.columns));
-        props.coverSize = {static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : 78),
+        const int cellW = (rect.width - (props.columns - 1) * std::max(0, item.gap)) / props.columns;
+        props.coverSize = {static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : cellW),
                            static_cast<int16_t>(item.coverHeight > 0 ? item.coverHeight : 110)};
         props.rowHeight = static_cast<int16_t>(item.height > 0 ? item.height : props.coverSize.height + 22);
         props.gap = static_cast<int16_t>(std::max(0, item.gap));
         props.labelHeight = item.showTitle ? 38 : 0;
         freeink::ui::coverGrid(frame, rect, props);
-        const int cellW = (rect.width - (props.columns - 1) * props.gap) / props.columns;
         for (int i = 0; i < count; ++i) {
           const int col = i % props.columns;
           const int row = i / props.columns;

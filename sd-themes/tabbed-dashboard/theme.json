@@ -204,27 +204,9 @@
     "home": {
       "layout": [
         {
-          "type": "label",
-          "x": 36,
-          "y": 0,
-          "w": 210,
-          "h": 18,
-          "text": "Reader",
-          "font": "small"
-        },
-        {
-          "type": "label",
-          "x": 396,
-          "y": 0,
-          "w": 72,
-          "h": 18,
-          "text": "<    >",
-          "font": "small"
-        },
-        {
           "type": "tab-bar",
           "x": 90,
-          "y": 22,
+          "y": 6,
           "w": 324,
           "h": 38,
           "labels": [
@@ -249,7 +231,7 @@
         {
           "type": "label",
           "x": 36,
-          "y": 80,
+          "y": 66,
           "w": 180,
           "h": 18,
           "text": "currently reading",
@@ -259,7 +241,7 @@
         {
           "type": "book-card",
           "x": 36,
-          "y": 126,
+          "y": 116,
           "w": 408,
           "h": 150,
           "coverWidth": 86,
@@ -271,21 +253,22 @@
         {
           "type": "cover-grid",
           "x": 36,
-          "y": 304,
+          "y": 292,
           "w": 408,
           "h": 184,
           "columns": 3,
           "count": 3,
-          "coverWidth": 108,
           "coverHeight": 132,
           "gap": 14,
           "font": "small",
-          "radius": 3
+          "radius": 0,
+          "outline": false,
+          "fill": false
         },
         {
           "type": "label",
           "x": 36,
-          "y": 512,
+          "y": 500,
           "w": 180,
           "h": 18,
           "text": "reading stats",
@@ -295,7 +278,7 @@
         {
           "type": "metric-cards",
           "x": 36,
-          "y": 558,
+          "y": 548,
           "w": 408,
           "h": 118,
           "count": 3,
@@ -346,7 +329,6 @@
     "crossink": {
       "dashboard": {
         "enabled": true,
-        "brand": "Reader",
         "topTabs": [
           "reading",
           "library",
