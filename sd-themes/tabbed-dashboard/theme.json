@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": 2,
+  "version": 4,
   "id": "tabbed-dashboard",
   "name": "Tabbed Dashboard",
   "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
@@ -118,7 +118,7 @@
       "centeredText": false,
       "centerVertically": true,
       "showIcons": true,
-      "drawPanel": true,
+      "drawPanel": false,
       "panelWidth": 0,
       "panelCornerRadius": 4,
       "selectionStyle": "pill",
@@ -126,7 +126,7 @@
       "selectionInset": 8,
       "selectedTextInverted": true,
       "selectionFillBlack": true,
-      "rowPaddingX": 10,
+      "rowPaddingX": 12,
       "textInsetX": 10
     },
     "list": {
@@ -142,14 +142,14 @@
       "selectionFill": true,
       "selectionOutline": false,
       "selectedTextInverted": true,
-      "rowBackgrounds": true,
+      "rowBackgrounds": false,
       "centerSingleLineRows": true,
       "subtitleRowAutoHeight": true,
       "centerValueVertically": true,
-      "rowSidePadding": 6,
-      "rowGap": 4,
-      "textInsetX": 8,
-      "selectionInsetX": 0,
+      "rowSidePadding": 8,
+      "rowGap": 5,
+      "textInsetX": 9,
+      "selectionInsetX": 2,
       "selectionInsetY": 1,
       "titleOffsetY": 6,
       "subtitleOffsetY": 25,
@@ -252,7 +252,7 @@
           },
           {
             "type": "box",
-            "h": 22,
+            "h": 34,
             "outline": false,
             "fill": false
           },
@@ -291,12 +291,14 @@
             "h": 222,
             "columns": 3,
             "count": 3,
-            "coverHeight": 166,
+            "coverHeight": 189,
+            "showTitle": false,
             "gap": 14,
             "font": "small",
             "radius": 0,
             "outline": false,
-            "fill": false
+            "fill": false,
+            "coverWidth": "fill"
           },
           {
             "type": "box",

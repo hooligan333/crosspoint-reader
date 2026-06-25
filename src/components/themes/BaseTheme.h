@@ -278,6 +278,7 @@ struct ThemeHomeElementSpec {
   int padding = 6;
   int coverWidth = 0;
   int coverHeight = 0;
+  bool coverFillWidth = false;
   int columns = 4;
   int paddingTop = 0;
   int paddingRight = 0;

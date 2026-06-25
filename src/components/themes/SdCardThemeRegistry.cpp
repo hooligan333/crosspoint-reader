@@ -518,7 +518,13 @@ bool parseLayoutElement(JsonObjectConst itemObj, ThemeHomeElementSpec& item, int
   item.count = itemObj["count"] | item.count;
   item.gap = itemObj["gap"] | item.gap;
   parsePadding(itemObj["padding"], item);
-  item.coverWidth = itemObj["coverWidth"] | item.coverWidth;
+  if (itemObj["coverWidth"].is<const char*>()) {
+    const char* coverWidth = itemObj["coverWidth"].as<const char*>();
+    item.coverFillWidth = coverWidth != nullptr && strcmp(coverWidth, "fill") == 0;
+  } else {
+    item.coverWidth = itemObj["coverWidth"] | item.coverWidth;
+  }
+  item.coverFillWidth = itemObj["coverFillWidth"] | item.coverFillWidth;
   item.coverHeight = itemObj["coverHeight"] | item.coverHeight;
   item.columns = itemObj["columns"] | item.columns;
   item.showTitle = itemObj["showTitle"] | item.showTitle;

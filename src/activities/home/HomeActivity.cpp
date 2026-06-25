@@ -330,15 +330,17 @@ freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
 
 freeink::ui::StyleSet unframedStyles() {
   freeink::ui::StyleSet styles;
-  styles.normal.background = freeink::ui::Paint{};
+  styles.normal.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
   styles.normal.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.normal.border = freeink::ui::Paint{};
-  styles.selected.background = freeink::ui::Paint{};
+  styles.selected.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
   styles.selected.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.selected.border = freeink::ui::Paint{};
-  styles.focused.background = freeink::ui::Paint{};
+  styles.focused.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
   styles.focused.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.focused.border = freeink::ui::Paint{};
+  styles.active = styles.selected;
+  styles.disabled = styles.normal;
   return styles;
 }
 
@@ -384,7 +386,7 @@ void drawFolderTabs(const GfxRenderer& renderer, freeink::ui::Rect rect, const T
     const int pointsX[4] = {x, x + w - slant, x + w, x + slant};
     const int pointsY[4] = {rect.y, rect.y, rect.bottom(), rect.bottom()};
 
-    renderer.fillPolygon(pointsX, pointsY, 4, active ? false : true);
+    renderer.fillPolygon(pointsX, pointsY, 4, active ? true : false);
     renderer.drawLine(pointsX[0], pointsY[0], pointsX[1], pointsY[1], 1, true);
     renderer.drawLine(pointsX[1], pointsY[1], pointsX[2], pointsY[2], 1, true);
     renderer.drawLine(pointsX[2], pointsY[2], pointsX[3], pointsY[3], 1, true);
@@ -394,7 +396,7 @@ void drawFolderTabs(const GfxRenderer& renderer, freeink::ui::Rect rect, const T
     const int iconX = x + (w - iconSize) / 2;
     const int iconY = rect.y + (rect.height - iconSize) / 2;
     const freeink::Icon* icon = findFreeInkThemeIcon(icons[i].c_str(), iconSize);
-    if (icon != nullptr) drawFreeInkIconInk(renderer, *icon, iconX, iconY, iconSize, iconSize, active);
+    if (icon != nullptr) drawFreeInkIconInk(renderer, *icon, iconX, iconY, iconSize, iconSize, !active);
   }
 }
 }  // namespace
@@ -439,7 +441,8 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
   freeink::ui::InputSnapshot input;
   freeink::ui::InteractionBuffer<32> interactions;
   FIFrame frame(target, device, input, interactions);
-  const freeink::ui::Rect safe = frame.safeRect();
+  freeink::ui::Rect safe = frame.safeRect();
+  safe.height = static_cast<int16_t>(std::max(0, safe.height - UITheme::getInstance().getMetrics().buttonHintsHeight));
 
   std::vector<std::string> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE)};
@@ -563,13 +566,18 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
             item.outline || item.fill ? cardStyles(static_cast<uint8_t>(std::max(0, item.radius))) : unframedStyles();
         props.columns = static_cast<uint8_t>(std::max(1, item.columns));
         const int cellW = (rect.width - (props.columns - 1) * std::max(0, item.gap)) / props.columns;
-        const int coverH = item.coverHeight > 0 ? item.coverHeight : 110;
-        const int portraitCoverW = std::max(1, coverH * 2 / 3);
-        props.coverSize = {static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : std::min(cellW, portraitCoverW)),
-                           static_cast<int16_t>(coverH)};
-        props.rowHeight = static_cast<int16_t>(item.height > 0 ? item.height : props.coverSize.height + 22);
         props.gap = static_cast<int16_t>(std::max(0, item.gap));
         props.labelHeight = item.showTitle ? 38 : 0;
+        const int rows = props.columns > 0 ? (count + props.columns - 1) / props.columns : 0;
+        const int availableRowHeight =
+            rows > 0 ? (rect.height - (rows - 1) * props.gap) / rows : rect.height;
+        const int coverH = item.coverHeight > 0 ? item.coverHeight : std::max(1, availableRowHeight - props.labelHeight);
+        const int portraitCoverW = std::max(1, coverH * 2 / 3);
+        const int coverW = item.coverFillWidth ? cellW : (item.coverWidth > 0 ? item.coverWidth : std::min(cellW, portraitCoverW));
+        props.coverSize = {static_cast<int16_t>(coverW),
+                           static_cast<int16_t>(coverH)};
+        props.rowHeight = static_cast<int16_t>(
+            std::max(static_cast<int>(props.coverSize.height + props.labelHeight), availableRowHeight));
         freeink::ui::coverGrid(frame, rect, props);
         for (int i = 0; i < count; ++i) {
           const int col = i % props.columns;
@@ -635,6 +643,8 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
   if (layout.elements.empty()) return false;
   renderElement(layout.elements.front(), safe);
 
+  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
   if (!firstRenderDone) {
     firstRenderDone = true;
