@@ -498,6 +498,15 @@ void parseHomeLayout(JsonObjectConst obj, ThemeHomeLayoutSpec& layout) {
         if (label != nullptr) item.labels.emplace_back(label);
       }
     }
+    JsonArrayConst icons = itemObj["icons"].as<JsonArrayConst>();
+    if (!icons.isNull()) {
+      item.icons.reserve(std::min<size_t>(icons.size(), 12));
+      for (JsonVariantConst iconValue : icons) {
+        if (item.icons.size() >= 12) break;
+        const char* icon = iconValue.as<const char*>();
+        if (isSafeFreeInkName(icon)) item.icons.emplace_back(icon);
+      }
+    }
     layout.elements.push_back(std::move(item));
   }
 }

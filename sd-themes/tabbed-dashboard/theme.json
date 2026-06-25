@@ -205,7 +205,7 @@
       "layout": [
         {
           "type": "label",
-          "x": 8,
+          "x": 10,
           "y": 0,
           "w": 210,
           "h": 18,
@@ -213,27 +213,43 @@
           "font": "small"
         },
         {
+          "type": "label",
+          "x": 402,
+          "y": 0,
+          "w": 68,
+          "h": 18,
+          "text": "<    >",
+          "font": "small"
+        },
+        {
           "type": "tab-bar",
-          "x": 8,
+          "x": 76,
           "y": 22,
-          "w": 464,
-          "h": 30,
+          "w": 328,
+          "h": 34,
           "labels": [
             "reading",
             "library",
             "network",
             "settings"
           ],
+          "icons": [
+            "book-open",
+            "library",
+            "wifi",
+            "sliders-horizontal"
+          ],
           "selectedIndex": 0,
           "font": "small",
           "style": "bold",
+          "gap": 4,
           "radius": 4,
           "outline": false
         },
         {
           "type": "label",
-          "x": 8,
-          "y": 58,
+          "x": 10,
+          "y": 76,
           "w": 180,
           "h": 18,
           "text": "currently reading",
@@ -242,34 +258,34 @@
         },
         {
           "type": "book-card",
-          "x": 8,
-          "y": 78,
-          "w": 464,
-          "h": 102,
-          "coverWidth": 64,
-          "coverHeight": 84,
-          "padding": 7,
+          "x": 10,
+          "y": 100,
+          "w": 460,
+          "h": 128,
+          "coverWidth": 78,
+          "coverHeight": 106,
+          "padding": 9,
           "radius": 4,
           "font": "medium"
         },
         {
           "type": "cover-grid",
-          "x": 8,
-          "y": 194,
-          "w": 464,
-          "h": 142,
+          "x": 10,
+          "y": 252,
+          "w": 460,
+          "h": 196,
           "columns": 3,
           "count": 3,
-          "coverWidth": 78,
-          "coverHeight": 108,
-          "gap": 8,
+          "coverWidth": 100,
+          "coverHeight": 146,
+          "gap": 12,
           "font": "small",
           "radius": 3
         },
         {
           "type": "label",
-          "x": 8,
-          "y": 350,
+          "x": 10,
+          "y": 476,
           "w": 180,
           "h": 18,
           "text": "reading stats",
@@ -278,10 +294,10 @@
         },
         {
           "type": "metric-cards",
-          "x": 8,
-          "y": 372,
-          "w": 464,
-          "h": 60,
+          "x": 10,
+          "y": 502,
+          "w": 460,
+          "h": 76,
           "count": 3,
           "labels": [
             "last read",
@@ -289,17 +305,6 @@
             "completed"
           ],
           "gap": 8,
-          "font": "small",
-          "radius": 4
-        },
-        {
-          "type": "menu-grid",
-          "x": 8,
-          "y": 446,
-          "w": 464,
-          "h": 72,
-          "columns": 4,
-          "gap": 6,
           "font": "small",
           "radius": 4
         }

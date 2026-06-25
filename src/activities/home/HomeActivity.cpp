@@ -22,6 +22,7 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/icons/FreeInkThemeIconRegistry.h"
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
@@ -196,6 +197,56 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
+  if (UITheme::getInstance().hasFreeInkHomeLayout()) {
+    buttonNavigator.onNext([this] {
+      if (!recentBooks.empty()) {
+        coverSelectorIndex = ButtonNavigator::nextIndex(coverSelectorIndex, recentBooks.size());
+        selectorIndex = coverSelectorIndex;
+        requestUpdate();
+      }
+    });
+
+    buttonNavigator.onPrevious([this] {
+      if (!recentBooks.empty()) {
+        coverSelectorIndex = ButtonNavigator::previousIndex(coverSelectorIndex, recentBooks.size());
+        selectorIndex = coverSelectorIndex;
+        requestUpdate();
+      }
+    });
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      homeTabIndex = ButtonNavigator::previousIndex(homeTabIndex, 4);
+      requestUpdate();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      homeTabIndex = ButtonNavigator::nextIndex(homeTabIndex, 4);
+      requestUpdate();
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      switch (homeTabIndex) {
+        case 0:
+          if (!recentBooks.empty()) onSelectBook(recentBooks[coverSelectorIndex].path);
+          break;
+        case 1:
+          onRecentsOpen();
+          break;
+        case 2:
+          if (hasOpdsServers) {
+            onOpdsBrowserOpen();
+          } else {
+            onFileTransferOpen();
+          }
+          break;
+        case 3:
+          onSettingsOpen();
+          break;
+        default:
+          break;
+      }
+    }
+    return;
+  }
+
   const int menuCount = getMenuItemCount();
 
   buttonNavigator.onNext([this, menuCount] {
@@ -280,6 +331,39 @@ freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
   styles.selected.radius = radius;
   return styles;
 }
+
+void drawFolderTabs(const GfxRenderer& renderer, freeink::ui::Rect rect, const ThemeHomeElementSpec& item) {
+  const std::vector<std::string> fallbackIcons = {"book-open", "library", "wifi", "sliders-horizontal"};
+  const auto& icons = item.icons.empty() ? fallbackIcons : item.icons;
+  if (icons.empty()) return;
+
+  const int count = std::min<int>(icons.size(), 6);
+  const int gap = std::max(0, item.gap);
+  const int tabW = (rect.width - gap * (count - 1)) / count;
+  const int slant = std::max(6, rect.height / 3);
+  const int selected = std::max(0, std::min(item.selectedIndex, count - 1));
+
+  for (int i = 0; i < count; ++i) {
+    const int x = rect.x + i * (tabW + gap);
+    const int w = i == count - 1 ? rect.right() - x : tabW;
+    const bool active = i == selected;
+    const int pointsX[4] = {x, x + w - slant, x + w, x + slant};
+    const int pointsY[4] = {rect.y, rect.y, rect.bottom(), rect.bottom()};
+
+    renderer.fillPolygon(pointsX, pointsY, 4, active ? false : true);
+    renderer.drawLine(pointsX[0], pointsY[0], pointsX[1], pointsY[1], 1, true);
+    renderer.drawLine(pointsX[1], pointsY[1], pointsX[2], pointsY[2], 1, true);
+    renderer.drawLine(pointsX[2], pointsY[2], pointsX[3], pointsY[3], 1, true);
+    renderer.drawLine(pointsX[3], pointsY[3], pointsX[0], pointsY[0], 1, true);
+
+    const int iconSize = std::min(24, std::max(16, rect.height - 8));
+    const int iconX = x + (w - iconSize) / 2;
+    const int iconY = rect.y + (rect.height - iconSize) / 2;
+    if (!active) renderer.fillRect(iconX - 3, iconY - 3, iconSize + 6, iconSize + 6, false);
+    const freeink::Icon* icon = findFreeInkThemeIcon(icons[i].c_str(), iconSize);
+    if (icon != nullptr) renderer.drawFreeInkIcon(*icon, iconX, iconY, iconSize, iconSize);
+  }
+}
 }  // namespace
 
 void HomeActivity::drawRecentCoverInRect(int bookIndex, Rect rect, int thumbHeight) {
@@ -349,6 +433,12 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         break;
       }
       case ThemeHomeElementType::TabBar: {
+        if (!item.icons.empty()) {
+          ThemeHomeElementSpec tabItem = item;
+          tabItem.selectedIndex = homeTabIndex;
+          drawFolderTabs(renderer, rect, tabItem);
+          break;
+        }
         const std::vector<std::string> fallback = {"reading", "library", "network", "settings"};
         const auto& labels = item.labels.empty() ? fallback : item.labels;
         std::vector<freeink::ui::TabItem> tabs;

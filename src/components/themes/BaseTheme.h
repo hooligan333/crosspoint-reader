@@ -260,6 +260,7 @@ struct ThemeHomeElementSpec {
   std::string text;
   std::string source;
   std::vector<std::string> labels;
+  std::vector<std::string> icons;
   int selectedIndex = 0;
   int count = 3;
   int gap = 8;
