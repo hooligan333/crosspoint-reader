@@ -303,23 +303,17 @@ void parseButtonHintsSpec(JsonObjectConst obj, ThemeButtonHintsSpec& spec) {
   spec.fill = obj["fill"] | spec.fill;
   spec.outline = obj["outline"] | spec.outline;
   spec.drawEmpty = obj["drawEmpty"] | spec.drawEmpty;
-  spec.shapes = obj["shapes"] | spec.shapes;
   const char* hintLayout = obj["layout"].as<const char*>();
   if (hintLayout != nullptr) {
     if (strcmp(hintLayout, "shapes") == 0) {
       spec.style = ThemeButtonHintsStyle::Shapes;
-      spec.shapes = true;
     } else if (strcmp(hintLayout, "groups") == 0) {
       spec.style = ThemeButtonHintsStyle::Groups;
-      spec.shapes = false;
     } else if (strcmp(hintLayout, "icons") == 0) {
       spec.style = ThemeButtonHintsStyle::Icons;
-      spec.shapes = false;
     } else {
       spec.style = ThemeButtonHintsStyle::Buttons;
     }
-  } else if (spec.shapes) {
-    spec.style = ThemeButtonHintsStyle::Shapes;
   }
   spec.sidePadding = obj["sidePadding"] | spec.sidePadding;
   spec.groupGap = obj["groupGap"] | spec.groupGap;
@@ -422,18 +416,6 @@ void parseNamedIconMap(JsonObjectConst obj, ThemeNamedIconMap& icons) {
   }
 }
 
-void parseFreeInkComponents(JsonArrayConst arr, ThemeFreeInkComponentList& components) {
-  if (arr.isNull()) return;
-  components.clear();
-  components.reserve(std::min<size_t>(arr.size(), 24));
-  for (JsonVariantConst value : arr) {
-    const char* component = value.as<const char*>();
-    if (isSafeFreeInkName(component)) {
-      components.emplace_back(component);
-    }
-  }
-}
-
 void parseFreeInkIconMap(JsonObjectConst obj, ThemeFreeInkIconMap& icons) {
   if (obj.isNull()) return;
   for (JsonPairConst kv : obj) {
@@ -513,7 +495,6 @@ bool parseLayoutElement(JsonObjectConst itemObj, ThemeHomeElementSpec& item, int
   item.outline = itemObj["outline"] | itemObj["border"] | item.outline;
   applyFontSpec(itemObj, item.fontId, item.bold);
   item.text = itemObj["text"] | "";
-  item.source = itemObj["source"] | "";
   item.selectedIndex = itemObj["selectedIndex"] | item.selectedIndex;
   item.count = itemObj["count"] | item.count;
   item.gap = itemObj["gap"] | item.gap;
@@ -668,8 +649,6 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
   parseNamedIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.namedIcons);
   parseUiFontFamily(doc["assets"].as<JsonObjectConst>(), out.uiFontFamily);
   parseUiFontFamily(deviceObj["assets"].as<JsonObjectConst>(), out.uiFontFamily);
-  parseFreeInkComponents(doc["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
-  parseFreeInkComponents(deviceObj["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
   parseFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);
   parseNamedFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.namedFreeInkIcons);
   parseFreeInkIconMap(deviceObj["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);

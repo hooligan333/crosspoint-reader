@@ -22,8 +22,6 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
-  const ThemeFreeInkComponentList& getFreeInkComponents() const { return currentSdFreeInkComponents; }
-  const ThemeFreeInkIconMap& getFreeInkIcons() const { return currentSdFreeInkIcons; }
   const ThemeHomeLayoutSpec& getHomeLayout() const { return currentSdHomeLayout; }
   bool hasFreeInkHomeLayout() const { return currentSdHomeLayout.enabled; }
   int getSmallFontId() const { return currentSmallFontId; }
@@ -65,7 +63,6 @@ class UITheme {
   int currentLargeFontId = UI_12_FONT_ID;
   ThemeIconMap currentSdIcons;
   ThemeNamedIconMap currentSdNamedIcons;
-  ThemeFreeInkComponentList currentSdFreeInkComponents;
   ThemeFreeInkIconMap currentSdFreeInkIcons;
   ThemeNamedFreeInkIconMap currentSdNamedFreeInkIcons;
   std::unique_ptr<BaseTheme> currentTheme;

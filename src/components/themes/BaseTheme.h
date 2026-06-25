@@ -205,7 +205,6 @@ struct ThemeButtonHintsSpec {
   bool fill = true;
   bool outline = true;
   bool drawEmpty = true;
-  bool shapes = false;
   ThemeButtonHintsStyle style = ThemeButtonHintsStyle::Buttons;
   int sidePadding = 20;
   int groupGap = 10;
@@ -243,7 +242,6 @@ using ThemeIconMap = std::map<UIIcon, std::string>;
 using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
 using ThemeNamedIconMap = std::map<std::string, std::string>;
 using ThemeNamedFreeInkIconMap = std::map<std::string, std::string>;
-using ThemeFreeInkComponentList = std::vector<std::string>;
 
 enum class ThemeHomeElementType {
   Box,
@@ -269,7 +267,6 @@ struct ThemeHomeElementSpec {
   int fontId = 10;
   bool bold = false;
   std::string text;
-  std::string source;
   std::vector<std::string> labels;
   std::vector<std::string> icons;
   int selectedIndex = 0;

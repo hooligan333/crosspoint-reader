@@ -519,8 +519,10 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         const int bookIndex =
             recentBooks.empty() ? -1 : std::min(coverSelectorIndex, static_cast<int>(recentBooks.size()) - 1);
         freeink::ui::BookCardProps props;
-        props.title = bookIndex >= 0 ? recentBooks[bookIndex].title.c_str() : tr(STR_NO_OPEN_BOOK);
-        props.author = bookIndex >= 0 ? recentBooks[bookIndex].author.c_str() : tr(STR_START_READING);
+        props.title = item.showTitle ? (bookIndex >= 0 ? recentBooks[bookIndex].title.c_str() : tr(STR_NO_OPEN_BOOK))
+                                     : nullptr;
+        props.author = item.showAuthor ? (bookIndex >= 0 ? recentBooks[bookIndex].author.c_str() : tr(STR_START_READING))
+                                       : nullptr;
         props.titleText = textStyleFor(item);
         props.titleText.font = freeink::ui::GfxRendererTarget::FONT_TITLE;
         props.titleText.bold = true;
@@ -535,7 +537,7 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
         props.padding = {static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding),
                          static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding)};
         props.progress = 0;
-        props.progressMax = 100;
+        props.progressMax = item.showProgress ? 100 : 0;
         freeink::ui::bookCard(frame, rect, props);
         const int coverH = props.coverSize.height;
         const int coverW = props.coverSize.width;
@@ -573,7 +575,8 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
             rows > 0 ? (rect.height - (rows - 1) * props.gap) / rows : rect.height;
         const int coverH = item.coverHeight > 0 ? item.coverHeight : std::max(1, availableRowHeight - props.labelHeight);
         const int portraitCoverW = std::max(1, coverH * 2 / 3);
-        const int coverW = item.coverFillWidth ? cellW : (item.coverWidth > 0 ? item.coverWidth : std::min(cellW, portraitCoverW));
+        const int coverW =
+            item.coverFillWidth ? cellW : (item.coverWidth > 0 ? item.coverWidth : std::min(cellW, portraitCoverW));
         props.coverSize = {static_cast<int16_t>(coverW),
                            static_cast<int16_t>(coverH)};
         props.rowHeight = static_cast<int16_t>(

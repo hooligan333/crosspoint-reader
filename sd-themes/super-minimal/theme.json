@@ -77,9 +77,9 @@
       "fill": false,
       "outline": false,
       "drawEmpty": false,
-      "shapes": true,
       "shapeSize": 18,
-      "textOffsetY": 7
+      "textOffsetY": 7,
+      "layout": "shapes"
     }
   },
   "screens": {

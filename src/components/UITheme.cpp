@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <functional>
 #include <memory>
 
 #include "MappedInputManager.h"
@@ -139,10 +140,16 @@ std::vector<int> UITheme::getHomeCoverThumbHeights() const {
     }
   }
   if (currentSdHomeLayout.enabled) {
-    for (const auto& item : currentSdHomeLayout.elements) {
+    std::function<void(const ThemeHomeElementSpec&)> collectLayoutHeight = [&](const ThemeHomeElementSpec& item) {
       if (item.type == ThemeHomeElementType::BookCard || item.type == ThemeHomeElementType::CoverGrid) {
         addHeight(item.coverHeight > 0 ? item.coverHeight : item.height);
       }
+      for (const auto& child : item.children) {
+        collectLayoutHeight(child);
+      }
+    };
+    for (const auto& item : currentSdHomeLayout.elements) {
+      collectLayoutHeight(item);
     }
   }
   return heights;
@@ -179,7 +186,6 @@ void UITheme::reload() {
     currentSdUiFontFamily = themeInfo->uiFontFamily;
     currentSdIcons = themeInfo->icons;
     currentSdNamedIcons = themeInfo->namedIcons;
-    currentSdFreeInkComponents = themeInfo->freeInkComponents;
     currentSdFreeInkIcons = themeInfo->freeInkIcons;
     currentSdNamedFreeInkIcons = themeInfo->namedFreeInkIcons;
     currentSdInheritsClassic = themeInfo->inherits == "classic";
@@ -241,7 +247,6 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentLargeFontId = UI_12_FONT_ID;
   currentSdIcons.clear();
   currentSdNamedIcons.clear();
-  currentSdFreeInkComponents.clear();
   currentSdFreeInkIcons.clear();
   currentSdNamedFreeInkIcons.clear();
   themeRegistry.clear();
