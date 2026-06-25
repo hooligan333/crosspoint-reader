@@ -27,6 +27,8 @@ struct SdCardThemeInfo {
   ThemeTabBarSpec tabBar;
   ThemeHeaderSpec header;
   ThemeHomeLayoutSpec homeLayout;
+  ThemeScreenChromeSpec settingsScreen;
+  ThemeScreenChromeSpec readerMenuScreen;
   ThemeIconMap icons;
   ThemeNamedIconMap namedIcons;
   std::string uiFontFamily;

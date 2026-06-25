@@ -559,6 +559,18 @@ void parseHomeLayout(JsonObjectConst obj, ThemeHomeLayoutSpec& layout) {
   if (layout.enabled) layout.elements.push_back(std::move(root));
 }
 
+void parseScreenChrome(JsonObjectConst obj, ThemeScreenChromeSpec& screen, const ThemeMetrics& baseMetrics) {
+  if (obj.isNull()) return;
+  screen.enabled = true;
+  screen.metrics = baseMetrics;
+  applyMetricOverrides(obj["metrics"].as<JsonObjectConst>(), screen.metrics);
+  JsonObjectConst components = obj["components"].as<JsonObjectConst>();
+  parseListSpec(components["list"].as<JsonObjectConst>(), screen.list);
+  parseButtonHintsSpec(components["buttonHints"].as<JsonObjectConst>(), screen.buttonHints);
+  parseTabBarSpec(components["tabBar"].as<JsonObjectConst>(), screen.tabBar);
+  parseHeaderSpec(components["header"].as<JsonObjectConst>(), screen.header);
+}
+
 ThemeMetrics defaultMetrics() { return LyraMetrics::values; }
 }  // namespace
 
@@ -641,6 +653,10 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
   parseHomeLayout(deviceObj["screens"]["home"].as<JsonObjectConst>(), out.homeLayout);
   applyMetricOverrides(doc["metrics"].as<JsonObjectConst>(), out.metrics);
   applyMetricOverrides(deviceObj["metrics"].as<JsonObjectConst>(), out.metrics);
+  parseScreenChrome(doc["screens"]["settings"].as<JsonObjectConst>(), out.settingsScreen, out.metrics);
+  parseScreenChrome(deviceObj["screens"]["settings"].as<JsonObjectConst>(), out.settingsScreen, out.metrics);
+  parseScreenChrome(doc["screens"]["readerMenu"].as<JsonObjectConst>(), out.readerMenuScreen, out.metrics);
+  parseScreenChrome(deviceObj["screens"]["readerMenu"].as<JsonObjectConst>(), out.readerMenuScreen, out.metrics);
   if ((out.buttonMenu.enabled && out.buttonMenu.showIcons) || (out.list.enabled && out.list.showIcons)) {
     parseIconMap(doc["assets"]["icons"].as<JsonObjectConst>(), out.icons);
     parseIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.icons);

@@ -60,8 +60,6 @@ def build_manifest(root: Path, base_url: str):
             if rel in optional_files:
                 entry["optional"] = True
                 entry["role"] = "freeInkIconFallback"
-            if rel == "theme.json":
-                entry["content"] = data.decode("utf-8")
             files.append(entry)
 
         themes.append(

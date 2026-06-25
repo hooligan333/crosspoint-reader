@@ -22,6 +22,12 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
+  const ThemeMetrics& getSettingsMetrics() const { return currentSettingsTheme ? currentSdSettingsMetrics : *currentMetrics; }
+  const BaseTheme& getSettingsTheme() const { return currentSettingsTheme ? *currentSettingsTheme : *currentTheme; }
+  const ThemeMetrics& getReaderMenuMetrics() const {
+    return currentReaderMenuTheme ? currentSdReaderMenuMetrics : *currentMetrics;
+  }
+  const BaseTheme& getReaderMenuTheme() const { return currentReaderMenuTheme ? *currentReaderMenuTheme : *currentTheme; }
   const ThemeHomeLayoutSpec& getHomeLayout() const { return currentSdHomeLayout; }
   bool hasFreeInkHomeLayout() const { return currentSdHomeLayout.enabled; }
   int getSmallFontId() const { return currentSmallFontId; }
@@ -60,6 +66,10 @@ class UITheme {
   ThemeTabBarSpec currentSdTabBar;
   ThemeHeaderSpec currentSdHeader;
   ThemeHomeLayoutSpec currentSdHomeLayout;
+  ThemeScreenChromeSpec currentSdSettingsScreen;
+  ThemeScreenChromeSpec currentSdReaderMenuScreen;
+  ThemeMetrics currentSdSettingsMetrics;
+  ThemeMetrics currentSdReaderMenuMetrics;
   std::string currentSdThemePath;
   std::string currentSdUiFontFamily;
   bool currentSdInheritsClassic = false;
@@ -71,10 +81,13 @@ class UITheme {
   ThemeFreeInkIconMap currentSdFreeInkIcons;
   ThemeNamedFreeInkIconMap currentSdNamedFreeInkIcons;
   std::unique_ptr<BaseTheme> currentTheme;
+  std::unique_ptr<BaseTheme> currentSettingsTheme;
+  std::unique_ptr<BaseTheme> currentReaderMenuTheme;
   SdCardThemeRegistry themeRegistry;
   SdCardFontManager themeFontManager;
 
   void buildCurrentSdTheme();
+  std::unique_ptr<BaseTheme> buildScreenTheme(const ThemeScreenChromeSpec& screen);
   void applyThemeFontOverrides();
 };
 

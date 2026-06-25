@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": 5,
+  "version": 6,
   "id": "tabbed-dashboard",
   "name": "Tabbed Dashboard",
   "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
@@ -335,6 +335,134 @@
             "fill": false
           }
         ]
+      }
+    },
+    "settings": {
+      "metrics": {
+        "topPadding": 5,
+        "headerHeight": 84,
+        "tabBarHeight": 40,
+        "verticalSpacing": 16,
+        "contentSidePadding": 20,
+        "listRowHeight": 40,
+        "listWithSubtitleRowHeight": 60,
+        "buttonHintsHeight": 40
+      },
+      "components": {
+        "header": {
+          "font": "large",
+          "style": "bold",
+          "centeredTitle": false,
+          "showDivider": true,
+          "titleOffsetY": 0,
+          "batteryOffsetY": 5
+        },
+        "tabBar": {
+          "font": "medium",
+          "style": "regular",
+          "equalWidth": true,
+          "selectionStyle": "fill",
+          "selectedCornerRadius": 6,
+          "selectedTextInverted": true,
+          "drawDivider": true,
+          "horizontalInset": 2
+        },
+        "list": {
+          "font": "medium",
+          "style": "regular",
+          "showIcons": true,
+          "textGap": 8,
+          "selectionStyle": "fill",
+          "selectionCornerRadius": 6,
+          "selectionFill": true,
+          "selectionOutline": false,
+          "selectedTextInverted": false,
+          "rowBackgrounds": false,
+          "centerSingleLineRows": false,
+          "subtitleRowAutoHeight": false,
+          "centerValueVertically": false,
+          "rowSidePadding": 0,
+          "rowGap": 0,
+          "textInsetX": 8,
+          "selectionInsetX": 0,
+          "selectionInsetY": 0,
+          "titleOffsetY": 7,
+          "subtitleOffsetY": 30,
+          "valueOffsetY": 6,
+          "subtitleValueOffsetY": 16,
+          "iconOffsetY": 0
+        },
+        "buttonHints": {
+          "font": "small",
+          "style": "regular",
+          "buttonWidth": 80,
+          "smallButtonHeight": 15,
+          "cornerRadius": 6,
+          "fill": true,
+          "outline": true,
+          "drawEmpty": true,
+          "layout": "buttons",
+          "textOffsetY": 7
+        }
+      }
+    },
+    "readerMenu": {
+      "metrics": {
+        "topPadding": 5,
+        "headerHeight": 84,
+        "tabBarHeight": 40,
+        "verticalSpacing": 16,
+        "contentSidePadding": 20,
+        "listRowHeight": 40,
+        "listWithSubtitleRowHeight": 60,
+        "buttonHintsHeight": 40
+      },
+      "components": {
+        "header": {
+          "font": "large",
+          "style": "bold",
+          "centeredTitle": false,
+          "showDivider": true,
+          "titleOffsetY": 0,
+          "batteryOffsetY": 5
+        },
+        "list": {
+          "font": "medium",
+          "style": "regular",
+          "showIcons": true,
+          "textGap": 8,
+          "selectionStyle": "fill",
+          "selectionCornerRadius": 6,
+          "selectionFill": true,
+          "selectionOutline": false,
+          "selectedTextInverted": false,
+          "rowBackgrounds": false,
+          "centerSingleLineRows": false,
+          "subtitleRowAutoHeight": false,
+          "centerValueVertically": false,
+          "rowSidePadding": 0,
+          "rowGap": 0,
+          "textInsetX": 8,
+          "selectionInsetX": 0,
+          "selectionInsetY": 0,
+          "titleOffsetY": 7,
+          "subtitleOffsetY": 30,
+          "valueOffsetY": 6,
+          "subtitleValueOffsetY": 16,
+          "iconOffsetY": 0
+        },
+        "buttonHints": {
+          "font": "small",
+          "style": "regular",
+          "buttonWidth": 80,
+          "smallButtonHeight": 15,
+          "cornerRadius": 6,
+          "fill": true,
+          "outline": true,
+          "drawEmpty": true,
+          "layout": "buttons",
+          "textOffsetY": 7
+        }
       }
     }
   },

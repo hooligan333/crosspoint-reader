@@ -81,8 +81,24 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
+  // Keep the parsed manifest bounded while WiFi/TLS is up. The downloader only
+  // needs file metadata here; theme.json is downloaded like every other file.
+  JsonDocument filter;
+  filter["version"] = true;
+  filter["baseUrl"] = true;
+  filter["themes"][0]["id"] = true;
+  filter["themes"][0]["version"] = true;
+  filter["themes"][0]["name"] = true;
+  filter["themes"][0]["description"] = true;
+  filter["themes"][0]["files"][0]["path"] = true;
+  filter["themes"][0]["files"][0]["name"] = true;
+  filter["themes"][0]["files"][0]["url"] = true;
+  filter["themes"][0]["files"][0]["size"] = true;
+  filter["themes"][0]["files"][0]["crc32"] = true;
+  filter["themes"][0]["files"][0]["optional"] = true;
+
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, manifestFile);
+  DeserializationError err = deserializeJson(doc, manifestFile, DeserializationOption::Filter(filter));
   manifestFile.close();
   Storage.remove(MANIFEST_TMP);
 
@@ -138,8 +154,7 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
       }
       file.crc32 = fileObj["crc32"].as<uint32_t>();
       file.optional = fileObj["optional"] | false;
-      file.content = fileObj["content"] | "";
-      if (!file.optional && file.content.empty()) theme.totalSize += file.size;
+      if (!file.optional) theme.totalSize += file.size;
       theme.files.push_back(std::move(file));
     }
 
@@ -331,37 +346,20 @@ void ThemeDownloadActivity::downloadTheme(ManifestTheme& theme) {
       return;
     }
 
-    HttpDownloader::DownloadError result = HttpDownloader::OK;
-    if (!file.content.empty()) {
-      if (Storage.exists(destPath)) {
-        Storage.remove(destPath);
-      }
-      HalFile out;
-      if (!Storage.openFileForWrite("THEME", destPath, out)) {
-        result = HttpDownloader::FILE_ERROR;
-      } else {
-        const size_t written = out.write(reinterpret_cast<const uint8_t*>(file.content.data()), file.content.size());
-        out.close();
-        if (written != file.content.size()) result = HttpDownloader::FILE_ERROR;
-      }
-      fileProgress_ = file.content.size();
-      fileTotal_ = file.content.size();
-    } else {
-      std::string url = baseUrl_ + file.url;
-      result = HttpDownloader::downloadToFile(
-          url, destPath,
-          [this](size_t downloaded, size_t total) {
-            fileProgress_ = downloaded;
-            fileTotal_ = total;
-            mappedInput.update();
-            if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
-                mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-              cancelRequested_ = true;
-            }
-            requestUpdate(true);
-          },
-          &cancelRequested_);
-    }
+    std::string url = baseUrl_ + file.url;
+    HttpDownloader::DownloadError result = HttpDownloader::downloadToFile(
+        url, destPath,
+        [this](size_t downloaded, size_t total) {
+          fileProgress_ = downloaded;
+          fileTotal_ = total;
+          mappedInput.update();
+          if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+              mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+            cancelRequested_ = true;
+          }
+          requestUpdate(true);
+        },
+        &cancelRequested_);
 
     if (result == HttpDownloader::ABORTED) {
       themeInstaller_.deleteTheme(theme.id.c_str());

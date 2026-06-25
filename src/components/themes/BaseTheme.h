@@ -292,6 +292,15 @@ struct ThemeHomeLayoutSpec {
   std::vector<ThemeHomeElementSpec> elements;
 };
 
+struct ThemeScreenChromeSpec {
+  bool enabled = false;
+  ThemeMetrics metrics = {};
+  ThemeListSpec list;
+  ThemeButtonHintsSpec buttonHints;
+  ThemeTabBarSpec tabBar;
+  ThemeHeaderSpec header;
+};
+
 enum class KeyboardKeyType { Normal, Shift, Mode, Space, Del, Ok, Disabled };
 
 // Default theme implementation (Classic Theme)

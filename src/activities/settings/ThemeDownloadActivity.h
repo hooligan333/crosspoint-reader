@@ -41,7 +41,6 @@ class ThemeDownloadActivity : public Activity {
   struct ManifestFile {
     std::string path;
     std::string url;
-    std::string content;
     size_t size = 0;
     uint32_t crc32 = 0;
     bool optional = false;

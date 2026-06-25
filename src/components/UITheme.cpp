@@ -201,6 +201,10 @@ void UITheme::reload() {
     currentSdTabBar = themeInfo->tabBar;
     currentSdHeader = themeInfo->header;
     currentSdHomeLayout = themeInfo->homeLayout;
+    currentSdSettingsScreen = themeInfo->settingsScreen;
+    currentSdReaderMenuScreen = themeInfo->readerMenuScreen;
+    currentSdSettingsMetrics = currentSdSettingsScreen.metrics;
+    currentSdReaderMenuMetrics = currentSdReaderMenuScreen.metrics;
     currentSdThemePath = themeInfo->path;
     currentSdUiFontFamily = themeInfo->uiFontFamily;
     currentSdIcons = themeInfo->icons;
@@ -258,6 +262,10 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentSdTabBar = ThemeTabBarSpec{};
   currentSdHeader = ThemeHeaderSpec{};
   currentSdHomeLayout = ThemeHomeLayoutSpec{};
+  currentSdSettingsScreen = ThemeScreenChromeSpec{};
+  currentSdReaderMenuScreen = ThemeScreenChromeSpec{};
+  currentSdSettingsMetrics = ThemeMetrics{};
+  currentSdReaderMenuMetrics = ThemeMetrics{};
   currentSdThemePath.clear();
   currentSdUiFontFamily.clear();
   currentSdInheritsClassic = false;
@@ -268,10 +276,14 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentSdNamedIcons.clear();
   currentSdFreeInkIcons.clear();
   currentSdNamedFreeInkIcons.clear();
+  currentSettingsTheme.reset();
+  currentReaderMenuTheme.reset();
   themeRegistry.clear();
 }
 
 void UITheme::buildCurrentSdTheme() {
+  currentSettingsTheme.reset();
+  currentReaderMenuTheme.reset();
   if (currentSdInheritsClassic) {
     currentTheme = std::make_unique<BaseTheme>();
     currentMetrics = &currentSdMetrics;
@@ -289,6 +301,22 @@ void UITheme::buildCurrentSdTheme() {
                                   currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons,
                                   &currentSdNamedIcons, &currentSdNamedFreeInkIcons);
   currentMetrics = &currentSdMetrics;
+  currentSettingsTheme = buildScreenTheme(currentSdSettingsScreen);
+  currentReaderMenuTheme = buildScreenTheme(currentSdReaderMenuScreen);
+}
+
+std::unique_ptr<BaseTheme> UITheme::buildScreenTheme(const ThemeScreenChromeSpec& screen) {
+  if (!screen.enabled || currentSdInheritsClassic) return nullptr;
+  const ThemeListSpec* list = screen.list.enabled ? &screen.list : (currentSdList.enabled ? &currentSdList : nullptr);
+  const ThemeButtonHintsSpec* buttonHints =
+      screen.buttonHints.enabled ? &screen.buttonHints : (currentSdButtonHints.enabled ? &currentSdButtonHints : nullptr);
+  const ThemeTabBarSpec* tabBar =
+      screen.tabBar.enabled ? &screen.tabBar : (currentSdTabBar.enabled ? &currentSdTabBar : nullptr);
+  const ThemeHeaderSpec* header =
+      screen.header.enabled ? &screen.header : (currentSdHeader.enabled ? &currentSdHeader : nullptr);
+  return std::make_unique<LyraTheme>(&screen.metrics, nullptr, nullptr, list, buttonHints, tabBar, header,
+                                     currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons,
+                                     &currentSdNamedIcons, &currentSdNamedFreeInkIcons);
 }
 
 void UITheme::applyThemeFontOverrides() {
@@ -311,6 +339,16 @@ void UITheme::applyThemeFontOverrides() {
   remap(currentSdButtonHints.fontId);
   remap(currentSdTabBar.fontId);
   remap(currentSdHeader.fontId);
+  auto remapScreen = [&](ThemeScreenChromeSpec& screen) {
+    remap(screen.list.fontId);
+    remap(screen.list.subtitleFontId);
+    remap(screen.list.valueFontId);
+    remap(screen.buttonHints.fontId);
+    remap(screen.tabBar.fontId);
+    remap(screen.header.fontId);
+  };
+  remapScreen(currentSdSettingsScreen);
+  remapScreen(currentSdReaderMenuScreen);
   for (auto& slot : currentSdHomeRecents.slots) {
     remap(slot.title.fontId);
   }
