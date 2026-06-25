@@ -228,6 +228,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
     }
   }
   UITheme::getInstance().reload();
+  UITheme::getInstance().prepareSdAssets(renderer);
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }

@@ -80,7 +80,14 @@ bool ThemeInstaller::ensureParentDirs(const char* fullPath) {
 bool ThemeInstaller::validateThemeFile(const char* path) {
   HalFile file;
   if (!Storage.openFileForRead("THEME", path, file)) return false;
-  const bool ok = file.fileSize() > 0;
+  bool ok = file.fileSize() > 0;
+  static constexpr char kCpfontExt[] = ".cpfont";
+  static constexpr size_t kCpfontExtLen = sizeof(kCpfontExt) - 1;
+  const size_t pathLen = strlen(path);
+  if (ok && pathLen > kCpfontExtLen && strcmp(path + pathLen - kCpfontExtLen, kCpfontExt) == 0) {
+    uint8_t magic[8];
+    ok = file.read(magic, sizeof(magic)) == sizeof(magic) && memcmp(magic, "CPFONT\0\0", sizeof(magic)) == 0;
+  }
   file.close();
   return ok;
 }

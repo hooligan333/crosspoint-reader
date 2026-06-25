@@ -428,6 +428,14 @@ void parseFreeInkIconMap(JsonObjectConst obj, ThemeFreeInkIconMap& icons) {
   }
 }
 
+void parseUiFontFamily(JsonObjectConst obj, std::string& family) {
+  if (obj.isNull()) return;
+  const char* value = obj["uiFontFamily"] | obj["fontFamily"] | obj["fonts"]["ui"]["family"] | nullptr;
+  if (isSafeFreeInkName(value)) {
+    family = value;
+  }
+}
+
 ThemeMetrics defaultMetrics() { return LyraMetrics::values; }
 }  // namespace
 
@@ -512,6 +520,8 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
     parseIconMap(doc["assets"]["icons"].as<JsonObjectConst>(), out.icons);
     parseIconMap(deviceObj["assets"]["icons"].as<JsonObjectConst>(), out.icons);
   }
+  parseUiFontFamily(doc["assets"].as<JsonObjectConst>(), out.uiFontFamily);
+  parseUiFontFamily(deviceObj["assets"].as<JsonObjectConst>(), out.uiFontFamily);
   parseFreeInkComponents(doc["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
   parseFreeInkComponents(deviceObj["freeInkUI"]["components"].as<JsonArrayConst>(), out.freeInkComponents);
   parseFreeInkIconMap(doc["assets"]["freeInkIcons"].as<JsonObjectConst>(), out.freeInkIcons);

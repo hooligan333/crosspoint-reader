@@ -18,6 +18,7 @@ Hosted theme packages in this repo live under:
 ```text
 sd-themes/<theme-id>/theme.json
 sd-themes/<theme-id>/icons/*.bmp
+sd-themes/<theme-id>/fonts/*.cpfont
 ```
 
 Theme ids must be path-safe: letters, numbers, spaces, `-`, and `_` only. Avoid spaces for hosted themes because ids are used in URLs and settings.
@@ -75,6 +76,7 @@ Top-level fields:
 - `metrics`: layout numbers shared across screens.
 - `components`: style rules for themeable UI surfaces.
 - `assets.icons`: optional icon file map.
+- `assets.uiFontFamily`: optional SD-loaded UI font family. Matching `.cpfont` files live in the theme's `fonts/` folder.
 - `devices`: optional per-device overrides keyed by `x3` or `x4`.
 - `requires`: optional metadata for other tooling. CrossPoint currently ignores it.
 - `extensions`: optional namespaced metadata for other firmware/apps. CrossPoint currently ignores it.
@@ -169,6 +171,28 @@ Most components accept:
 ```
 
 Supported `font` values are `ui12`, `ui10`, and `small`. You can also use `fontId`, but named fonts are preferred. Supported `style` values are `regular` and `bold`.
+
+Themes can replace those UI font tokens with bundled SD-card fonts. Declare a path-safe family name in `assets.uiFontFamily`, then include `.cpfont` files in the theme package:
+
+```json
+"assets": {
+  "uiFontFamily": "MyThemeUI"
+}
+```
+
+```text
+sd-themes/my-theme/fonts/MyThemeUI_8.cpfont
+sd-themes/my-theme/fonts/MyThemeUI_10.cpfont
+sd-themes/my-theme/fonts/MyThemeUI_12.cpfont
+```
+
+At runtime, CrossPoint loads those files from `/.themes/<theme-id>/fonts/` and remaps:
+
+- `small` -> `<Family>_8.cpfont`
+- `ui10` -> `<Family>_10.cpfont`
+- `ui12` -> `<Family>_12.cpfont`
+
+Missing sizes fall back to the built-in font for that token. Theme font files are still ordinary `.cpfont` files produced by the SD-card font builder.
 
 ### Home recents
 

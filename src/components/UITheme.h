@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "SdCardFontManager.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/SdCardThemeRegistry.h"
 
@@ -26,6 +27,7 @@ class UITheme {
   SdCardThemeRegistry& registry() { return themeRegistry; }
   void refreshRegistry();
   void releaseSdThemeAssetMemory();
+  void prepareSdAssets(GfxRenderer& renderer);
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);
   static void drawCenteredText(const GfxRenderer& renderer, Rect screen, int fontId, int y, const char* text,
@@ -49,11 +51,17 @@ class UITheme {
   ThemeTabBarSpec currentSdTabBar;
   ThemeHeaderSpec currentSdHeader;
   std::string currentSdThemePath;
+  std::string currentSdUiFontFamily;
+  bool currentSdInheritsClassic = false;
   ThemeIconMap currentSdIcons;
   ThemeFreeInkComponentList currentSdFreeInkComponents;
   ThemeFreeInkIconMap currentSdFreeInkIcons;
   std::unique_ptr<BaseTheme> currentTheme;
   SdCardThemeRegistry themeRegistry;
+  SdCardFontManager themeFontManager;
+
+  void buildCurrentSdTheme();
+  void applyThemeFontOverrides();
 };
 
 // Helper macro to access current theme

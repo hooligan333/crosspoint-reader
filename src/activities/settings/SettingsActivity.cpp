@@ -134,6 +134,7 @@ void SettingsActivity::onExit() {
   Activity::onExit();
 
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
+  UITheme::getInstance().prepareSdAssets(renderer);
 }
 
 void SettingsActivity::loop() {
@@ -286,6 +287,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
                                  UITheme::getInstance().reload();
+                                 UITheme::getInstance().prepareSdAssets(renderer);
                                  rebuildSettingsLists();
                                });
         break;
@@ -296,6 +298,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
                                  UITheme::getInstance().reload();
+                                 UITheme::getInstance().prepareSdAssets(renderer);
                                  rebuildSettingsLists();
                                });
         break;
@@ -315,6 +318,7 @@ void SettingsActivity::toggleCurrentSetting() {
   SETTINGS.saveToFile();
   if (themeChanged) {
     UITheme::getInstance().reload();
+    UITheme::getInstance().prepareSdAssets(renderer);
   }
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);

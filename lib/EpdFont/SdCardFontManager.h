@@ -22,12 +22,17 @@ class SdCardFontManager {
   // Returns true on success.
   bool loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t fontSizeEnum);
 
+  // Load every .cpfont size in the family. Used by UI themes that need fixed
+  // sizes such as small/ui10/ui12 resident at the same time.
+  bool loadAllSizes(const SdCardFontFamilyInfo& family, GfxRenderer& renderer);
+
   // Unload everything, unregister from renderer.
   void unloadAll(GfxRenderer& renderer);
 
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
   // or familyName doesn't match.
   int getFontId(const std::string& familyName) const;
+  int getFontIdForPointSize(const std::string& familyName, uint8_t pointSize) const;
 
   // Get name of currently loaded family (empty if none).
   const std::string& currentFamilyName() const { return loadedFamilyName_; };
@@ -43,6 +48,7 @@ class SdCardFontManager {
     uint8_t size;
   };
   static int computeFontId(uint32_t contentHash, const char* familyName, uint8_t pointSize);
+  bool loadFile(const SdCardFontFamilyInfo& family, const char* path, uint8_t pointSize, GfxRenderer& renderer);
 
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;

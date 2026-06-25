@@ -352,6 +352,7 @@ void setup() {
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().refreshRegistry();
   UITheme::getInstance().reload();
+  UITheme::getInstance().prepareSdAssets(renderer);
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
   const auto wakeupReason = gpio.getWakeupReason();

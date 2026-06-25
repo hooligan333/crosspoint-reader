@@ -133,7 +133,7 @@ Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` 
 
 ## Custom SD-card themes
 
-Downloadable themes are packaged under `sd-themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live beside it, usually under `icons/`. New themes can declare Lucide icon names through the FreeInk SDK icon system; hosted firmware builds compile those into `freeink::Icon` assets and SD packages can include generated BMP fallbacks.
+Downloadable themes are packaged under `sd-themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live beside it, usually under `icons/`. Themes can also bundle UI `.cpfont` files under `fonts/` and declare `assets.uiFontFamily` so `small`, `ui10`, and `ui12` render from SD-loaded theme fonts. New themes can declare Lucide icon names through the FreeInk SDK icon system; hosted firmware builds compile those into `freeink::Icon` assets and SD packages can include generated BMP fallbacks.
 
 See [SD-card theme creation](./docs/theme-creation.md) for the full JSON format, device-specific overrides, icon generation, CrossInk extension fields, and packaging rules.
 
