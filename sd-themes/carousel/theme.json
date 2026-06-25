@@ -1,5 +1,6 @@
 {
   "schema": 1,
+  "version": 1,
   "id": "carousel",
   "name": "Carousel",
   "description": "A cover-focused home screen with a centered book, side previews, and a thicker outline while browsing covers.",

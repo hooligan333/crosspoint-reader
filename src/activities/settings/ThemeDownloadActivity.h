@@ -51,6 +51,7 @@ class ThemeDownloadActivity : public Activity {
     std::string id;
     std::string name;
     std::string description;
+    int version = 1;
     std::vector<ManifestFile> files;
     size_t totalSize = 0;
     bool installed = false;
@@ -79,6 +80,7 @@ class ThemeDownloadActivity : public Activity {
   void downloadAll();
   void updateAll();
   static bool computeFileCrc32(const char* path, uint32_t& outCrc);
+  static int installedThemeVersion(const char* themeId);
   bool showDownloadAllRow() const;
   bool showUpdateAllRow() const;
   int specialRowCount() const;

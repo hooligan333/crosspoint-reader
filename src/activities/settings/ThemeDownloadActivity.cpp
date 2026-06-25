@@ -115,6 +115,7 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
   for (JsonObject tObj : themesArr) {
     ManifestTheme theme;
     theme.id = tObj["id"] | "";
+    theme.version = tObj["version"] | 1;
     theme.name = tObj["name"] | theme.id;
     theme.description = tObj["description"] | "";
 
@@ -144,7 +145,11 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
 
     theme.installed = themeInstaller_.isThemeInstalled(theme.id.c_str());
     if (theme.installed) {
+      if (installedThemeVersion(theme.id.c_str()) < theme.version) {
+        theme.hasUpdate = true;
+      }
       for (const auto& file : theme.files) {
+        if (theme.hasUpdate) break;
         char path[180];
         if (!ThemeInstaller::buildThemePath(theme.id.c_str(), file.path.c_str(), path, sizeof(path))) {
           errorMessage_ = tr(STR_DOWNLOAD_FAILED);
@@ -155,6 +160,11 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
           const size_t actual = f.fileSize();
           f.close();
           if (actual != file.size) {
+            theme.hasUpdate = true;
+            break;
+          }
+          uint32_t actualCrc = 0;
+          if (!computeFileCrc32(path, actualCrc) || actualCrc != file.crc32) {
             theme.hasUpdate = true;
             break;
           }
@@ -252,6 +262,20 @@ bool ThemeDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc)
   }
   outCrc = crc;
   return true;
+}
+
+int ThemeDownloadActivity::installedThemeVersion(const char* themeId) {
+  char path[180];
+  if (!ThemeInstaller::buildThemePath(themeId, "theme.json", path, sizeof(path))) return 0;
+
+  HalFile themeFile;
+  if (!Storage.openFileForRead("THEME", path, themeFile)) return 0;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, themeFile);
+  themeFile.close();
+  if (err) return 0;
+  return doc["version"] | 1;
 }
 
 size_t ThemeDownloadActivity::requiredFileCount(const ManifestTheme& theme) {

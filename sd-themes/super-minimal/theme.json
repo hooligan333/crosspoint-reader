@@ -1,5 +1,6 @@
 {
   "schema": 1,
+  "version": 1,
   "id": "super-minimal",
   "name": "Super Minimal",
   "description": "A quiet text-only theme with no cover area, centered home options, underline selection, and icon-only hints.",

@@ -67,6 +67,7 @@ def build_manifest(root: Path, base_url: str):
         themes.append(
             {
                 "id": theme_doc["id"],
+                "version": int(theme_doc.get("version", 1)),
                 "name": theme_doc.get("name", theme_doc["id"]),
                 "description": theme_doc.get("description", ""),
                 "files": files,
