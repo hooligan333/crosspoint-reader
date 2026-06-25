@@ -10,6 +10,7 @@
 #include "SdCardFontManager.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/SdCardThemeRegistry.h"
+#include "fontIds.h"
 
 class UITheme {
   // Static instance
@@ -23,6 +24,11 @@ class UITheme {
   const BaseTheme& getTheme() const { return *currentTheme; }
   const ThemeFreeInkComponentList& getFreeInkComponents() const { return currentSdFreeInkComponents; }
   const ThemeFreeInkIconMap& getFreeInkIcons() const { return currentSdFreeInkIcons; }
+  const ThemeHomeLayoutSpec& getHomeLayout() const { return currentSdHomeLayout; }
+  bool hasFreeInkHomeLayout() const { return currentSdHomeLayout.enabled; }
+  int getSmallFontId() const { return currentSmallFontId; }
+  int getMediumFontId() const { return currentMediumFontId; }
+  int getLargeFontId() const { return currentLargeFontId; }
   std::vector<int> getHomeCoverThumbHeights() const;
   SdCardThemeRegistry& registry() { return themeRegistry; }
   void refreshRegistry();
@@ -50,9 +56,13 @@ class UITheme {
   ThemeButtonHintsSpec currentSdButtonHints;
   ThemeTabBarSpec currentSdTabBar;
   ThemeHeaderSpec currentSdHeader;
+  ThemeHomeLayoutSpec currentSdHomeLayout;
   std::string currentSdThemePath;
   std::string currentSdUiFontFamily;
   bool currentSdInheritsClassic = false;
+  int currentSmallFontId = SMALL_FONT_ID;
+  int currentMediumFontId = UI_10_FONT_ID;
+  int currentLargeFontId = UI_12_FONT_ID;
   ThemeIconMap currentSdIcons;
   ThemeFreeInkComponentList currentSdFreeInkComponents;
   ThemeFreeInkIconMap currentSdFreeInkIcons;

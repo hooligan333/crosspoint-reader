@@ -2,6 +2,8 @@
 
 #include <Bitmap.h>
 #include <Epub.h>
+#include <FreeInkUI.h>
+#include <FreeInkUIGfxRenderer.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -11,6 +13,7 @@
 #include <Xtc.h>
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -239,8 +242,262 @@ void HomeActivity::loop() {
   }
 }
 
+namespace {
+using FIFrame = freeink::ui::Frame<32>;
+
+freeink::ui::Rect fiRect(const freeink::ui::Rect& safe, const ThemeHomeElementSpec& item) {
+  const int16_t x = static_cast<int16_t>(safe.x + item.x);
+  const int16_t y = static_cast<int16_t>(safe.y + item.y);
+  const int16_t w = static_cast<int16_t>(item.width > 0 ? item.width : safe.right() - x);
+  const int16_t h = static_cast<int16_t>(item.height > 0 ? item.height : safe.bottom() - y);
+  return freeink::ui::Rect{x, y, w, h};
+}
+
+freeink::ui::FontId fontTokenFor(int fontId) {
+  if (fontId == SMALL_FONT_ID) return freeink::ui::GfxRendererTarget::FONT_SMALL;
+  if (fontId == UI_12_FONT_ID) return freeink::ui::GfxRendererTarget::FONT_TITLE;
+  return freeink::ui::GfxRendererTarget::FONT_BODY;
+}
+
+freeink::ui::TextStyle textStyleFor(const ThemeHomeElementSpec& item) {
+  freeink::ui::TextStyle style;
+  style.font = fontTokenFor(item.fontId);
+  style.bold = item.bold;
+  style.maxLines = item.type == ThemeHomeElementType::BookCard ? 2 : 1;
+  return style;
+}
+
+freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
+  auto styles = freeink::ui::defaultListRowStyles();
+  styles.normal.background = freeink::ui::Paint::solid(freeink::ui::Color::White);
+  styles.normal.border = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.normal.borderWidth = 1;
+  styles.normal.radius = radius;
+  styles.selected.background = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.selected.foreground = freeink::ui::Paint::solid(freeink::ui::Color::White);
+  styles.selected.border = freeink::ui::Paint::solid(freeink::ui::Color::Black);
+  styles.selected.borderWidth = 1;
+  styles.selected.radius = radius;
+  return styles;
+}
+}  // namespace
+
+void HomeActivity::drawRecentCoverInRect(int bookIndex, Rect rect, int thumbHeight) {
+  if (bookIndex < 0 || bookIndex >= static_cast<int>(recentBooks.size()) ||
+      recentBooks[bookIndex].coverBmpPath.empty()) {
+    renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+    renderer.fillRect(rect.x, rect.y + rect.height / 3, rect.width, 2 * rect.height / 3, true);
+    return;
+  }
+
+  const std::string coverPath =
+      UITheme::getCoverThumbPath(recentBooks[bookIndex].coverBmpPath, thumbHeight > 0 ? thumbHeight : rect.height);
+  HalFile file;
+  if (!Storage.openFileForRead("HOME", coverPath.c_str(), file)) {
+    renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+    return;
+  }
+  Bitmap bitmap(file);
+  if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+    renderer.drawBitmap(bitmap, rect.x, rect.y, rect.width, rect.height, 0.0f, 0.0f);
+  } else {
+    renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+  }
+  file.close();
+}
+
+bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
+  if (!layout.enabled) return false;
+
+  auto& theme = UITheme::getInstance();
+  freeink::ui::GfxRendererTarget target(renderer);
+  target.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, theme.getSmallFontId());
+  target.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, theme.getMediumFontId());
+  target.setFont(freeink::ui::GfxRendererTarget::FONT_TITLE, theme.getLargeFontId());
+
+  auto device = target.deviceContext();
+  device.safeArea = freeink::ui::Insets{GfxRenderer::VIEWABLE_MARGIN_TOP, GfxRenderer::VIEWABLE_MARGIN_RIGHT,
+                                        GfxRenderer::VIEWABLE_MARGIN_BOTTOM, GfxRenderer::VIEWABLE_MARGIN_LEFT};
+  device.minTouchSize = 32;
+  freeink::ui::InputSnapshot input;
+  freeink::ui::InteractionBuffer<32> interactions;
+  FIFrame frame(target, device, input, interactions);
+  const freeink::ui::Rect safe = frame.safeRect();
+
+  std::vector<std::string> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
+                                        tr(STR_SETTINGS_TITLE)};
+  if (hasOpdsServers) menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
+
+  for (const auto& item : layout.elements) {
+    const auto rect = fiRect(safe, item);
+    switch (item.type) {
+      case ThemeHomeElementType::Box:
+        if (item.fill) target.fill(rect, freeink::ui::Paint::dither(freeink::ui::Color::LightGray), item.radius);
+        if (item.outline) {
+          target.stroke(rect, freeink::ui::Paint::solid(freeink::ui::Color::Black), std::max(1, item.lineWidth),
+                        item.radius);
+        }
+        break;
+      case ThemeHomeElementType::Divider:
+        target.line({rect.x, rect.y}, {static_cast<int16_t>(rect.x + rect.width), rect.y},
+                    static_cast<uint8_t>(std::max(1, item.lineWidth)),
+                    freeink::ui::Paint::solid(freeink::ui::Color::Black));
+        break;
+      case ThemeHomeElementType::Label: {
+        auto style = textStyleFor(item);
+        target.text(rect, item.text.c_str(), style);
+        break;
+      }
+      case ThemeHomeElementType::TabBar: {
+        const std::vector<std::string> fallback = {"reading", "library", "network", "settings"};
+        const auto& labels = item.labels.empty() ? fallback : item.labels;
+        std::vector<freeink::ui::TabItem> tabs;
+        tabs.reserve(labels.size());
+        for (size_t i = 0; i < labels.size() && i < 8; ++i) {
+          tabs.push_back(
+              {labels[i].c_str(), static_cast<int16_t>(i), static_cast<int>(i) == std::max(0, item.selectedIndex)});
+        }
+        freeink::ui::TabBarProps props;
+        props.tabs = tabs.data();
+        props.count = static_cast<uint8_t>(tabs.size());
+        props.text = textStyleFor(item);
+        props.tabStyles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+        props.divider = item.outline;
+        props.tabInset = freeink::ui::Insets{2, 2, 2, 2};
+        freeink::ui::tabBar(frame, rect, props);
+        break;
+      }
+      case ThemeHomeElementType::BookCard: {
+        const int bookIndex =
+            recentBooks.empty() ? -1 : std::min(coverSelectorIndex, static_cast<int>(recentBooks.size()) - 1);
+        freeink::ui::BookCardProps props;
+        props.title = bookIndex >= 0 ? recentBooks[bookIndex].title.c_str() : tr(STR_NO_OPEN_BOOK);
+        props.author = bookIndex >= 0 ? recentBooks[bookIndex].author.c_str() : tr(STR_START_READING);
+        props.titleText = textStyleFor(item);
+        props.titleText.font = freeink::ui::GfxRendererTarget::FONT_TITLE;
+        props.titleText.bold = true;
+        props.authorText = textStyleFor(item);
+        props.authorText.font = freeink::ui::GfxRendererTarget::FONT_BODY;
+        props.metaText = props.authorText;
+        props.styles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+        props.coverSize = {
+            static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : 70),
+            static_cast<int16_t>(item.coverHeight > 0 ? item.coverHeight : rect.height - item.padding * 2)};
+        props.padding = {static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding),
+                         static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding)};
+        props.progress = 0;
+        props.progressMax = 100;
+        freeink::ui::bookCard(frame, rect, props);
+        const int coverH = props.coverSize.height;
+        const int coverW = props.coverSize.width;
+        const Rect coverRect{rect.x + item.padding, rect.y + (rect.height - coverH) / 2, coverW, coverH};
+        drawRecentCoverInRect(bookIndex, coverRect, coverH);
+        break;
+      }
+      case ThemeHomeElementType::CoverGrid: {
+        const int count = std::min<int>(item.count, recentBooks.size());
+        std::vector<freeink::ui::CoverGridItem> covers;
+        covers.reserve(count);
+        for (int i = 0; i < count; ++i) {
+          covers.push_back({recentBooks[i].title.c_str(),
+                            {},
+                            {},
+                            selectorIndex == i ? freeink::ui::StateSelected : freeink::ui::StateNormal,
+                            static_cast<int16_t>(i),
+                            true});
+        }
+        freeink::ui::CoverGridProps props;
+        props.items = covers.data();
+        props.count = static_cast<uint16_t>(covers.size());
+        props.selectedIndex = selectorIndex < count ? selectorIndex : -1;
+        props.titleText = textStyleFor(item);
+        props.titleText.font = freeink::ui::GfxRendererTarget::FONT_SMALL;
+        props.cellStyles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+        props.columns = static_cast<uint8_t>(std::max(1, item.columns));
+        props.coverSize = {static_cast<int16_t>(item.coverWidth > 0 ? item.coverWidth : 78),
+                           static_cast<int16_t>(item.coverHeight > 0 ? item.coverHeight : 110)};
+        props.rowHeight = static_cast<int16_t>(item.height > 0 ? item.height : props.coverSize.height + 22);
+        props.gap = static_cast<int16_t>(std::max(0, item.gap));
+        props.labelHeight = item.showTitle ? 20 : 0;
+        freeink::ui::coverGrid(frame, rect, props);
+        const int cellW = (rect.width - (props.columns - 1) * props.gap) / props.columns;
+        for (int i = 0; i < count; ++i) {
+          const int col = i % props.columns;
+          const int row = i / props.columns;
+          const Rect coverRect{rect.x + col * (cellW + props.gap) + (cellW - props.coverSize.width) / 2,
+                               rect.y + row * (props.rowHeight + props.gap), props.coverSize.width,
+                               props.coverSize.height};
+          drawRecentCoverInRect(i, coverRect, props.coverSize.height);
+        }
+        break;
+      }
+      case ThemeHomeElementType::MenuGrid: {
+        const int cols = std::max(1, item.columns);
+        const int gap = std::max(0, item.gap);
+        const int cellW = (rect.width - (cols - 1) * gap) / cols;
+        const int rows = (static_cast<int>(menuItems.size()) + cols - 1) / cols;
+        const int cellH = rows > 0 ? (rect.height - (rows - 1) * gap) / rows : rect.height;
+        for (int i = 0; i < static_cast<int>(menuItems.size()); ++i) {
+          const int col = i % cols;
+          const int row = i / cols;
+          freeink::ui::ButtonProps props;
+          props.label = menuItems[i].c_str();
+          props.text = textStyleFor(item);
+          props.styles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+          props.state = selectorIndex - static_cast<int>(recentBooks.size()) == i ? freeink::ui::StateSelected
+                                                                                  : freeink::ui::StateNormal;
+          freeink::ui::button(
+              frame,
+              {static_cast<int16_t>(rect.x + col * (cellW + gap)), static_cast<int16_t>(rect.y + row * (cellH + gap)),
+               static_cast<int16_t>(cellW), static_cast<int16_t>(cellH)},
+              props);
+        }
+        break;
+      }
+      case ThemeHomeElementType::MetricCards: {
+        const std::vector<std::string> labels =
+            item.labels.empty() ? std::vector<std::string>{"last read", "total read", "completed"} : item.labels;
+        const int count = std::min<int>(std::max(1, item.count), labels.size());
+        const int gap = std::max(0, item.gap);
+        const int cardW = (rect.width - (count - 1) * gap) / count;
+        for (int i = 0; i < count; ++i) {
+          freeink::ui::MetricCardProps props;
+          props.label = labels[i].c_str();
+          props.value = i == 0 ? "0" : (i == 1 ? "19" : "3");
+          props.unit = i == 0 ? "min" : (i == 1 ? "h" : "books");
+          props.labelText = textStyleFor(item);
+          props.valueText = props.labelText;
+          props.valueText.font = freeink::ui::GfxRendererTarget::FONT_TITLE;
+          props.valueText.bold = true;
+          props.captionText = props.labelText;
+          props.styles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+          freeink::ui::metricCard(
+              frame,
+              {static_cast<int16_t>(rect.x + i * (cardW + gap)), rect.y, static_cast<int16_t>(cardW), rect.height},
+              props);
+        }
+        break;
+      }
+    }
+  }
+
+  renderer.displayBuffer();
+  if (!firstRenderDone) {
+    firstRenderDone = true;
+    requestUpdate();
+  } else if (!recentsLoaded && !recentsLoading) {
+    recentsLoading = true;
+    loadRecentCovers(UITheme::getInstance().getHomeCoverThumbHeights());
+  }
+  return true;
+}
+
 void HomeActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  if (UITheme::getInstance().hasFreeInkHomeLayout()) {
+    renderer.clearScreen();
+    if (renderFreeInkHomeLayout(UITheme::getInstance().getHomeLayout())) return;
+  }
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   constexpr int coverCacheBleed = 12;

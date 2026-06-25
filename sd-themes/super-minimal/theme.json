@@ -22,7 +22,7 @@
       "type": "none"
     },
     "homeMenu": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "centeredText": true,
       "centerVertically": true,
@@ -34,7 +34,7 @@
       "selectionInset": 18
     },
     "list": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "showIcons": false,
       "textGap": 0,
@@ -52,14 +52,14 @@
       "iconOffsetY": 0
     },
     "header": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "centeredTitle": true,
       "showDivider": false,
       "titleOffsetY": 0
     },
     "tabBar": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "equalWidth": true,
       "selectionStyle": "underline",

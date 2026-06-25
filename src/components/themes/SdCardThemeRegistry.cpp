@@ -115,10 +115,12 @@ void parseTitleSpec(JsonObjectConst obj, ThemeTitleSpec& title) {
   title.fontId = obj["fontId"] | title.fontId;
   const char* font = obj["font"].as<const char*>();
   if (font != nullptr) {
-    if (strcmp(font, "ui10") == 0) {
+    if (strcmp(font, "medium") == 0 || strcmp(font, "ui10") == 0) {
       title.fontId = UI_10_FONT_ID;
     } else if (strcmp(font, "small") == 0) {
       title.fontId = SMALL_FONT_ID;
+    } else if (strcmp(font, "large") == 0 || strcmp(font, "ui12") == 0) {
+      title.fontId = UI_12_FONT_ID;
     } else {
       title.fontId = UI_12_FONT_ID;
     }
@@ -188,10 +190,12 @@ void parseHomeRecentsSpec(JsonObjectConst obj, ThemeHomeRecentsSpec& spec) {
 void applyFontSpec(JsonObjectConst obj, int& fontId, bool& bold) {
   const char* font = obj["font"].as<const char*>();
   if (font != nullptr) {
-    if (strcmp(font, "ui10") == 0) {
+    if (strcmp(font, "medium") == 0 || strcmp(font, "ui10") == 0) {
       fontId = UI_10_FONT_ID;
     } else if (strcmp(font, "small") == 0) {
       fontId = SMALL_FONT_ID;
+    } else if (strcmp(font, "large") == 0 || strcmp(font, "ui12") == 0) {
+      fontId = UI_12_FONT_ID;
     } else {
       fontId = UI_12_FONT_ID;
     }
@@ -436,6 +440,68 @@ void parseUiFontFamily(JsonObjectConst obj, std::string& family) {
   }
 }
 
+ThemeHomeElementType parseHomeElementType(const char* value) {
+  if (value == nullptr) return ThemeHomeElementType::Box;
+  if (strcmp(value, "box") == 0 || strcmp(value, "rect") == 0 || strcmp(value, "panel") == 0)
+    return ThemeHomeElementType::Box;
+  if (strcmp(value, "divider") == 0 || strcmp(value, "line") == 0) return ThemeHomeElementType::Divider;
+  if (strcmp(value, "label") == 0 || strcmp(value, "text") == 0) return ThemeHomeElementType::Label;
+  if (strcmp(value, "tab-bar") == 0 || strcmp(value, "tabs") == 0) return ThemeHomeElementType::TabBar;
+  if (strcmp(value, "book-card") == 0 || strcmp(value, "current-book") == 0) return ThemeHomeElementType::BookCard;
+  if (strcmp(value, "cover-grid") == 0 || strcmp(value, "cover-row") == 0) return ThemeHomeElementType::CoverGrid;
+  if (strcmp(value, "menu-grid") == 0 || strcmp(value, "buttons") == 0) return ThemeHomeElementType::MenuGrid;
+  if (strcmp(value, "metric-cards") == 0 || strcmp(value, "stats") == 0) return ThemeHomeElementType::MetricCards;
+  return ThemeHomeElementType::Box;
+}
+
+void parseHomeLayout(JsonObjectConst obj, ThemeHomeLayoutSpec& layout) {
+  if (obj.isNull()) return;
+  JsonArrayConst elements = obj["layout"].as<JsonArrayConst>();
+  if (elements.isNull()) elements = obj["elements"].as<JsonArrayConst>();
+  if (elements.isNull()) return;
+
+  layout.enabled = true;
+  layout.elements.clear();
+  layout.elements.reserve(std::min<size_t>(elements.size(), 32));
+  for (JsonObjectConst itemObj : elements) {
+    if (layout.elements.size() >= 32) break;
+    ThemeHomeElementSpec item;
+    item.type = parseHomeElementType(itemObj["type"].as<const char*>());
+    item.x = itemObj["x"] | item.x;
+    item.y = itemObj["y"] | item.y;
+    item.width = itemObj["width"] | itemObj["w"] | item.width;
+    item.height = itemObj["height"] | itemObj["h"] | item.height;
+    item.radius = itemObj["radius"] | item.radius;
+    item.lineWidth = itemObj["lineWidth"] | itemObj["strokeWidth"] | item.lineWidth;
+    item.fill = itemObj["fill"] | item.fill;
+    item.outline = itemObj["outline"] | itemObj["border"] | item.outline;
+    applyFontSpec(itemObj, item.fontId, item.bold);
+    item.text = itemObj["text"] | "";
+    item.source = itemObj["source"] | "";
+    item.selectedIndex = itemObj["selectedIndex"] | item.selectedIndex;
+    item.count = itemObj["count"] | item.count;
+    item.gap = itemObj["gap"] | item.gap;
+    item.padding = itemObj["padding"] | item.padding;
+    item.coverWidth = itemObj["coverWidth"] | item.coverWidth;
+    item.coverHeight = itemObj["coverHeight"] | item.coverHeight;
+    item.columns = itemObj["columns"] | item.columns;
+    item.showTitle = itemObj["showTitle"] | item.showTitle;
+    item.showAuthor = itemObj["showAuthor"] | item.showAuthor;
+    item.showProgress = itemObj["showProgress"] | item.showProgress;
+
+    JsonArrayConst labels = itemObj["labels"].as<JsonArrayConst>();
+    if (!labels.isNull()) {
+      item.labels.reserve(std::min<size_t>(labels.size(), 12));
+      for (JsonVariantConst labelValue : labels) {
+        if (item.labels.size() >= 12) break;
+        const char* label = labelValue.as<const char*>();
+        if (label != nullptr) item.labels.emplace_back(label);
+      }
+    }
+    layout.elements.push_back(std::move(item));
+  }
+}
+
 ThemeMetrics defaultMetrics() { return LyraMetrics::values; }
 }  // namespace
 
@@ -514,6 +580,8 @@ bool SdCardThemeRegistry::parseThemeJson(const char* themeDirPath, SdCardThemeIn
   parseTabBarSpec(deviceObj["components"]["tabBar"].as<JsonObjectConst>(), out.tabBar);
   parseHeaderSpec(doc["components"]["header"].as<JsonObjectConst>(), out.header);
   parseHeaderSpec(deviceObj["components"]["header"].as<JsonObjectConst>(), out.header);
+  parseHomeLayout(doc["screens"]["home"].as<JsonObjectConst>(), out.homeLayout);
+  parseHomeLayout(deviceObj["screens"]["home"].as<JsonObjectConst>(), out.homeLayout);
   applyMetricOverrides(doc["metrics"].as<JsonObjectConst>(), out.metrics);
   applyMetricOverrides(deviceObj["metrics"].as<JsonObjectConst>(), out.metrics);
   if ((out.buttonMenu.enabled && out.buttonMenu.showIcons) || (out.list.enabled && out.list.showIcons)) {

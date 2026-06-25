@@ -243,6 +243,40 @@ using ThemeIconMap = std::map<UIIcon, std::string>;
 using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
 using ThemeFreeInkComponentList = std::vector<std::string>;
 
+enum class ThemeHomeElementType { Box, Divider, Label, TabBar, BookCard, CoverGrid, MenuGrid, MetricCards };
+
+struct ThemeHomeElementSpec {
+  ThemeHomeElementType type = ThemeHomeElementType::Box;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+  int radius = 0;
+  int lineWidth = 1;
+  bool fill = false;
+  bool outline = true;
+  int fontId = 10;
+  bool bold = false;
+  std::string text;
+  std::string source;
+  std::vector<std::string> labels;
+  int selectedIndex = 0;
+  int count = 3;
+  int gap = 8;
+  int padding = 6;
+  int coverWidth = 0;
+  int coverHeight = 0;
+  int columns = 4;
+  bool showTitle = true;
+  bool showAuthor = true;
+  bool showProgress = true;
+};
+
+struct ThemeHomeLayoutSpec {
+  bool enabled = false;
+  std::vector<ThemeHomeElementSpec> elements;
+};
+
 enum class KeyboardKeyType { Normal, Shift, Mode, Space, Del, Ok, Disabled };
 
 // Default theme implementation (Classic Theme)

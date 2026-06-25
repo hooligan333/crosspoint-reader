@@ -26,6 +26,7 @@ struct SdCardThemeInfo {
   ThemeButtonHintsSpec buttonHints;
   ThemeTabBarSpec tabBar;
   ThemeHeaderSpec header;
+  ThemeHomeLayoutSpec homeLayout;
   ThemeIconMap icons;
   std::string uiFontFamily;
   ThemeFreeInkComponentList freeInkComponents;

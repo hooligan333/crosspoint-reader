@@ -44,7 +44,7 @@
           "selected": true,
           "title": {
             "enabled": true,
-            "font": "ui12",
+            "font": "large",
             "style": "bold",
             "maxLines": 2,
             "offsetY": 12
@@ -60,7 +60,7 @@
       ]
     },
     "homeMenu": {
-      "font": "ui12",
+      "font": "large",
       "style": "regular",
       "centeredText": false,
       "showIcons": true,
@@ -70,7 +70,7 @@
       "selectionInset": 20
     },
     "list": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "showIcons": true,
       "textGap": 8,
@@ -145,7 +145,7 @@
               "selected": true,
               "title": {
                 "enabled": true,
-                "font": "ui12",
+                "font": "large",
                 "style": "bold",
                 "maxLines": 2,
                 "offsetY": 12

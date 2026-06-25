@@ -72,7 +72,7 @@
           "selected": true,
           "title": {
             "enabled": true,
-            "font": "ui12",
+            "font": "large",
             "style": "bold",
             "maxLines": 2,
             "offsetY": 8
@@ -88,7 +88,7 @@
           "yOffset": 74,
           "title": {
             "enabled": true,
-            "font": "ui10",
+            "font": "medium",
             "style": "regular",
             "maxLines": 1,
             "offsetY": 6
@@ -103,7 +103,7 @@
           "yOffset": 74,
           "title": {
             "enabled": true,
-            "font": "ui10",
+            "font": "medium",
             "style": "regular",
             "maxLines": 1,
             "offsetY": 6
@@ -112,7 +112,7 @@
       ]
     },
     "homeMenu": {
-      "font": "ui10",
+      "font": "medium",
       "style": "bold",
       "centeredText": false,
       "centerVertically": true,
@@ -129,7 +129,7 @@
       "textInsetX": 10
     },
     "list": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "subtitleFontId": 0,
       "valueFontId": 0,
@@ -157,7 +157,7 @@
       "iconOffsetY": 0
     },
     "header": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "centeredTitle": false,
       "showDivider": false,
@@ -165,7 +165,7 @@
       "batteryOffsetY": 2
     },
     "tabBar": {
-      "font": "ui10",
+      "font": "medium",
       "style": "bold",
       "equalWidth": true,
       "selectionStyle": "fill",
@@ -199,6 +199,112 @@
       "list",
       "button-hints"
     ]
+  },
+  "screens": {
+    "home": {
+      "layout": [
+        {
+          "type": "label",
+          "x": 8,
+          "y": 0,
+          "w": 210,
+          "h": 18,
+          "text": "Reader",
+          "font": "small"
+        },
+        {
+          "type": "tab-bar",
+          "x": 8,
+          "y": 22,
+          "w": 464,
+          "h": 30,
+          "labels": [
+            "reading",
+            "library",
+            "network",
+            "settings"
+          ],
+          "selectedIndex": 0,
+          "font": "small",
+          "style": "bold",
+          "radius": 4,
+          "outline": false
+        },
+        {
+          "type": "label",
+          "x": 8,
+          "y": 58,
+          "w": 180,
+          "h": 18,
+          "text": "currently reading",
+          "font": "medium",
+          "style": "bold"
+        },
+        {
+          "type": "book-card",
+          "x": 8,
+          "y": 78,
+          "w": 464,
+          "h": 102,
+          "coverWidth": 64,
+          "coverHeight": 84,
+          "padding": 7,
+          "radius": 4,
+          "font": "medium"
+        },
+        {
+          "type": "cover-grid",
+          "x": 8,
+          "y": 194,
+          "w": 464,
+          "h": 142,
+          "columns": 3,
+          "count": 3,
+          "coverWidth": 78,
+          "coverHeight": 108,
+          "gap": 8,
+          "font": "small",
+          "radius": 3
+        },
+        {
+          "type": "label",
+          "x": 8,
+          "y": 350,
+          "w": 180,
+          "h": 18,
+          "text": "reading stats",
+          "font": "medium",
+          "style": "bold"
+        },
+        {
+          "type": "metric-cards",
+          "x": 8,
+          "y": 372,
+          "w": 464,
+          "h": 60,
+          "count": 3,
+          "labels": [
+            "last read",
+            "total read",
+            "completed"
+          ],
+          "gap": 8,
+          "font": "small",
+          "radius": 4
+        },
+        {
+          "type": "menu-grid",
+          "x": 8,
+          "y": 446,
+          "w": 464,
+          "h": 72,
+          "columns": 4,
+          "gap": 6,
+          "font": "small",
+          "radius": 4
+        }
+      ]
+    }
   },
   "assets": {
     "freeInkIcons": {

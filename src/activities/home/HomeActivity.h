@@ -9,6 +9,7 @@
 
 struct RecentBook;
 struct Rect;
+struct ThemeHomeLayoutSpec;
 
 class HomeActivity final : public Activity {
   ButtonNavigator buttonNavigator;
@@ -72,6 +73,8 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(const std::vector<int>& coverHeights);
+  bool renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout);
+  void drawRecentCoverInRect(int bookIndex, Rect rect, int thumbHeight);
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

@@ -138,6 +138,13 @@ std::vector<int> UITheme::getHomeCoverThumbHeights() const {
       addHeight(slot.height);
     }
   }
+  if (currentSdHomeLayout.enabled) {
+    for (const auto& item : currentSdHomeLayout.elements) {
+      if (item.type == ThemeHomeElementType::BookCard || item.type == ThemeHomeElementType::CoverGrid) {
+        addHeight(item.coverHeight > 0 ? item.coverHeight : item.height);
+      }
+    }
+  }
   return heights;
 }
 
@@ -167,6 +174,7 @@ void UITheme::reload() {
     currentSdButtonHints = themeInfo->buttonHints;
     currentSdTabBar = themeInfo->tabBar;
     currentSdHeader = themeInfo->header;
+    currentSdHomeLayout = themeInfo->homeLayout;
     currentSdThemePath = themeInfo->path;
     currentSdUiFontFamily = themeInfo->uiFontFamily;
     currentSdIcons = themeInfo->icons;
@@ -222,9 +230,13 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   currentSdButtonHints = ThemeButtonHintsSpec{};
   currentSdTabBar = ThemeTabBarSpec{};
   currentSdHeader = ThemeHeaderSpec{};
+  currentSdHomeLayout = ThemeHomeLayoutSpec{};
   currentSdThemePath.clear();
   currentSdUiFontFamily.clear();
   currentSdInheritsClassic = false;
+  currentSmallFontId = SMALL_FONT_ID;
+  currentMediumFontId = UI_10_FONT_ID;
+  currentLargeFontId = UI_12_FONT_ID;
   currentSdIcons.clear();
   currentSdFreeInkComponents.clear();
   currentSdFreeInkIcons.clear();
@@ -252,12 +264,15 @@ void UITheme::buildCurrentSdTheme() {
 
 void UITheme::applyThemeFontOverrides() {
   const int smallId = themeFontManager.getFontIdForPointSize(currentSdUiFontFamily, 8);
-  const int ui10Id = themeFontManager.getFontIdForPointSize(currentSdUiFontFamily, 10);
-  const int ui12Id = themeFontManager.getFontIdForPointSize(currentSdUiFontFamily, 12);
-  auto remap = [smallId, ui10Id, ui12Id](int& fontId) {
+  const int mediumId = themeFontManager.getFontIdForPointSize(currentSdUiFontFamily, 10);
+  const int largeId = themeFontManager.getFontIdForPointSize(currentSdUiFontFamily, 12);
+  currentSmallFontId = smallId != 0 ? smallId : SMALL_FONT_ID;
+  currentMediumFontId = mediumId != 0 ? mediumId : UI_10_FONT_ID;
+  currentLargeFontId = largeId != 0 ? largeId : UI_12_FONT_ID;
+  auto remap = [smallId, mediumId, largeId](int& fontId) {
     if (fontId == SMALL_FONT_ID && smallId != 0) fontId = smallId;
-    if (fontId == UI_10_FONT_ID && ui10Id != 0) fontId = ui10Id;
-    if (fontId == UI_12_FONT_ID && ui12Id != 0) fontId = ui12Id;
+    if (fontId == UI_10_FONT_ID && mediumId != 0) fontId = mediumId;
+    if (fontId == UI_12_FONT_ID && largeId != 0) fontId = largeId;
   };
 
   remap(currentSdButtonMenu.fontId);

@@ -38,7 +38,7 @@ Theme ids must be path-safe: letters, numbers, spaces, `-`, and `_` only. Avoid 
   },
   "components": {
     "homeMenu": {
-      "font": "ui10",
+      "font": "medium",
       "style": "regular",
       "centeredText": true,
       "selectionStyle": "underline",
@@ -166,11 +166,11 @@ Other supported metric groups:
 Most components accept:
 
 ```json
-"font": "ui12",
+"font": "large",
 "style": "bold"
 ```
 
-Supported `font` values are `ui12`, `ui10`, and `small`. You can also use `fontId`, but named fonts are preferred. Supported `style` values are `regular` and `bold`.
+Supported `font` values are `small`, `medium`, and `large`. You can also use `fontId`, but named fonts are preferred. Legacy aliases `ui10` and `ui12` still parse for older SD themes. Supported `style` values are `regular` and `bold`.
 
 Themes can replace those UI font tokens with bundled SD-card fonts. Declare a path-safe family name in `assets.uiFontFamily`, then include `.cpfont` files in the theme package:
 
@@ -189,10 +189,46 @@ sd-themes/my-theme/fonts/MyThemeUI_12.cpfont
 At runtime, CrossPoint loads those files from `/.themes/<theme-id>/fonts/` and remaps:
 
 - `small` -> `<Family>_8.cpfont`
-- `ui10` -> `<Family>_10.cpfont`
-- `ui12` -> `<Family>_12.cpfont`
+- `medium` -> `<Family>_10.cpfont`
+- `large` -> `<Family>_12.cpfont`
 
 Missing sizes fall back to the built-in font for that token. Theme font files are still ordinary `.cpfont` files produced by the SD-card font builder.
+
+### FreeInkUI home layouts
+
+Themes can replace the legacy home renderer with a FreeInkUI-backed layout:
+
+```json
+"screens": {
+  "home": {
+    "layout": [
+      {
+        "type": "tab-bar",
+        "x": 8,
+        "y": 22,
+        "w": 464,
+        "h": 30,
+        "labels": ["reading", "library", "network", "settings"],
+        "font": "small",
+        "style": "bold",
+        "radius": 4
+      },
+      {
+        "type": "book-card",
+        "x": 8,
+        "y": 78,
+        "w": 464,
+        "h": 102,
+        "coverWidth": 64,
+        "coverHeight": 84,
+        "font": "medium"
+      }
+    ]
+  }
+}
+```
+
+Coordinates are relative to the FreeInkUI safe area. Supported element types are `label`, `box`, `divider`, `tab-bar`, `book-card`, `cover-grid`, `metric-cards`, and `menu-grid`. Common layout fields are `x`, `y`, `w`/`width`, `h`/`height`, `padding`, `gap`, `radius`, `lineWidth`, `font`, and `style`. Component-specific fields include `labels`, `selectedIndex`, `count`, `columns`, `coverWidth`, `coverHeight`, `showTitle`, `showAuthor`, and `showProgress`.
 
 ### Home recents
 
@@ -231,7 +267,7 @@ Example:
       "selected": true,
       "title": {
         "enabled": true,
-        "font": "ui12",
+        "font": "large",
         "style": "bold",
         "maxLines": 2,
         "offsetY": 12
