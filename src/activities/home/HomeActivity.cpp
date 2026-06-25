@@ -8,10 +8,13 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Icon.h>
 #include <Memory.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -198,7 +201,7 @@ void HomeActivity::freeCoverBuffer() {
 
 void HomeActivity::loop() {
   if (UITheme::getInstance().hasFreeInkHomeLayout()) {
-    buttonNavigator.onNext([this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] {
       if (!recentBooks.empty()) {
         coverSelectorIndex = ButtonNavigator::nextIndex(coverSelectorIndex, recentBooks.size());
         selectorIndex = coverSelectorIndex;
@@ -206,7 +209,7 @@ void HomeActivity::loop() {
       }
     });
 
-    buttonNavigator.onPrevious([this] {
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] {
       if (!recentBooks.empty()) {
         coverSelectorIndex = ButtonNavigator::previousIndex(coverSelectorIndex, recentBooks.size());
         selectorIndex = coverSelectorIndex;
@@ -332,6 +335,30 @@ freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
   return styles;
 }
 
+void drawFreeInkIconInk(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
+                        const int maxWidth, const int maxHeight, const bool black) {
+  if (icon.bits == nullptr || icon.w == 0 || icon.h == 0 || maxWidth <= 0 || maxHeight <= 0) return;
+
+  const float scaleX = static_cast<float>(maxWidth) / static_cast<float>(icon.w);
+  const float scaleY = static_cast<float>(maxHeight) / static_cast<float>(icon.h);
+  const float scale = std::min(scaleX, scaleY);
+  const int drawnWidth = std::max(1, static_cast<int>(std::floor(icon.w * scale)));
+  const int drawnHeight = std::max(1, static_cast<int>(std::floor(icon.h * scale)));
+  const int x0 = x + (maxWidth - drawnWidth) / 2;
+  const int y0 = y + (maxHeight - drawnHeight) / 2;
+  const int bytesPerRow = (icon.w + 7) / 8;
+
+  for (int dy = 0; dy < drawnHeight; ++dy) {
+    const int sy = static_cast<int>((static_cast<int32_t>(dy) * icon.h) / drawnHeight);
+    for (int dx = 0; dx < drawnWidth; ++dx) {
+      const int sx = static_cast<int>((static_cast<int32_t>(dx) * icon.w) / drawnWidth);
+      const uint8_t rowByte = icon.bits[sy * bytesPerRow + sx / 8];
+      const bool background = (rowByte >> (7 - (sx % 8))) & 0x01;
+      if (!background) renderer.drawPixel(x0 + dx, y0 + dy, black);
+    }
+  }
+}
+
 void drawFolderTabs(const GfxRenderer& renderer, freeink::ui::Rect rect, const ThemeHomeElementSpec& item) {
   const std::vector<std::string> fallbackIcons = {"book-open", "library", "wifi", "sliders-horizontal"};
   const auto& icons = item.icons.empty() ? fallbackIcons : item.icons;
@@ -359,9 +386,8 @@ void drawFolderTabs(const GfxRenderer& renderer, freeink::ui::Rect rect, const T
     const int iconSize = std::min(24, std::max(16, rect.height - 8));
     const int iconX = x + (w - iconSize) / 2;
     const int iconY = rect.y + (rect.height - iconSize) / 2;
-    if (!active) renderer.fillRect(iconX - 3, iconY - 3, iconSize + 6, iconSize + 6, false);
     const freeink::Icon* icon = findFreeInkThemeIcon(icons[i].c_str(), iconSize);
-    if (icon != nullptr) renderer.drawFreeInkIcon(*icon, iconX, iconY, iconSize, iconSize);
+    if (icon != nullptr) drawFreeInkIconInk(renderer, *icon, iconX, iconY, iconSize, iconSize, active);
   }
 }
 }  // namespace
