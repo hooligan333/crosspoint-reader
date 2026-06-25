@@ -296,10 +296,9 @@ void UITheme::buildCurrentSdTheme() {
   const ThemeButtonHintsSpec* buttonHints = currentSdButtonHints.enabled ? &currentSdButtonHints : nullptr;
   const ThemeTabBarSpec* tabBar = currentSdTabBar.enabled ? &currentSdTabBar : nullptr;
   const ThemeHeaderSpec* header = currentSdHeader.enabled ? &currentSdHeader : nullptr;
-  currentTheme =
-      std::make_unique<LyraTheme>(&currentSdMetrics, homeRecents, buttonMenu, list, buttonHints, tabBar, header,
-                                  currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons,
-                                  &currentSdNamedIcons, &currentSdNamedFreeInkIcons);
+  currentTheme = std::make_unique<LyraTheme>(&currentSdMetrics, homeRecents, buttonMenu, list, buttonHints, tabBar,
+                                             header, currentSdThemePath.c_str(), &currentSdIcons,
+                                             &currentSdFreeInkIcons, &currentSdNamedIcons, &currentSdNamedFreeInkIcons);
   currentMetrics = &currentSdMetrics;
   currentSettingsTheme = buildScreenTheme(currentSdSettingsScreen);
   currentReaderMenuTheme = buildScreenTheme(currentSdReaderMenuScreen);
@@ -308,8 +307,9 @@ void UITheme::buildCurrentSdTheme() {
 std::unique_ptr<BaseTheme> UITheme::buildScreenTheme(const ThemeScreenChromeSpec& screen) {
   if (!screen.enabled || currentSdInheritsClassic) return nullptr;
   const ThemeListSpec* list = screen.list.enabled ? &screen.list : (currentSdList.enabled ? &currentSdList : nullptr);
-  const ThemeButtonHintsSpec* buttonHints =
-      screen.buttonHints.enabled ? &screen.buttonHints : (currentSdButtonHints.enabled ? &currentSdButtonHints : nullptr);
+  const ThemeButtonHintsSpec* buttonHints = screen.buttonHints.enabled
+                                                ? &screen.buttonHints
+                                                : (currentSdButtonHints.enabled ? &currentSdButtonHints : nullptr);
   const ThemeTabBarSpec* tabBar =
       screen.tabBar.enabled ? &screen.tabBar : (currentSdTabBar.enabled ? &currentSdTabBar : nullptr);
   const ThemeHeaderSpec* header =

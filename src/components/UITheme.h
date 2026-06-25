@@ -22,12 +22,16 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
-  const ThemeMetrics& getSettingsMetrics() const { return currentSettingsTheme ? currentSdSettingsMetrics : *currentMetrics; }
+  const ThemeMetrics& getSettingsMetrics() const {
+    return currentSettingsTheme ? currentSdSettingsMetrics : *currentMetrics;
+  }
   const BaseTheme& getSettingsTheme() const { return currentSettingsTheme ? *currentSettingsTheme : *currentTheme; }
   const ThemeMetrics& getReaderMenuMetrics() const {
     return currentReaderMenuTheme ? currentSdReaderMenuMetrics : *currentMetrics;
   }
-  const BaseTheme& getReaderMenuTheme() const { return currentReaderMenuTheme ? *currentReaderMenuTheme : *currentTheme; }
+  const BaseTheme& getReaderMenuTheme() const {
+    return currentReaderMenuTheme ? *currentReaderMenuTheme : *currentTheme;
+  }
   const ThemeHomeLayoutSpec& getHomeLayout() const { return currentSdHomeLayout; }
   bool hasFreeInkHomeLayout() const { return currentSdHomeLayout.enabled; }
   int getSmallFontId() const { return currentSmallFontId; }

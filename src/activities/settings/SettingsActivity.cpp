@@ -293,8 +293,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::SdFirmwareUpdate:
         releaseSettingsLists();
         UITheme::getInstance().releaseSdThemeForNetwork(renderer);
-        startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput),
-                               networkResultHandler);
+        startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), networkResultHandler);
         break;
       case SettingAction::DownloadFonts:
         releaseSettingsLists();

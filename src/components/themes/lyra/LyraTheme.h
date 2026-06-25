@@ -79,8 +79,7 @@ class LyraTheme : public BaseTheme {
                      const ThemeListSpec* list = nullptr, const ThemeButtonHintsSpec* buttonHints = nullptr,
                      const ThemeTabBarSpec* tabBar = nullptr, const ThemeHeaderSpec* header = nullptr,
                      const char* assetRoot = nullptr, const ThemeIconMap* icons = nullptr,
-                     const ThemeFreeInkIconMap* freeInkIcons = nullptr,
-                     const ThemeNamedIconMap* namedIcons = nullptr,
+                     const ThemeFreeInkIconMap* freeInkIcons = nullptr, const ThemeNamedIconMap* namedIcons = nullptr,
                      const ThemeNamedFreeInkIconMap* namedFreeInkIcons = nullptr)
       : metrics_(metrics),
         homeRecents_(homeRecents),

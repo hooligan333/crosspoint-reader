@@ -198,7 +198,9 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
   }
 }
 
-void RecentBooksStore::refreshProgress(RecentBook& book) const { book.progressPercent = readProgressPercent(book.path); }
+void RecentBooksStore::refreshProgress(RecentBook& book) const {
+  book.progressPercent = readProgressPercent(book.path);
+}
 
 bool RecentBooksStore::removeByPath(const std::string& path) {
   auto it =

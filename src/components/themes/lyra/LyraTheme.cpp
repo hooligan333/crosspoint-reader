@@ -8,8 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -821,8 +821,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
       }
       if (icons) {
         const int iconSize = std::max(12, shapeSize);
-        if (drawNamedThemeIcon(renderer, namedIconKeyForButtonHintLabel(labels[i]),
-                               x + (buttonWidth - iconSize) / 2,
+        if (drawNamedThemeIcon(renderer, namedIconKeyForButtonHintLabel(labels[i]), x + (buttonWidth - iconSize) / 2,
                                pageHeight - buttonY + (buttonHeight - iconSize) / 2, iconSize)) {
           continue;
         }
