@@ -1,178 +1,337 @@
-# SD-card theme creation
+# SD Theme Creation
 
-CrossPoint ships one built-in base theme, Lyra. Additional themes live on the SD card and are selected from Settings. A downloaded theme is just a folder containing a `theme.json` and optional assets such as 1-bit BMP icons.
+SD themes are folders that contain a `theme.json` file plus optional assets such as generated icons and UI fonts. The current theme system is FreeInkUI-oriented: authors should build screens from rows, columns, and named components instead of calculating every element with absolute pixels.
 
-CrossPoint ignores unknown JSON fields. Other readers, such as CrossInk, can add their own fields under a namespaced object like `extensions.crossink` without breaking CrossPoint.
+Themes are selected from Settings after they are copied to the SD card or downloaded from the hosted theme manifest.
 
-## Folder layout
+## Start Here
 
-Manual install paths:
-
-```text
-/.themes/<theme-id>/theme.json   # hidden folder used by the downloader
-/themes/<theme-id>/theme.json    # visible folder for manual installs
-```
-
-Hosted theme packages in this repo live under:
+Use this structure for a hosted theme:
 
 ```text
-sd-themes/<theme-id>/theme.json
-sd-themes/<theme-id>/icons/*.bmp
-sd-themes/<theme-id>/fonts/*.cpfont
+sd-themes/<theme-id>/
+  theme.json
+  icons/*.bmp        # generated fallbacks for theme icons
+  fonts/*.cpfont     # optional theme UI fonts
 ```
 
-Theme ids must be path-safe: letters, numbers, spaces, `-`, and `_` only. Avoid spaces for hosted themes because ids are used in URLs and settings.
+Installed themes are discovered from either SD-card root:
 
-## Minimal theme
+```text
+/.themes/<theme-id>/theme.json
+/themes/<theme-id>/theme.json
+```
+
+Theme ids must be path-safe and should use only letters, numbers, `-`, and `_`. Do not use spaces for hosted themes because ids are used in URLs, settings, and update checks.
+
+Every published theme must include a `version`. Increase it whenever users should see an update available.
 
 ```json
 {
   "schema": 1,
+  "version": 1,
   "id": "my-theme",
   "name": "My Theme",
-  "description": "Short user-facing description shown in the downloader.",
+  "description": "Short text shown in the theme downloader.",
+  "inherits": "lyra"
+}
+```
+
+## Authoring Model
+
+The preferred model is:
+
+1. Put shared spacing in `metrics`.
+2. Put reusable styles in top-level `components`.
+3. Build the home screen with `screens.home.layout` using rows and columns.
+4. Override Settings and reader menu chrome with `screens.settings` and `screens.readerMenu` when the theme needs its own list/header/button style.
+5. Declare FreeInk/Lucide icon names in `assets.freeInkIcons`.
+6. Generate SD BMP fallbacks and the hosted manifest before publishing.
+
+Unknown JSON fields are ignored, so compatible apps can add namespaced data under `extensions.<app-or-namespace>`.
+
+## Top-Level Fields
+
+- `schema`: currently `1`.
+- `version`: integer used by the hosted manifest and downloader update checks.
+- `id`: stable id used for folder name, settings, downloads, and updates.
+- `name`: display name shown in Settings and the downloader.
+- `description`: short downloader text.
+- `inherits`: usually `lyra`. `classic` is accepted for manually installed themes that intentionally use the Classic renderer.
+- `metrics`: shared spacing, sizing, and renderer values.
+- `components`: reusable styles for menus, lists, headers, tabs, button hints, and older home recents.
+- `screens`: screen-specific layout and chrome. Modern home layouts live here.
+- `assets`: icon maps and optional UI font family.
+- `devices`: per-device overrides keyed by `x3` or `x4`.
+- `freeInkUI`: metadata describing the FreeInkUI components the theme targets.
+- `requires`: optional compatibility metadata for tooling or compatible apps.
+- `extensions`: optional namespaced metadata for compatible apps.
+
+## Minimal Row/Column Theme
+
+This is the smallest useful modern theme. It creates a centered home menu without absolute coordinates:
+
+```json
+{
+  "schema": 1,
+  "version": 1,
+  "id": "quiet-menu",
+  "name": "Quiet Menu",
+  "description": "A simple row-based home theme.",
   "inherits": "lyra",
   "metrics": {
-    "homeTopPadding": 48,
-    "menuRowHeight": 42
+    "homeContinueReadingInMenu": true,
+    "homeShowContinueReadingHeader": false
   },
   "components": {
     "homeMenu": {
       "font": "medium",
       "style": "regular",
       "centeredText": true,
-      "selectionStyle": "underline",
-      "showIcons": false
-    }
-  },
-  "devices": {
-    "x3": {
-      "constraints": {
-        "screenWidth": 480,
-        "screenHeight": 800,
-        "frontButtons": 4,
-        "sideButtons": "up-down"
-      }
+      "showIcons": false,
+      "selectionStyle": "underline"
     },
-    "x4": {
-      "constraints": {
-        "screenWidth": 480,
-        "screenHeight": 800,
-        "frontButtons": 0,
-        "sideButtons": "up-down"
+    "buttonHints": {
+      "layout": "shapes",
+      "fill": false,
+      "outline": false,
+      "drawEmpty": false
+    }
+  },
+  "screens": {
+    "home": {
+      "layout": {
+        "type": "rows",
+        "padding": {
+          "x": 60,
+          "top": 120,
+          "bottom": 120
+        },
+        "gap": 8,
+        "children": [
+          {
+            "type": "box",
+            "fill": false,
+            "outline": false
+          },
+          {
+            "type": "menu-grid",
+            "h": 220,
+            "columns": 1,
+            "gap": 8,
+            "font": "medium",
+            "fill": false,
+            "outline": false
+          },
+          {
+            "type": "box",
+            "fill": false,
+            "outline": false
+          }
+        ]
       }
     }
   }
 }
 ```
 
-Top-level fields:
+Rows divide available height among children. A child with `h` gets that fixed height; children without `h` share the remaining space. Columns work the same way for width. This is the main way themes scale across devices.
 
-- `schema`: currently `1`.
-- `id`: stable id used for settings, folder name, and downloads.
-- `name`: display name shown in Settings and the downloader.
-- `description`: short downloader text.
-- `inherits`: `lyra` for normal SD themes. `classic` is accepted for manually installed themes that intentionally build from the Classic renderer.
-- `metrics`: layout numbers shared across screens.
-- `components`: style rules for themeable UI surfaces.
-- `assets.icons`: optional icon file map.
-- `assets.uiFontFamily`: optional SD-loaded UI font family. Matching `.cpfont` files live in the theme's `fonts/` folder.
-- `devices`: optional per-device overrides keyed by `x3` or `x4`.
-- `requires`: optional metadata for other tooling. CrossPoint currently ignores it.
-- `extensions`: optional namespaced metadata for other firmware/apps. CrossPoint currently ignores it.
+## Screens
 
-## Device overrides
+Supported screen keys:
 
-The active device id is `x3` or `x4`. Any supported field under `devices.<device-id>` overrides the top-level value:
+- `screens.home`: full FreeInkUI-backed home layout.
+- `screens.settings`: metrics and component overrides for the main Settings list.
+- `screens.readerMenu`: metrics and component overrides for the in-reader menu.
+
+### Home Layout
+
+`screens.home.layout` must be a single root element. Use `rows` and `columns` for structure:
 
 ```json
-{
-  "metrics": {
-    "homeCoverHeight": 300
-  },
-  "components": {
-    "homeRecents": {
-      "maxBooks": 3
-    }
-  },
-  "devices": {
-    "x3": {
-      "metrics": {
-        "homeCoverHeight": 280
-      },
-      "components": {
-        "homeRecents": {
-          "maxBooks": 3
+"screens": {
+  "home": {
+    "layout": {
+      "type": "rows",
+      "padding": {"x": 36, "top": 8, "bottom": 20},
+      "gap": 10,
+      "children": [
+        {
+          "type": "tab-bar",
+          "h": 36,
+          "icons": ["book-open", "library", "wifi", "sliders-horizontal"],
+          "selectedIndex": 0,
+          "font": "small",
+          "style": "bold",
+          "outline": false
+        },
+        {
+          "type": "book-card",
+          "h": 150,
+          "coverWidth": 86,
+          "coverHeight": 122,
+          "font": "medium",
+          "outline": false
+        },
+        {
+          "type": "cover-grid",
+          "h": 220,
+          "columns": 3,
+          "count": 3,
+          "coverWidth": "fill",
+          "coverHeight": 190,
+          "showTitle": false,
+          "outline": false
+        },
+        {
+          "type": "metric-cards",
+          "h": 112,
+          "count": 3,
+          "labels": ["last read", "total read", "completed"],
+          "outline": true
         }
+      ]
+    }
+  }
+}
+```
+
+Supported layout element types:
+
+- `rows`, aliases `vstack`, `column`
+- `columns`, aliases `hstack`, `row`
+- `box`, aliases `rect`, `panel`
+- `divider`, alias `line`
+- `label`, alias `text`
+- `tab-bar`, alias `tabs`
+- `book-card`, alias `current-book`
+- `cover-grid`, alias `cover-row`
+- `menu-grid`, alias `buttons`
+- `metric-cards`, alias `stats`
+
+Common layout fields:
+
+- `w` or `width`: fixed width inside a column layout.
+- `h` or `height`: fixed height inside a row layout.
+- `padding`: number or object. Objects support `x`, `y`, `top`, `right`, `bottom`, `left`.
+- `gap`: spacing between children.
+- `radius`, `lineWidth` or `strokeWidth`.
+- `fill`: draw a filled background.
+- `outline` or `border`: draw a border. Defaults to `false`.
+- `font`: `small`, `medium`, or `large`.
+- `style`: `regular` or `bold`.
+- `children` or `items`: nested elements. Nesting is limited to keep parsing bounded.
+
+Component-specific fields:
+
+- `tab-bar`: `labels`, `icons`, `selectedIndex`.
+- `book-card`: `coverWidth`, `coverHeight`, `showTitle`, `showAuthor`, `showProgress`.
+- `cover-grid`: `columns`, `count`, `coverWidth`, `coverHeight`, `showTitle`, `showAuthor`, `showProgress`.
+- `menu-grid`: `columns`, `gap`.
+- `metric-cards`: `count`, `labels`.
+
+Use `coverWidth: "fill"` when covers should fill the available card width. Use explicit `coverHeight` to control the visual rhythm.
+
+### Settings And Reader Menu Screens
+
+Settings and reader menu do not use full arbitrary layouts yet. They support screen-specific metrics and component chrome:
+
+```json
+"screens": {
+  "settings": {
+    "metrics": {
+      "topPadding": 5,
+      "headerHeight": 84,
+      "tabBarHeight": 40,
+      "verticalSpacing": 16,
+      "contentSidePadding": 20,
+      "listRowHeight": 40,
+      "listWithSubtitleRowHeight": 60,
+      "buttonHintsHeight": 40
+    },
+    "components": {
+      "header": {
+        "font": "large",
+        "style": "bold",
+        "showDivider": true
+      },
+      "tabBar": {
+        "font": "medium",
+        "selectionStyle": "fill",
+        "selectedTextInverted": true,
+        "drawDivider": true
+      },
+      "list": {
+        "font": "medium",
+        "showIcons": true,
+        "selectionStyle": "fill",
+        "selectionFill": true,
+        "selectionOutline": false,
+        "rowBackgrounds": false
+      },
+      "buttonHints": {
+        "font": "small",
+        "layout": "buttons",
+        "fill": true,
+        "outline": true
+      }
+    }
+  },
+  "readerMenu": {
+    "metrics": {
+      "headerHeight": 84,
+      "listRowHeight": 40,
+      "buttonHintsHeight": 40
+    },
+    "components": {
+      "header": {
+        "font": "large",
+        "style": "bold"
+      },
+      "list": {
+        "font": "medium",
+        "showIcons": true,
+        "selectionStyle": "fill"
+      },
+      "buttonHints": {
+        "layout": "buttons",
+        "fill": true,
+        "outline": true
       }
     }
   }
 }
 ```
 
-Use `constraints` to document intended screen and button assumptions for builders and compatible apps:
-
-```json
-"constraints": {
-  "screenWidth": 480,
-  "screenHeight": 800,
-  "frontButtons": 4,
-  "sideButtons": "up-down"
-}
-```
-
-CrossPoint parses these constraints but does not reject themes when they do not match.
-
-## Metrics
-
-Metrics tune global spacing and layout. Any omitted metric keeps Lyra's default.
-
-Common home/list metrics:
-
-- `topPadding`
-- `headerHeight`
-- `verticalSpacing`
-- `contentSidePadding`
-- `listRowHeight`
-- `listWithSubtitleRowHeight`
-- `menuRowHeight`
-- `menuSpacing`
-- `tabSpacing`
-- `tabBarHeight`
-- `scrollBarWidth`
-- `scrollBarRightOffset`
-- `homeTopPadding`
-- `homeCoverHeight`
-- `homeCoverTileHeight`
-- `homeRecentBooksCount`
-- `homeContinueReadingInMenu`
-- `homeShowContinueReadingHeader`
-- `homeMenuTopOffset`
-- `buttonHintsHeight`
-- `sideButtonHintsWidth`
-
-Other supported metric groups:
-
-- Battery: `batteryWidth`, `batteryHeight`, `batteryBarHeight`
-- Reader progress/status: `progressBarHeight`, `progressBarMarginTop`, `statusBarHorizontalMargin`, `statusBarVerticalMargin`
-- Keyboard: `keyboardKeyWidth`, `keyboardKeyHeight`, `keyboardKeySpacing`, `keyboardBottomKeyHeight`, `keyboardBottomKeySpacing`, `keyboardBottomAligned`, `keyboardCenteredText`, `keyboardVerticalOffset`, `keyboardTextFieldWidthPercent`, `keyboardWidthPercent`, `keyboardKeyCornerRadius`, `keyboardFillUnselected`, `keyboardOutlineAllUnselected`, `keyboardDrawSpecialOutlineWhenUnselected`, `keyboardSecondaryLabelRightPadding`, `keyboardSecondaryLabelTopPadding`, `keyboardMinArrowHeadSize`
-- Popups: `popupTopOffsetRatio`, `popupMarginX`, `popupMarginY`, `popupFrameThickness`, `popupCornerRadius`, `popupTextBold`, `popupTextInverted`, `popupTextBaselineOffsetY`, `popupProgressBarHeight`, `popupProgressDrawOutline`, `popupProgressClampPercent`, `popupProgressFillInverted`, `popupProgressOutlineInverted`
-- Text fields: `textFieldHorizontalPadding`, `textFieldNormalThickness`, `textFieldCursorThickness`, `textFieldLineEndOffset`
+These screen blocks inherit top-level metrics first, then apply the screen override. If a screen component is omitted, the top-level component style is reused.
 
 ## Components
 
+Top-level `components` apply across the theme unless a screen override replaces them.
+
 ### Fonts
 
-Most components accept:
+Most components and layout elements accept:
 
 ```json
-"font": "large",
-"style": "bold"
+{
+  "font": "medium",
+  "style": "bold"
+}
 ```
 
-Supported `font` values are `small`, `medium`, and `large`. You can also use `fontId`, but named fonts are preferred. Legacy aliases `ui10` and `ui12` still parse for older SD themes. Supported `style` values are `regular` and `bold`.
+Supported font tokens:
 
-Themes can replace those UI font tokens with bundled SD-card fonts. Declare a path-safe family name in `assets.uiFontFamily`, then include `.cpfont` files in the theme package:
+- `small`: remaps to the theme's 8 point UI font when provided.
+- `medium`: remaps to the theme's 10 point UI font when provided.
+- `large`: remaps to the theme's 12 point UI font when provided.
+
+Legacy aliases `ui10` and `ui12` still parse for older themes, but new themes should use `small`, `medium`, and `large`.
+
+### Theme UI Fonts
+
+Declare a UI font family in `assets.uiFontFamily`:
 
 ```json
 "assets": {
@@ -180,129 +339,27 @@ Themes can replace those UI font tokens with bundled SD-card fonts. Declare a pa
 }
 ```
 
+Bundle matching `.cpfont` files:
+
 ```text
 sd-themes/my-theme/fonts/MyThemeUI_8.cpfont
 sd-themes/my-theme/fonts/MyThemeUI_10.cpfont
 sd-themes/my-theme/fonts/MyThemeUI_12.cpfont
 ```
 
-At runtime, CrossPoint loads those files from `/.themes/<theme-id>/fonts/` and remaps:
+At runtime:
 
-- `small` -> `<Family>_8.cpfont`
-- `medium` -> `<Family>_10.cpfont`
-- `large` -> `<Family>_12.cpfont`
+- `small` uses `<Family>_8.cpfont`
+- `medium` uses `<Family>_10.cpfont`
+- `large` uses `<Family>_12.cpfont`
 
-Missing sizes fall back to the built-in font for that token. Theme font files are still ordinary `.cpfont` files produced by the SD-card font builder.
+Missing sizes fall back to the built-in UI font. Theme UI fonts are loaded only while the SD theme is active and are released before network-heavy operations to preserve heap.
 
-### FreeInkUI home layouts
+### Home Menu
 
-Themes can replace the legacy home renderer with a FreeInkUI-backed layout:
+`components.homeMenu` styles the legacy menu renderer and `menu-grid` layout element.
 
-```json
-"screens": {
-  "home": {
-    "layout": [
-      {
-        "type": "tab-bar",
-        "x": 8,
-        "y": 22,
-        "w": 464,
-        "h": 30,
-        "labels": ["reading", "library", "network", "settings"],
-        "font": "small",
-        "style": "bold",
-        "radius": 4
-      },
-      {
-        "type": "book-card",
-        "x": 8,
-        "y": 78,
-        "w": 464,
-        "h": 102,
-        "coverWidth": 64,
-        "coverHeight": 84,
-        "font": "medium"
-      }
-    ]
-  }
-}
-```
-
-Coordinates are relative to the FreeInkUI safe area. Supported element types are `label`, `box`, `divider`, `tab-bar`, `book-card`, `cover-grid`, `metric-cards`, and `menu-grid`. Common layout fields are `x`, `y`, `w`/`width`, `h`/`height`, `padding`, `gap`, `radius`, `lineWidth`, `font`, and `style`. Component-specific fields include `labels`, `selectedIndex`, `count`, `columns`, `coverWidth`, `coverHeight`, `showTitle`, `showAuthor`, and `showProgress`.
-
-### Home recents
-
-`components.homeRecents` controls the home cover area.
-
-Supported types:
-
-- `default`: Lyra default.
-- `none`: no cover area.
-- `cover-strip`: one or more cover slots.
-
-Example:
-
-```json
-"homeRecents": {
-  "type": "cover-strip",
-  "maxBooks": 3,
-  "wrap": true,
-  "selectionLineWidth": 3,
-  "inactiveSelectionLineWidth": 1,
-  "selectionCornerRadius": 6,
-  "slots": [
-    {
-      "book": "previous",
-      "x": "padding",
-      "y": "center",
-      "height": 210,
-      "widthPercent": 62
-    },
-    {
-      "book": "selected",
-      "x": "center",
-      "y": "top",
-      "height": 280,
-      "widthPercent": 62,
-      "selected": true,
-      "title": {
-        "enabled": true,
-        "font": "large",
-        "style": "bold",
-        "maxLines": 2,
-        "offsetY": 12
-      }
-    },
-    {
-      "book": "next",
-      "x": "right-padding",
-      "y": "center",
-      "height": 210,
-      "widthPercent": 62
-    }
-  ]
-}
-```
-
-Slot fields:
-
-- `book`: `selected`, `previous`, `next`, or `index`.
-- `bookIndex`: zero-based index when `book` is `index`.
-- `x`: `padding`, `center`, or `right-padding`.
-- `y`: `top` or `center`.
-- `height`: requested thumbnail height. CrossPoint generates/cache-misses thumbnails at requested sizes.
-- `widthPercent`: cover width as a percent of the slot height.
-- `xOffset`, `yOffset`: positional adjustments.
-- `selected`: whether this slot receives the active selection outline.
-- `title`: optional book title under the cover.
-
-CrossPoint currently reads up to five cover slots.
-
-### Home menu
-
-`components.homeMenu` styles the home menu options.
-
-Supported fields:
+Fields:
 
 - `font`, `fontId`, `style`, `bold`
 - `centeredText`
@@ -321,9 +378,9 @@ Supported fields:
 
 ### Lists
 
-`components.list` styles Settings, Browse, Recent Books, and similar list rows.
+`components.list` styles list rows. Top-level list styles affect browse/settings-style screens; `screens.settings.components.list` and `screens.readerMenu.components.list` override those screens.
 
-Supported fields:
+Fields:
 
 - `font`, `fontId`, `style`, `bold`
 - `subtitleFontId`
@@ -356,9 +413,7 @@ Supported fields:
 
 ### Header
 
-`components.header` styles page headers.
-
-Supported fields:
+Fields:
 
 - `font`, `fontId`, `style`, `bold`
 - `centeredTitle`
@@ -366,11 +421,9 @@ Supported fields:
 - `titleOffsetY`
 - `batteryOffsetY`
 
-### Tab bar
+### Tab Bar
 
-`components.tabBar` styles tabs.
-
-Supported fields:
+Fields:
 
 - `font`, `fontId`, `style`, `bold`
 - `equalWidth`
@@ -380,21 +433,20 @@ Supported fields:
 - `drawDivider`
 - `horizontalInset`
 
-### Button hints
+For folder-style tabs, use `selectionStyle: "fill"`, `selectedTextInverted: true`, compact `horizontalInset`, and icon-only tab labels in the home layout.
 
-`components.buttonHints` styles bottom and side button hints.
+### Button Hints
 
-Supported fields:
+Fields:
 
 - `font`, `fontId`, `style`, `bold`
-- `layout`: `buttons`, `groups`, or `shapes`
+- `layout`: `buttons`, `groups`, `shapes`, or `icons`
 - `buttonWidth`
 - `smallButtonHeight`
 - `cornerRadius`
 - `fill`
 - `outline`
 - `drawEmpty`
-- `shapes`
 - `sidePadding`
 - `groupGap`
 - `bottomMargin`
@@ -402,37 +454,98 @@ Supported fields:
 - `shapeSize`
 - `textOffsetY`
 
-Use `layout: "shapes"` for icon-only arrows/circle/square hints.
+Use `layout: "icons"` with named `hint*` icons for custom button hint art. Use `layout: "shapes"` for simple built-in arrow/circle/square hints.
+
+### Home Recents
+
+`components.homeRecents` is the older cover-strip renderer. New dashboard-style themes should prefer `screens.home.layout` with `book-card` and `cover-grid`, but `homeRecents` remains useful for simple cover-focused themes.
+
+Supported types:
+
+- `default`
+- `none`
+- `cover-strip`
+
+Important fields:
+
+- `maxBooks`
+- `wrap`
+- `drawPanel`
+- `panelCornerRadius`
+- `panelInsetX`
+- `selectionLineWidth`
+- `inactiveSelectionLineWidth`
+- `selectionCornerRadius`
+- `slots`
+
+Each slot supports `book`, `bookIndex`, `x`, `y`, `height`, `widthPercent`, `xOffset`, `yOffset`, `selected`, and `title`.
+
+## Metrics
+
+Metrics are optional. Omitted values use Lyra defaults.
+
+Common metrics:
+
+- `topPadding`
+- `headerHeight`
+- `verticalSpacing`
+- `contentSidePadding`
+- `listRowHeight`
+- `listWithSubtitleRowHeight`
+- `menuRowHeight`
+- `menuSpacing`
+- `tabSpacing`
+- `tabBarHeight`
+- `homeTopPadding`
+- `homeCoverHeight`
+- `homeCoverTileHeight`
+- `homeRecentBooksCount`
+- `homeContinueReadingInMenu`
+- `homeShowContinueReadingHeader`
+- `homeMenuTopOffset`
+- `buttonHintsHeight`
+- `sideButtonHintsWidth`
+
+Reader/status metrics:
+
+- `progressBarHeight`
+- `progressBarMarginTop`
+- `statusBarHorizontalMargin`
+- `statusBarVerticalMargin`
+- `batteryWidth`
+- `batteryHeight`
+- `batteryBarHeight`
+
+Other supported groups:
+
+- Scroll bars: `scrollBarWidth`, `scrollBarRightOffset`
+- Keyboard: `keyboardKeyWidth`, `keyboardKeyHeight`, `keyboardKeySpacing`, `keyboardBottomKeyHeight`, `keyboardBottomKeySpacing`, `keyboardBottomAligned`, `keyboardCenteredText`, `keyboardVerticalOffset`, `keyboardTextFieldWidthPercent`, `keyboardWidthPercent`, `keyboardKeyCornerRadius`, `keyboardFillUnselected`, `keyboardOutlineAllUnselected`, `keyboardDrawSpecialOutlineWhenUnselected`, `keyboardSecondaryLabelRightPadding`, `keyboardSecondaryLabelTopPadding`, `keyboardMinArrowHeadSize`
+- Popups: `popupTopOffsetRatio`, `popupMarginX`, `popupMarginY`, `popupFrameThickness`, `popupCornerRadius`, `popupTextBold`, `popupTextInverted`, `popupTextBaselineOffsetY`, `popupProgressBarHeight`, `popupProgressDrawOutline`, `popupProgressClampPercent`, `popupProgressFillInverted`, `popupProgressOutlineInverted`
+- Text fields: `textFieldHorizontalPadding`, `textFieldNormalThickness`, `textFieldCursorThickness`, `textFieldLineEndOffset`
 
 ## Icons
 
-Icons are optional. If both `homeMenu.showIcons` and `list.showIcons` are false, omit icon fields and files to reduce download size and heap use.
+New themes should declare FreeInk/Lucide icons first:
 
-New themes should prefer the FreeInk SDK icon flow:
+```json
+"assets": {
+  "freeInkIcons": {
+    "book": "book-open",
+    "folder": "folder",
+    "settings": "sliders-horizontal",
+    "hintLeft": "arrow-left",
+    "hintRight": "arrow-right",
+    "hintMenu": "menu"
+  }
+}
+```
 
-1. Declare semantic icon keys in `assets.freeInkIcons`, mapped to Lucide icon names.
-2. Regenerate the firmware FreeInk icon registry for hosted themes.
-3. Generate SD-card BMP fallbacks for theme packages.
-4. Regenerate `sd-themes/themes.json`.
+The firmware cannot rasterize Lucide SVGs at runtime. There are two generated outputs:
 
-CrossPoint renders `assets.freeInkIcons` first when the named icon was compiled into the firmware registry. If no compiled FreeInk icon is available, it falls back to `assets.icons` BMP files on the SD card, then to legacy built-in icons.
+- A firmware registry, compiled from every hosted theme's `assets.freeInkIcons`, used when the icon exists in the current firmware.
+- SD-card BMP fallbacks in each theme's `icons/` folder, used when an icon is not compiled into firmware or when a theme is manually installed.
 
-Supported icon keys:
-
-- `folder`, `folder24`
-- `text`, `text24`
-- `image`, `image24`
-- `book`, `book24`
-- `file`, `file24`
-- `recent`
-- `settings`, `settings2`
-- `transfer`
-- `library`
-- `wifi`
-- `hotspot`
-- `bookmark`
-
-Generate firmware FreeInk icons and SD-card BMP fallbacks from `assets.freeInkIcons`:
+Generate both when publishing hosted themes:
 
 ```bash
 python3 scripts/generate-theme-icons.py \
@@ -447,158 +560,119 @@ python3 scripts/generate-theme-icons.py \
   --freeink-sdk freeink-sdk
 ```
 
-The first command uses the FreeInk SDK generator to compile the Lucide names used by hosted SD themes into firmware `freeink::Icon` assets. The second command writes matching BMP files into each theme folder and updates `assets.icons` so manually installed or older firmware builds still have SD-card icon assets.
+The second command updates `assets.icons` and writes files such as:
 
-Legacy themes can still generate firmware-matching 1-bit BMP icons from the old built-in CrossPoint headers:
-
-```bash
-python3 scripts/generate-theme-icons.py \
-  --icons src/components/icons \
-  --themes sd-themes
+```text
+sd-themes/my-theme/icons/book.bmp
+sd-themes/my-theme/icons/hintLeft.bmp
 ```
 
-The script writes rotated BMP files into each `sd-themes/<theme-id>/icons/` folder.
+Supported semantic icon keys for built-in UI locations:
 
-Reference them from `theme.json`:
+- `folder`, `folder24`
+- `text`, `text24`
+- `image`, `image24`
+- `book`, `book24`
+- `file`, `file24`
+- `recent`
+- `settings`, `settings2`
+- `transfer`
+- `library`
+- `wifi`
+- `hotspot`
+- `bookmark`
+
+Named icons are also supported for theme-specific layout and hint use. Keys such as `hintLeft`, `hintRight`, `hintMenu`, `hintBack`, `hintOpen`, and `hintSelect` are treated as named icons and can be referenced by FreeInkUI-backed theme surfaces.
+
+## Device Overrides
+
+Device-specific overrides live under `devices.x3` or `devices.x4`. They can override `inherits`, `metrics`, `components`, `screens`, `assets`, `freeInkUI`, and `constraints`.
 
 ```json
-"assets": {
-  "icons": {
-    "folder": "icons/folder.bmp",
-    "book": "icons/book.bmp",
-    "settings": "icons/settings2.bmp"
+"devices": {
+  "x3": {
+    "constraints": {
+      "screenWidth": 480,
+      "screenHeight": 800,
+      "frontButtons": 4,
+      "sideButtons": "up-down"
+    },
+    "screens": {
+      "home": {
+        "layout": {
+          "type": "rows",
+          "padding": {"x": 36, "top": 8},
+          "children": []
+        }
+      }
+    }
+  },
+  "x4": {
+    "constraints": {
+      "screenWidth": 480,
+      "screenHeight": 800,
+      "frontButtons": 0,
+      "sideButtons": "up-down"
+    }
   }
 }
 ```
 
-## FreeInkUI compatibility
+Constraints document intent for tools and compatible apps. They do not reject a theme at runtime.
 
-CrossPoint builds against the `freeink-sdk` submodule and includes the FreeInkUI and Icons libraries. Existing CrossPoint screens still consume the fields documented above, while compatible apps can use the same SD theme package to discover FreeInkUI component intent and Lucide icon names.
+## FreeInkUI Metadata
 
-Declare the FreeInkUI components a theme is designed for:
+Themes can declare which FreeInkUI components they target:
 
 ```json
 "freeInkUI": {
   "components": [
     "header",
     "status-bar",
-    "list",
     "tab-bar",
-    "button",
-    "button-hints",
-    "progress-bar",
-    "popup"
+    "book-card",
+    "cover-grid",
+    "metric-card",
+    "list",
+    "button-hints"
   ]
 }
 ```
 
-Declare Lucide icon names with `assets.freeInkIcons`. Keys use the same semantic icon names as `assets.icons`; values are Lucide icon names from `freeink-sdk/libs/assets/Icons/lucide/icons`:
+This metadata is useful for builders, compatible apps, and future tooling. Runtime drawing is still driven by `screens`, `components`, `metrics`, and `assets`.
+
+## Extensions
+
+Put app-specific data under `extensions.<namespace>`:
 
 ```json
-"assets": {
-  "icons": {
-    "folder": "icons/folder.bmp",
-    "book": "icons/book.bmp"
-  },
-  "freeInkIcons": {
-    "folder": "folder",
-    "book": "book-open",
-    "settings": "settings"
-  }
-}
-```
-
-Device overrides can replace either field:
-
-```json
-"devices": {
-  "x4": {
-    "freeInkUI": {
-      "components": ["header", "cover-carousel", "list", "button-hints"]
-    },
-    "assets": {
-      "freeInkIcons": {
-        "recent": "clock-3"
-      }
-    }
-  }
-}
-```
-
-CrossPoint validates these names, exposes them through `UITheme::getFreeInkComponents()` and `UITheme::getFreeInkIcons()`, and renders them through the generated FreeInk theme icon registry when available. It does not rasterize SVGs at runtime; generation happens before firmware build and before packaging SD themes.
-
-## CrossInk and extension fields
-
-CrossPoint only consumes the fields documented above, including the FreeInkUI compatibility metadata. Unknown fields are ignored, so theme authors can include extra data for compatible apps and firmware.
-
-Put app-specific fields under `extensions.<namespace>`:
-
-```json
-{
-  "schema": 1,
-  "id": "crossink-stats",
-  "name": "CrossInk Stats",
-  "inherits": "lyra",
-  "components": {
-    "homeRecents": {
-      "type": "cover-strip",
-      "maxBooks": 1
-    }
-  },
-  "extensions": {
-    "crossink": {
-      "schema": 1,
-      "readingStats": {
-        "enabled": true,
-        "placement": "home-footer",
-        "font": "small",
-        "style": "regular",
-        "show": [
-          "currentStreak",
-          "readingTime",
-          "pagesRead",
-          "percentComplete"
-        ],
-        "labels": {
-          "currentStreak": "streak",
-          "readingTime": "reading",
-          "pagesRead": "pages"
-        }
-      }
-    }
-  }
-}
-```
-
-Recommended extension rules:
-
-- Keep shared layout and asset fields in `metrics`, `components`, `assets`, `freeInkUI`, and `devices`.
-- Keep CrossInk-only fields under `extensions.crossink`.
-- Add an extension-local `schema` when the app-specific format may evolve.
-- Prefer declarative fields such as `placement`, `font`, `show`, and `labels` over code-like strings.
-- Keep extension data compact. CrossPoint ignores it, but it is still parsed transiently when discovering themes.
-- Do not put required CrossPoint behavior only in an extension field. CrossPoint will not read it.
-
-CrossInk can also use `requires` for compatibility metadata:
-
-```json
-"requires": {
-  "crosspoint": {
+"extensions": {
+  "myapp": {
     "schema": 1,
-    "modules": ["cover-strip"]
-  },
-  "crossink": {
-    "schema": 1,
-    "modules": ["reading-stats"]
+    "dashboard": {
+      "enabled": true
+    }
   }
 }
 ```
 
-CrossPoint currently treats `requires` as metadata.
+Rules:
 
-## Package manifest
+- Keep shared visual behavior in `metrics`, `components`, `screens`, `assets`, and `freeInkUI`.
+- Keep app-only behavior under `extensions`.
+- Add an extension-local `schema` if that extension may evolve.
+- Keep extension payloads compact; discovery still parses the theme JSON.
 
-After adding or changing hosted themes, regenerate `sd-themes/themes.json`:
+## Publishing And Updates
+
+After changing a hosted theme:
+
+1. Bump `version` in `sd-themes/<theme-id>/theme.json`.
+2. Regenerate icons if `assets.freeInkIcons` changed.
+3. Regenerate `sd-themes/themes.json`.
+4. Commit the theme folder and regenerated manifest together.
+
+Regenerate the manifest:
 
 ```bash
 python3 scripts/generate-theme-manifest.py \
@@ -607,16 +681,9 @@ python3 scripts/generate-theme-manifest.py \
   --output sd-themes/themes.json
 ```
 
-The manifest generator:
+The manifest contains file URLs, sizes, CRC32 values, theme ids, names, descriptions, versions, and total sizes. It does not embed full theme JSON content; every file is downloaded by URL to keep device heap usage bounded.
 
-- scans every `sd-themes/<theme-id>/theme.json`
-- includes every file in each theme folder
-- writes per-file `size` and `crc32`
-- writes the theme `id`, `name`, `description`, and `totalSize`
-
-Commit the theme files and the regenerated manifest together.
-
-## Validation checklist
+## Validation
 
 Before publishing:
 
@@ -630,12 +697,18 @@ python3 scripts/generate-theme-manifest.py \
   --base-url https://raw.githubusercontent.com/crosspoint-reader/crosspoint-reader/feat-sd-theme-system/sd-themes \
   --output sd-themes/themes.json
 
-pio run -e gh_release
+git diff --check
 ```
 
-On device:
+Run the firmware build when changing parser or renderer code.
 
-1. Download the theme from Settings -> UI Theme -> Download Themes.
-2. Exit the downloader and let the device silently restart to clear WiFi/TLS heap.
-3. Return to Settings -> UI Theme and select the downloaded theme.
-4. Check Home, Settings, Browse, Recent Books, button hints, tabs, popups, keyboard, and reader menus.
+On device, verify:
+
+- Theme appears in Settings after install or download.
+- Update available appears after `version` is bumped and `themes.json` is regenerated.
+- Home layout scales and has no unintended borders.
+- Covers fill the intended width and height.
+- Button hints match the device's physical button layout.
+- Settings and reader menu match the theme style.
+- Icons render from the firmware registry or SD fallback BMPs.
+- Theme UI fonts load when present and fall back cleanly when a size is missing.

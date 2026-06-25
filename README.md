@@ -133,9 +133,11 @@ Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` 
 
 ## Custom SD-card themes
 
-Downloadable themes are packaged under `sd-themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live beside it, usually under `icons/`. Themes can also bundle UI `.cpfont` files under `fonts/` and declare `assets.uiFontFamily` so `small`, `medium`, and `large` render from SD-loaded theme fonts. New themes can declare Lucide icon names through the FreeInk SDK icon system; hosted firmware builds compile those into `freeink::Icon` assets and SD packages can include generated BMP fallbacks.
+Downloadable themes are packaged under `sd-themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live under `icons/`, and theme-specific UI `.cpfont` files live under `fonts/`.
 
-See [SD-card theme creation](./docs/theme-creation.md) for the full JSON format, device-specific overrides, icon generation, CrossInk extension fields, and packaging rules.
+Modern SD themes are FreeInkUI-oriented. Home screens should be built from rows, columns, and named components instead of absolute pixel placement, while Settings and reader menu can define their own screen-specific header, list, tab, button hint, and metric overrides. Themes can declare Lucide icon names through the FreeInk SDK icon system; hosted firmware builds compile those into `freeink::Icon` assets, and SD packages include generated BMP fallbacks for manual installs and older firmware.
+
+See [SD Theme Creation](./docs/theme-creation.md) for the full JSON format, versions and updates, device-specific overrides, icon generation, UI font packaging, and manifest rules.
 
 After adding or changing a hosted theme, regenerate the download manifest:
 
