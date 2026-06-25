@@ -317,17 +317,6 @@
       "wifi": "wifi",
       "hotspot": "router",
       "bookmark": "bookmark"
-    },
-    "icons": {
-      "book": "icons/book.bmp",
-      "bookmark": "icons/bookmark.bmp",
-      "folder": "icons/folder.bmp",
-      "hotspot": "icons/hotspot.bmp",
-      "library": "icons/library.bmp",
-      "recent": "icons/recent.bmp",
-      "settings": "icons/settings.bmp",
-      "transfer": "icons/transfer.bmp",
-      "wifi": "icons/wifi.bmp"
     }
   },
   "devices": {
