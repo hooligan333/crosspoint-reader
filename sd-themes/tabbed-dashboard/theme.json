@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "id": "crosslink-dashboard",
-  "name": "CrossLink Dashboard",
+  "id": "tabbed-dashboard",
+  "name": "Tabbed Dashboard",
   "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
   "inherits": "lyra",
   "requires": {
@@ -246,7 +246,7 @@
     "crossink": {
       "dashboard": {
         "enabled": true,
-        "brand": "CrossLink",
+        "brand": "Reader",
         "topTabs": [
           "reading",
           "library",

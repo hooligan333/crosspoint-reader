@@ -136,7 +136,9 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
         return false;
       }
       file.crc32 = fileObj["crc32"].as<uint32_t>();
-      theme.totalSize += file.size;
+      file.optional = fileObj["optional"] | false;
+      file.content = fileObj["content"] | "";
+      if (!file.optional && file.content.empty()) theme.totalSize += file.size;
       theme.files.push_back(std::move(file));
     }
 
@@ -156,7 +158,7 @@ bool ThemeDownloadActivity::fetchAndParseManifest() {
             theme.hasUpdate = true;
             break;
           }
-        } else {
+        } else if (!file.optional) {
           theme.hasUpdate = true;
           break;
         }
@@ -252,6 +254,14 @@ bool ThemeDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc)
   return true;
 }
 
+size_t ThemeDownloadActivity::requiredFileCount(const ManifestTheme& theme) {
+  size_t count = 0;
+  for (const auto& file : theme.files) {
+    if (!file.optional) ++count;
+  }
+  return count;
+}
+
 void ThemeDownloadActivity::downloadTheme(ManifestTheme& theme) {
   {
     RenderLock lock(*this);
@@ -272,6 +282,10 @@ void ThemeDownloadActivity::downloadTheme(ManifestTheme& theme) {
 
   for (size_t i = 0; i < theme.files.size(); i++) {
     const auto& file = theme.files[i];
+    if (file.optional) {
+      LOG_DBG("THEME", "Skipping optional theme asset: %s", file.path.c_str());
+      continue;
+    }
     {
       RenderLock lock(*this);
       fileProgress_ = 0;
@@ -293,20 +307,37 @@ void ThemeDownloadActivity::downloadTheme(ManifestTheme& theme) {
       return;
     }
 
-    std::string url = baseUrl_ + file.url;
-    auto result = HttpDownloader::downloadToFile(
-        url, destPath,
-        [this](size_t downloaded, size_t total) {
-          fileProgress_ = downloaded;
-          fileTotal_ = total;
-          mappedInput.update();
-          if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
-              mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-            cancelRequested_ = true;
-          }
-          requestUpdate(true);
-        },
-        &cancelRequested_);
+    HttpDownloader::DownloadError result = HttpDownloader::OK;
+    if (!file.content.empty()) {
+      if (Storage.exists(destPath)) {
+        Storage.remove(destPath);
+      }
+      HalFile out;
+      if (!Storage.openFileForWrite("THEME", destPath, out)) {
+        result = HttpDownloader::FILE_ERROR;
+      } else {
+        const size_t written = out.write(reinterpret_cast<const uint8_t*>(file.content.data()), file.content.size());
+        out.close();
+        if (written != file.content.size()) result = HttpDownloader::FILE_ERROR;
+      }
+      fileProgress_ = file.content.size();
+      fileTotal_ = file.content.size();
+    } else {
+      std::string url = baseUrl_ + file.url;
+      result = HttpDownloader::downloadToFile(
+          url, destPath,
+          [this](size_t downloaded, size_t total) {
+            fileProgress_ = downloaded;
+            fileTotal_ = total;
+            mappedInput.update();
+            if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+                mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+              cancelRequested_ = true;
+            }
+            requestUpdate(true);
+          },
+          &cancelRequested_);
+    }
 
     if (result == HttpDownloader::ABORTED) {
       themeInstaller_.deleteTheme(theme.id.c_str());
@@ -412,21 +443,21 @@ void ThemeDownloadActivity::loop() {
         currentFileIndex_ = 0;
         currentFileTotal_ = 0;
         for (const auto& t : themes_) {
-          if (!t.installed) currentFileTotal_ += t.files.size();
+          if (!t.installed) currentFileTotal_ += requiredFileCount(t);
         }
         downloadAll();
       } else if (isUpdateAllRow(selectedIndex_)) {
         currentFileIndex_ = 0;
         currentFileTotal_ = 0;
         for (const auto& t : themes_) {
-          if (t.hasUpdate) currentFileTotal_ += t.files.size();
+          if (t.hasUpdate) currentFileTotal_ += requiredFileCount(t);
         }
         updateAll();
       } else {
         auto& theme = themes_[themeIndexFromList(selectedIndex_)];
         if (!theme.installed || theme.hasUpdate) {
           currentFileIndex_ = 0;
-          currentFileTotal_ = theme.files.size();
+          currentFileTotal_ = requiredFileCount(theme);
           downloadTheme(theme);
         } else {
           promptDeleteSelectedTheme();

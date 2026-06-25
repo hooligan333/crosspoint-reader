@@ -41,8 +41,10 @@ class ThemeDownloadActivity : public Activity {
   struct ManifestFile {
     std::string path;
     std::string url;
+    std::string content;
     size_t size = 0;
     uint32_t crc32 = 0;
+    bool optional = false;
   };
 
   struct ManifestTheme {
@@ -90,4 +92,5 @@ class ThemeDownloadActivity : public Activity {
   size_t totalDownloadSize() const;
   size_t totalUpdateSize() const;
   static std::string formatSize(size_t bytes);
+  static size_t requiredFileCount(const ManifestTheme& theme);
 };

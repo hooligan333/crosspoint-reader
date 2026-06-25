@@ -16,24 +16,53 @@ def safe_theme_dirs(root: Path):
             yield child
 
 
+def collect_optional_freeink_icon_fallbacks(theme_doc: dict) -> set[str]:
+    paths = set()
+
+    def collect(scope: dict):
+        assets = scope.get("assets", {})
+        freeink_icons = assets.get("freeInkIcons", {})
+        bitmap_icons = assets.get("icons", {})
+        if not isinstance(freeink_icons, dict) or not isinstance(bitmap_icons, dict):
+            return
+        for key in freeink_icons:
+            bitmap_path = bitmap_icons.get(key)
+            if isinstance(bitmap_path, str):
+                paths.add(bitmap_path)
+
+    collect(theme_doc)
+    devices = theme_doc.get("devices", {})
+    if isinstance(devices, dict):
+        for device_doc in devices.values():
+            if isinstance(device_doc, dict):
+                collect(device_doc)
+
+    return paths
+
+
 def build_manifest(root: Path, base_url: str):
     themes = []
     for theme_dir in safe_theme_dirs(root):
         theme_doc = json.loads((theme_dir / "theme.json").read_text(encoding="utf-8"))
+        optional_files = collect_optional_freeink_icon_fallbacks(theme_doc)
         files = []
         total = 0
         for file_path in sorted(p for p in theme_dir.rglob("*") if p.is_file()):
             rel = file_path.relative_to(theme_dir).as_posix()
             data = file_path.read_bytes()
             total += len(data)
-            files.append(
-                {
-                    "path": rel,
-                    "url": f"{theme_dir.name}/{rel}",
-                    "size": len(data),
-                    "crc32": zlib.crc32(data) & 0xFFFFFFFF,
-                }
-            )
+            entry = {
+                "path": rel,
+                "url": f"{theme_dir.name}/{rel}",
+                "size": len(data),
+                "crc32": zlib.crc32(data) & 0xFFFFFFFF,
+            }
+            if rel in optional_files:
+                entry["optional"] = True
+                entry["role"] = "freeInkIconFallback"
+            if rel == "theme.json":
+                entry["content"] = data.decode("utf-8")
+            files.append(entry)
 
         themes.append(
             {
