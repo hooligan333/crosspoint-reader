@@ -278,7 +278,7 @@ def generate_firmware_registry(theme_root: Path, sdk_root: Path, sizes: str, fir
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--icons", default="src/components/icons")
-    parser.add_argument("--themes", default="sd-themes")
+    parser.add_argument("--themes", default="../crosspoint-tools/public/themes")
     parser.add_argument("--from-freeink-sdk", action="store_true", help="Generate assets.icons from assets.freeInkIcons")
     parser.add_argument("--freeink-sdk", default="freeink-sdk", help="Path to the FreeInk SDK checkout/submodule")
     parser.add_argument("--size", type=int, default=32, help="Default generated SDK icon size in pixels")

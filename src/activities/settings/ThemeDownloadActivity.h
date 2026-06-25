@@ -8,8 +8,7 @@
 #include "util/ButtonNavigator.h"
 
 #define THEMES_MANIFEST_VERSION 1
-#define THEME_ROOT_URL \
-  "https://raw.githubusercontent.com/crosspoint-reader/crosspoint-reader/feat-sd-theme-system/sd-themes"
+#define THEME_ROOT_URL "https://crosspointreader.com/themes"
 
 #ifndef THEME_MANIFEST_URL
 #define THEME_MANIFEST_URL THEME_ROOT_URL "/themes.json"

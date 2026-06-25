@@ -133,7 +133,7 @@ Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` 
 
 ## Custom SD-card themes
 
-Downloadable themes are packaged under `sd-themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live under `icons/`, and theme-specific UI `.cpfont` files live under `fonts/`.
+Downloadable themes are packaged in the tools repo under `../crosspoint-tools/public/themes/<theme-id>/`. Each theme folder must contain a `theme.json`; optional generated BMP icon fallbacks live under `icons/`, and theme-specific UI `.cpfont` files live under `fonts/`.
 
 Modern SD themes are FreeInkUI-oriented. Home screens should be built from rows, columns, and named components instead of absolute pixel placement, while Settings and reader menu can define their own screen-specific header, list, tab, button hint, and metric overrides. Themes can declare Lucide icon names through the FreeInk SDK icon system; hosted firmware builds compile those into `freeink::Icon` assets, and SD packages include generated BMP fallbacks for manual installs and older firmware.
 
@@ -142,13 +142,11 @@ See [SD Theme Creation](./docs/theme-creation.md) for the full JSON format, vers
 After adding or changing a hosted theme, regenerate the download manifest:
 
 ```bash
-python3 scripts/generate-theme-manifest.py \
-  --root sd-themes \
-  --base-url https://raw.githubusercontent.com/crosspoint-reader/crosspoint-reader/feat-sd-theme-system/sd-themes \
-  --output sd-themes/themes.json
+cd ../crosspoint-tools
+python3 scripts/generate-theme-manifest.py
 ```
 
-The script scans every theme folder, includes every file in each package, and writes size and CRC32 values used by the device downloader. Commit both the changed theme package files and the regenerated `sd-themes/themes.json`.
+The script scans every theme folder, includes every file in each package, and writes size and CRC32 values used by the device downloader. Commit both the changed theme package files and the regenerated `public/themes/themes.json` in `crosspoint-tools`.
 
 ---
 

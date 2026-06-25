@@ -9,7 +9,7 @@ Themes are selected from Settings after they are copied to the SD card or downlo
 Use this structure for a hosted theme:
 
 ```text
-sd-themes/<theme-id>/
+../crosspoint-tools/public/themes/<theme-id>/
   theme.json
   icons/*.bmp        # generated fallbacks for theme icons
   fonts/*.cpfont     # optional theme UI fonts
@@ -342,9 +342,9 @@ Declare a UI font family in `assets.uiFontFamily`:
 Bundle matching `.cpfont` files:
 
 ```text
-sd-themes/my-theme/fonts/MyThemeUI_8.cpfont
-sd-themes/my-theme/fonts/MyThemeUI_10.cpfont
-sd-themes/my-theme/fonts/MyThemeUI_12.cpfont
+../crosspoint-tools/public/themes/my-theme/fonts/MyThemeUI_8.cpfont
+../crosspoint-tools/public/themes/my-theme/fonts/MyThemeUI_10.cpfont
+../crosspoint-tools/public/themes/my-theme/fonts/MyThemeUI_12.cpfont
 ```
 
 At runtime:
@@ -548,23 +548,24 @@ The firmware cannot rasterize Lucide SVGs at runtime. There are two generated ou
 Generate both when publishing hosted themes:
 
 ```bash
+cd ../crosspoint-tools
 python3 scripts/generate-theme-icons.py \
-  --themes sd-themes \
-  --freeink-sdk freeink-sdk \
-  --firmware-out src/components/icons/freeink_theme_icons.generated.h \
-  --registry-out src/components/icons/FreeInkThemeIconRegistry.cpp
+  --themes public/themes \
+  --freeink-sdk ../freeink-sdk \
+  --firmware-out ../crosspoint-reader-main/src/components/icons/freeink_theme_icons.generated.h \
+  --registry-out ../crosspoint-reader-main/src/components/icons/FreeInkThemeIconRegistry.cpp
 
 python3 scripts/generate-theme-icons.py \
-  --themes sd-themes \
+  --themes public/themes \
   --from-freeink-sdk \
-  --freeink-sdk freeink-sdk
+  --freeink-sdk ../freeink-sdk
 ```
 
 The second command updates `assets.icons` and writes files such as:
 
 ```text
-sd-themes/my-theme/icons/book.bmp
-sd-themes/my-theme/icons/hintLeft.bmp
+../crosspoint-tools/public/themes/my-theme/icons/book.bmp
+../crosspoint-tools/public/themes/my-theme/icons/hintLeft.bmp
 ```
 
 Supported semantic icon keys for built-in UI locations:
@@ -667,18 +668,16 @@ Rules:
 
 After changing a hosted theme:
 
-1. Bump `version` in `sd-themes/<theme-id>/theme.json`.
+1. Bump `version` in `../crosspoint-tools/public/themes/<theme-id>/theme.json`.
 2. Regenerate icons if `assets.freeInkIcons` changed.
-3. Regenerate `sd-themes/themes.json`.
+3. Regenerate `../crosspoint-tools/public/themes/themes.json`.
 4. Commit the theme folder and regenerated manifest together.
 
 Regenerate the manifest:
 
 ```bash
-python3 scripts/generate-theme-manifest.py \
-  --root sd-themes \
-  --base-url https://raw.githubusercontent.com/crosspoint-reader/crosspoint-reader/feat-sd-theme-system/sd-themes \
-  --output sd-themes/themes.json
+cd ../crosspoint-tools
+python3 scripts/generate-theme-manifest.py
 ```
 
 The manifest contains file URLs, sizes, CRC32 values, theme ids, names, descriptions, versions, and total sizes. It does not embed full theme JSON content; every file is downloaded by URL to keep device heap usage bounded.
@@ -688,14 +687,12 @@ The manifest contains file URLs, sizes, CRC32 values, theme ids, names, descript
 Before publishing:
 
 ```bash
-for f in sd-themes/themes.json sd-themes/*/theme.json; do
+cd ../crosspoint-tools
+for f in public/themes/themes.json public/themes/*/theme.json; do
   python3 -m json.tool "$f" >/dev/null
 done
 
-python3 scripts/generate-theme-manifest.py \
-  --root sd-themes \
-  --base-url https://raw.githubusercontent.com/crosspoint-reader/crosspoint-reader/feat-sd-theme-system/sd-themes \
-  --output sd-themes/themes.json
+python3 scripts/generate-theme-manifest.py
 
 git diff --check
 ```
