@@ -78,7 +78,8 @@ class LyraTheme : public BaseTheme {
                      const ThemeHomeRecentsSpec* homeRecents = nullptr, const ThemeButtonMenuSpec* buttonMenu = nullptr,
                      const ThemeListSpec* list = nullptr, const ThemeButtonHintsSpec* buttonHints = nullptr,
                      const ThemeTabBarSpec* tabBar = nullptr, const ThemeHeaderSpec* header = nullptr,
-                     const char* assetRoot = nullptr, const ThemeIconMap* icons = nullptr)
+                     const char* assetRoot = nullptr, const ThemeIconMap* icons = nullptr,
+                     const ThemeFreeInkIconMap* freeInkIcons = nullptr)
       : metrics_(metrics),
         homeRecents_(homeRecents),
         buttonMenu_(buttonMenu),
@@ -87,7 +88,8 @@ class LyraTheme : public BaseTheme {
         tabBar_(tabBar),
         header_(header),
         assetRoot_(assetRoot),
-        icons_(icons) {}
+        icons_(icons),
+        freeInkIcons_(freeInkIcons) {}
 
   // Component drawing methods
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
@@ -127,6 +129,7 @@ class LyraTheme : public BaseTheme {
   const ThemeHeaderSpec* header_;
   const char* assetRoot_;
   const ThemeIconMap* icons_;
+  const ThemeFreeInkIconMap* freeInkIcons_;
   const ThemeMetrics& metrics() const { return metrics_ ? *metrics_ : LyraMetrics::values; }
   bool hasThemeIcon(UIIcon icon) const;
   bool drawThemeIcon(const GfxRenderer& renderer, UIIcon icon, int x, int y, int size) const;

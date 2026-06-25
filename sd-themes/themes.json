@@ -107,6 +107,74 @@
       "totalSize": 6993
     },
     {
+      "id": "crosslink-dashboard",
+      "name": "CrossLink Dashboard",
+      "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
+      "files": [
+        {
+          "path": "icons/book.bmp",
+          "url": "crosslink-dashboard/icons/book.bmp",
+          "size": 190,
+          "crc32": 2183780640
+        },
+        {
+          "path": "icons/bookmark.bmp",
+          "url": "crosslink-dashboard/icons/bookmark.bmp",
+          "size": 190,
+          "crc32": 3107711995
+        },
+        {
+          "path": "icons/folder.bmp",
+          "url": "crosslink-dashboard/icons/folder.bmp",
+          "size": 190,
+          "crc32": 2224264884
+        },
+        {
+          "path": "icons/hotspot.bmp",
+          "url": "crosslink-dashboard/icons/hotspot.bmp",
+          "size": 190,
+          "crc32": 3317405217
+        },
+        {
+          "path": "icons/library.bmp",
+          "url": "crosslink-dashboard/icons/library.bmp",
+          "size": 190,
+          "crc32": 4221921702
+        },
+        {
+          "path": "icons/recent.bmp",
+          "url": "crosslink-dashboard/icons/recent.bmp",
+          "size": 190,
+          "crc32": 4287281112
+        },
+        {
+          "path": "icons/settings.bmp",
+          "url": "crosslink-dashboard/icons/settings.bmp",
+          "size": 190,
+          "crc32": 901321762
+        },
+        {
+          "path": "icons/transfer.bmp",
+          "url": "crosslink-dashboard/icons/transfer.bmp",
+          "size": 190,
+          "crc32": 248068601
+        },
+        {
+          "path": "icons/wifi.bmp",
+          "url": "crosslink-dashboard/icons/wifi.bmp",
+          "size": 190,
+          "crc32": 3700686678
+        },
+        {
+          "path": "theme.json",
+          "url": "crosslink-dashboard/theme.json",
+          "size": 6566,
+          "crc32": 2908849510
+        }
+      ],
+      "totalSize": 8276
+    },
+    {
       "id": "super-minimal",
       "name": "Super Minimal",
       "description": "A quiet text-only theme with no cover area, centered home options, underline selection, and icon-only hints.",

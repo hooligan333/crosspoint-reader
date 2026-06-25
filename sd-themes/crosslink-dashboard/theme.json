@@ -1,0 +1,277 @@
+{
+  "schema": 1,
+  "id": "crosslink-dashboard",
+  "name": "CrossLink Dashboard",
+  "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
+  "inherits": "lyra",
+  "requires": {
+    "crosspoint": {
+      "schema": 1,
+      "modules": [
+        "cover-strip"
+      ]
+    },
+    "freeinkui": {
+      "schema": 1,
+      "components": [
+        "header",
+        "tab-bar",
+        "status-bar",
+        "cover-carousel",
+        "book-card",
+        "metric-card",
+        "list"
+      ]
+    }
+  },
+  "metrics": {
+    "headerHeight": 32,
+    "tabBarHeight": 34,
+    "topPadding": 2,
+    "verticalSpacing": 6,
+    "contentSidePadding": 10,
+    "homeTopPadding": 10,
+    "homeCoverHeight": 260,
+    "homeCoverTileHeight": 276,
+    "homeRecentBooksCount": 3,
+    "homeContinueReadingInMenu": false,
+    "homeShowContinueReadingHeader": true,
+    "homeMenuTopOffset": 4,
+    "menuRowHeight": 44,
+    "menuSpacing": 4,
+    "listRowHeight": 34,
+    "listWithSubtitleRowHeight": 56,
+    "buttonHintsHeight": 30,
+    "sideButtonHintsWidth": 24,
+    "progressBarHeight": 10,
+    "progressBarMarginTop": 1,
+    "batteryWidth": 14,
+    "batteryHeight": 9,
+    "batteryBarHeight": 16
+  },
+  "components": {
+    "homeRecents": {
+      "type": "cover-strip",
+      "maxBooks": 3,
+      "wrap": true,
+      "drawPanel": true,
+      "panelCornerRadius": 5,
+      "panelInsetX": 0,
+      "selectionLineWidth": 2,
+      "inactiveSelectionLineWidth": 0,
+      "selectionCornerRadius": 4,
+      "slots": [
+        {
+          "book": "selected",
+          "x": "padding",
+          "y": "top",
+          "height": 168,
+          "widthPercent": 46,
+          "xOffset": 0,
+          "yOffset": 0,
+          "selected": true,
+          "title": {
+            "enabled": true,
+            "font": "ui12",
+            "style": "bold",
+            "maxLines": 2,
+            "offsetY": 8
+          }
+        },
+        {
+          "book": "previous",
+          "x": "center",
+          "y": "center",
+          "height": 150,
+          "widthPercent": 35,
+          "xOffset": -8,
+          "yOffset": 74,
+          "title": {
+            "enabled": true,
+            "font": "ui10",
+            "style": "regular",
+            "maxLines": 1,
+            "offsetY": 6
+          }
+        },
+        {
+          "book": "next",
+          "x": "right-padding",
+          "y": "center",
+          "height": 150,
+          "widthPercent": 35,
+          "yOffset": 74,
+          "title": {
+            "enabled": true,
+            "font": "ui10",
+            "style": "regular",
+            "maxLines": 1,
+            "offsetY": 6
+          }
+        }
+      ]
+    },
+    "homeMenu": {
+      "font": "ui10",
+      "style": "bold",
+      "centeredText": false,
+      "centerVertically": true,
+      "showIcons": true,
+      "drawPanel": true,
+      "panelWidth": 0,
+      "panelCornerRadius": 4,
+      "selectionStyle": "pill",
+      "selectionCornerRadius": 4,
+      "selectionInset": 8,
+      "selectedTextInverted": true,
+      "selectionFillBlack": true,
+      "rowPaddingX": 10,
+      "textInsetX": 10
+    },
+    "list": {
+      "font": "ui10",
+      "style": "regular",
+      "subtitleFontId": 0,
+      "valueFontId": 0,
+      "showIcons": true,
+      "iconSize": 24,
+      "textGap": 8,
+      "selectionStyle": "pill",
+      "selectionCornerRadius": 4,
+      "selectionFill": true,
+      "selectionOutline": false,
+      "selectedTextInverted": true,
+      "rowBackgrounds": true,
+      "centerSingleLineRows": true,
+      "subtitleRowAutoHeight": true,
+      "centerValueVertically": true,
+      "rowSidePadding": 6,
+      "rowGap": 4,
+      "textInsetX": 8,
+      "selectionInsetX": 0,
+      "selectionInsetY": 1,
+      "titleOffsetY": 6,
+      "subtitleOffsetY": 25,
+      "valueOffsetY": 6,
+      "subtitleValueOffsetY": 15,
+      "iconOffsetY": 0
+    },
+    "header": {
+      "font": "ui10",
+      "style": "regular",
+      "centeredTitle": false,
+      "showDivider": false,
+      "titleOffsetY": 0,
+      "batteryOffsetY": 2
+    },
+    "tabBar": {
+      "font": "ui10",
+      "style": "bold",
+      "equalWidth": true,
+      "selectionStyle": "fill",
+      "selectedCornerRadius": 4,
+      "selectedTextInverted": true,
+      "drawDivider": false,
+      "horizontalInset": 1
+    },
+    "buttonHints": {
+      "font": "small",
+      "style": "regular",
+      "buttonWidth": 70,
+      "smallButtonHeight": 13,
+      "cornerRadius": 4,
+      "fill": true,
+      "outline": false,
+      "drawEmpty": false,
+      "layout": "shapes",
+      "shapeSize": 16,
+      "textOffsetY": 6
+    }
+  },
+  "freeInkUI": {
+    "components": [
+      "header",
+      "status-bar",
+      "tab-bar",
+      "book-card",
+      "cover-carousel",
+      "metric-card",
+      "list",
+      "button-hints"
+    ]
+  },
+  "assets": {
+    "freeInkIcons": {
+      "book": "book-open",
+      "recent": "clock-3",
+      "settings": "sliders-horizontal",
+      "transfer": "download",
+      "library": "library",
+      "folder": "folder",
+      "wifi": "wifi",
+      "hotspot": "router",
+      "bookmark": "bookmark"
+    },
+    "icons": {
+      "book": "icons/book.bmp",
+      "bookmark": "icons/bookmark.bmp",
+      "folder": "icons/folder.bmp",
+      "hotspot": "icons/hotspot.bmp",
+      "library": "icons/library.bmp",
+      "recent": "icons/recent.bmp",
+      "settings": "icons/settings.bmp",
+      "transfer": "icons/transfer.bmp",
+      "wifi": "icons/wifi.bmp"
+    }
+  },
+  "devices": {
+    "x3": {
+      "constraints": {
+        "screenWidth": 480,
+        "screenHeight": 800,
+        "frontButtons": 4,
+        "sideButtons": "up-down"
+      }
+    },
+    "x4": {
+      "constraints": {
+        "screenWidth": 480,
+        "screenHeight": 800,
+        "frontButtons": 0,
+        "sideButtons": "up-down"
+      }
+    }
+  },
+  "extensions": {
+    "crossink": {
+      "dashboard": {
+        "enabled": true,
+        "brand": "CrossLink",
+        "topTabs": [
+          "reading",
+          "library",
+          "network",
+          "settings"
+        ],
+        "currentReadingCard": true,
+        "statsCards": [
+          {
+            "id": "last-read",
+            "label": "Last read",
+            "format": "minutes"
+          },
+          {
+            "id": "total-read",
+            "label": "Total read",
+            "format": "hours"
+          },
+          {
+            "id": "completed",
+            "label": "Completed",
+            "format": "books"
+          }
+        ]
+      }
+    }
+  }
+}

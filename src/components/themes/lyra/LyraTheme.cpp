@@ -14,6 +14,7 @@
 
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/icons/FreeInkThemeIconRegistry.h"
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
@@ -174,10 +175,22 @@ void drawButtonHintShape(const GfxRenderer& renderer, ButtonHintShape shape, int
 }  // namespace
 
 bool LyraTheme::hasThemeIcon(UIIcon icon) const {
+  if (freeInkIcons_ != nullptr && freeInkIcons_->find(icon) != freeInkIcons_->end()) return true;
   return assetRoot_ != nullptr && icons_ != nullptr && icons_->find(icon) != icons_->end();
 }
 
 bool LyraTheme::drawThemeIcon(const GfxRenderer& renderer, UIIcon icon, int x, int y, int size) const {
+  if (freeInkIcons_ != nullptr) {
+    const auto freeInkIt = freeInkIcons_->find(icon);
+    if (freeInkIt != freeInkIcons_->end() && !freeInkIt->second.empty()) {
+      const freeink::Icon* freeInkIcon = findFreeInkThemeIcon(freeInkIt->second.c_str(), size);
+      if (freeInkIcon != nullptr) {
+        renderer.drawFreeInkIcon(*freeInkIcon, x, y, size, size);
+        return true;
+      }
+    }
+  }
+
   if (assetRoot_ == nullptr || icons_ == nullptr || !isBmpIconSize(size)) return false;
   const auto it = icons_->find(icon);
   if (it == icons_->end() || it->second.empty()) return false;

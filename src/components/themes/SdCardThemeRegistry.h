@@ -13,9 +13,6 @@ struct SdThemeDeviceConstraints {
   std::string sideButtons;
 };
 
-using ThemeFreeInkComponentList = std::vector<std::string>;
-using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
-
 struct SdCardThemeInfo {
   std::string id;
   std::string name;

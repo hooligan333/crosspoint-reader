@@ -346,7 +346,16 @@ Use `layout: "shapes"` for icon-only arrows/circle/square hints.
 
 ## Icons
 
-Icons are optional. If both `homeMenu.showIcons` and `list.showIcons` are false, omit `assets.icons` and the icon files to reduce download size and heap use.
+Icons are optional. If both `homeMenu.showIcons` and `list.showIcons` are false, omit icon fields and files to reduce download size and heap use.
+
+New themes should prefer the FreeInk SDK icon flow:
+
+1. Declare semantic icon keys in `assets.freeInkIcons`, mapped to Lucide icon names.
+2. Regenerate the firmware FreeInk icon registry for hosted themes.
+3. Generate SD-card BMP fallbacks for theme packages.
+4. Regenerate `sd-themes/themes.json`.
+
+CrossPoint renders `assets.freeInkIcons` first when the named icon was compiled into the firmware registry. If no compiled FreeInk icon is available, it falls back to `assets.icons` BMP files on the SD card, then to legacy built-in icons.
 
 Supported icon keys:
 
@@ -363,7 +372,24 @@ Supported icon keys:
 - `hotspot`
 - `bookmark`
 
-Generate firmware-matching 1-bit BMP icons:
+Generate firmware FreeInk icons and SD-card BMP fallbacks from `assets.freeInkIcons`:
+
+```bash
+python3 scripts/generate-theme-icons.py \
+  --themes sd-themes \
+  --freeink-sdk freeink-sdk \
+  --firmware-out src/components/icons/freeink_theme_icons.generated.h \
+  --registry-out src/components/icons/FreeInkThemeIconRegistry.cpp
+
+python3 scripts/generate-theme-icons.py \
+  --themes sd-themes \
+  --from-freeink-sdk \
+  --freeink-sdk freeink-sdk
+```
+
+The first command uses the FreeInk SDK generator to compile the Lucide names used by hosted SD themes into firmware `freeink::Icon` assets. The second command writes matching BMP files into each theme folder and updates `assets.icons` so manually installed or older firmware builds still have SD-card icon assets.
+
+Legacy themes can still generate firmware-matching 1-bit BMP icons from the old built-in CrossPoint headers:
 
 ```bash
 python3 scripts/generate-theme-icons.py \
@@ -406,7 +432,7 @@ Declare the FreeInkUI components a theme is designed for:
 }
 ```
 
-Declare Lucide icon names with `assets.freeInkIcons`. Keys use the same semantic icon names as `assets.icons`; values are Lucide icon names to generate with `freeink-sdk/libs/assets/Icons/tools/gen_icons.py`:
+Declare Lucide icon names with `assets.freeInkIcons`. Keys use the same semantic icon names as `assets.icons`; values are Lucide icon names from `freeink-sdk/libs/assets/Icons/lucide/icons`:
 
 ```json
 "assets": {
@@ -439,7 +465,7 @@ Device overrides can replace either field:
 }
 ```
 
-CrossPoint validates these names and exposes them through `UITheme::getFreeInkComponents()` and `UITheme::getFreeInkIcons()`. It does not generate icons at runtime; firmware or apps that need compiled FreeInk icons should generate a small header from the Lucide names they use.
+CrossPoint validates these names, exposes them through `UITheme::getFreeInkComponents()` and `UITheme::getFreeInkIcons()`, and renders them through the generated FreeInk theme icon registry when available. It does not rasterize SVGs at runtime; generation happens before firmware build and before packaging SD themes.
 
 ## CrossInk and extension fields
 

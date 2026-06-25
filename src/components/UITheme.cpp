@@ -91,8 +91,9 @@ void UITheme::reload() {
     const ThemeButtonHintsSpec* buttonHints = currentSdButtonHints.enabled ? &currentSdButtonHints : nullptr;
     const ThemeTabBarSpec* tabBar = currentSdTabBar.enabled ? &currentSdTabBar : nullptr;
     const ThemeHeaderSpec* header = currentSdHeader.enabled ? &currentSdHeader : nullptr;
-    currentTheme = std::make_unique<LyraTheme>(&currentSdMetrics, homeRecents, buttonMenu, list, buttonHints, tabBar,
-                                               header, currentSdThemePath.c_str(), &currentSdIcons);
+    currentTheme =
+        std::make_unique<LyraTheme>(&currentSdMetrics, homeRecents, buttonMenu, list, buttonHints, tabBar, header,
+                                    currentSdThemePath.c_str(), &currentSdIcons, &currentSdFreeInkIcons);
     currentMetrics = &currentSdMetrics;
     return;
   }

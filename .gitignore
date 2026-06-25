@@ -7,6 +7,7 @@ lib/I18n/I18nKeys.h
 lib/I18n/I18nStrings.h
 lib/I18n/I18nStrings.cpp
 *.generated.h
+!src/components/icons/freeink_theme_icons.generated.h
 .vs
 build
 **/__pycache__/

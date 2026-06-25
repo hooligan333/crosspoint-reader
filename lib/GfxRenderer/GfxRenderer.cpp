@@ -3,6 +3,7 @@
 #include <BidiUtils.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
+#include <Icon.h>
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
@@ -897,6 +898,30 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
       if (background) continue;
 
       drawPixel(x + height - 1 - sourceY, y + sourceX, true);
+    }
+  }
+}
+
+void GfxRenderer::drawFreeInkIcon(const freeink::Icon& icon, const int x, const int y, const int maxWidth,
+                                  const int maxHeight) const {
+  if (icon.bits == nullptr || icon.w == 0 || icon.h == 0 || maxWidth <= 0 || maxHeight <= 0) return;
+
+  const float scaleX = static_cast<float>(maxWidth) / static_cast<float>(icon.w);
+  const float scaleY = static_cast<float>(maxHeight) / static_cast<float>(icon.h);
+  const float scale = std::min(scaleX, scaleY);
+  const int drawnWidth = std::max(1, static_cast<int>(std::floor(icon.w * scale)));
+  const int drawnHeight = std::max(1, static_cast<int>(std::floor(icon.h * scale)));
+  const int x0 = x + (maxWidth - drawnWidth) / 2;
+  const int y0 = y + (maxHeight - drawnHeight) / 2;
+  const int bytesPerRow = (icon.w + 7) / 8;
+
+  for (int dy = 0; dy < drawnHeight; ++dy) {
+    const int sy = static_cast<int>((static_cast<int32_t>(dy) * icon.h) / drawnHeight);
+    for (int dx = 0; dx < drawnWidth; ++dx) {
+      const int sx = static_cast<int>((static_cast<int32_t>(dx) * icon.w) / drawnWidth);
+      const uint8_t rowByte = icon.bits[sy * bytesPerRow + sx / 8];
+      const bool background = (rowByte >> (7 - (sx % 8))) & 0x01;
+      if (!background) drawPixel(x0 + dx, y0 + dy, true);
     }
   }
 }

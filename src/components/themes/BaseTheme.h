@@ -240,6 +240,8 @@ struct ThemeHeaderSpec {
 enum UIIcon { None = 0, Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Bookmark };
 
 using ThemeIconMap = std::map<UIIcon, std::string>;
+using ThemeFreeInkIconMap = std::map<UIIcon, std::string>;
+using ThemeFreeInkComponentList = std::vector<std::string>;
 
 enum class KeyboardKeyType { Normal, Shift, Mode, Space, Del, Ok, Disabled };
 
