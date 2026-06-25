@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdCardFontRegistry.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <cctype>
@@ -93,6 +94,24 @@ void UITheme::releaseSdThemeAssetMemory() {
   // Keep active SD theme backing storage intact; currentTheme may hold pointers
   // into it. This only releases discovered theme metadata that can be rebuilt.
   themeRegistry.clear();
+}
+
+void UITheme::releaseSdThemeForNetwork(GfxRenderer& renderer) {
+  const size_t freeBefore = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+
+  // Free the SD theme's loaded glyph data and revert to the configured built-in
+  // theme. setTheme() also resets the font ids and clears the registry, so the
+  // current theme no longer points into freed SD assets. WiFi/lwip init needs a
+  // large contiguous block; reclaiming the theme fonts gives it the best chance.
+  // Reversible: callers restore via reload() + prepareSdAssets() on return.
+  themeFontManager.unloadAll(renderer);
+  setTheme(static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme));
+
+  const size_t freeAfter = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  LOG_INF("UI", "Released SD theme for network: free %u->%u, largest block %u->%u", (unsigned)freeBefore,
+          (unsigned)freeAfter, (unsigned)largestBefore, (unsigned)largestAfter);
 }
 
 void UITheme::prepareSdAssets(GfxRenderer& renderer) {

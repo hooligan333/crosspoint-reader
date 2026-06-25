@@ -330,13 +330,14 @@ freeink::ui::StyleSet cardStyles(uint8_t radius = 4) {
 
 freeink::ui::StyleSet unframedStyles() {
   freeink::ui::StyleSet styles;
-  styles.normal.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
+  styles.explicitlySet = true;
+  styles.normal.background = freeink::ui::Paint{};
   styles.normal.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.normal.border = freeink::ui::Paint{};
-  styles.selected.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
+  styles.selected.background = freeink::ui::Paint{};
   styles.selected.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.selected.border = freeink::ui::Paint{};
-  styles.focused.background = freeink::ui::Paint::solid(freeink::ui::Color::Transparent);
+  styles.focused.background = freeink::ui::Paint{};
   styles.focused.foreground = freeink::ui::Paint::solid(freeink::ui::Color::Black);
   styles.focused.border = freeink::ui::Paint{};
   styles.active = styles.selected;
@@ -536,8 +537,9 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
             static_cast<int16_t>(item.coverHeight > 0 ? item.coverHeight : rect.height - item.padding * 2)};
         props.padding = {static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding),
                          static_cast<int16_t>(item.padding), static_cast<int16_t>(item.padding)};
-        props.progress = 0;
-        props.progressMax = item.showProgress ? 100 : 0;
+        const int progressPercent = bookIndex >= 0 ? recentBooks[bookIndex].progressPercent : -1;
+        props.progress = progressPercent >= 0 ? progressPercent : 0;
+        props.progressMax = item.showProgress && progressPercent >= 0 ? 100 : 0;
         freeink::ui::bookCard(frame, rect, props);
         const int coverH = props.coverSize.height;
         const int coverW = props.coverSize.width;
@@ -632,7 +634,8 @@ bool HomeActivity::renderFreeInkHomeLayout(const ThemeHomeLayoutSpec& layout) {
           props.valueText.font = freeink::ui::GfxRendererTarget::FONT_TITLE;
           props.valueText.bold = true;
           props.captionText = props.labelText;
-          props.styles = cardStyles(static_cast<uint8_t>(std::max(0, item.radius)));
+          props.styles =
+              item.outline || item.fill ? cardStyles(static_cast<uint8_t>(std::max(0, item.radius))) : unframedStyles();
           freeink::ui::metricCard(
               frame,
               {static_cast<int16_t>(rect.x + i * (cardW + gap)), rect.y, static_cast<int16_t>(cardW), rect.height},

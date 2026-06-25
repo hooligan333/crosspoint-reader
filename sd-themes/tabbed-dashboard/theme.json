@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": 4,
+  "version": 5,
   "id": "tabbed-dashboard",
   "name": "Tabbed Dashboard",
   "description": "A compact dashboard-style theme inspired by tabbed e-reader home screens, with dense cover rows and room for reading-stat cards in compatible apps.",
@@ -330,7 +330,9 @@
             ],
             "gap": 8,
             "font": "small",
-            "radius": 4
+            "radius": 4,
+            "outline": true,
+            "fill": false
           }
         ]
       }

@@ -365,6 +365,7 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
     book.title = obj["title"] | std::string("");
     book.author = obj["author"] | std::string("");
     book.coverBmpPath = obj["coverBmpPath"] | std::string("");
+    store.refreshProgress(book);
     store.recentBooks.push_back(book);
   }
 

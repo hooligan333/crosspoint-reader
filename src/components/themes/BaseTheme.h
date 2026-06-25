@@ -203,7 +203,7 @@ struct ThemeButtonHintsSpec {
   int smallButtonHeight = 15;
   int cornerRadius = 6;
   bool fill = true;
-  bool outline = true;
+  bool outline = false;
   bool drawEmpty = true;
   ThemeButtonHintsStyle style = ThemeButtonHintsStyle::Buttons;
   int sidePadding = 20;
@@ -263,7 +263,7 @@ struct ThemeHomeElementSpec {
   int radius = 0;
   int lineWidth = 1;
   bool fill = false;
-  bool outline = true;
+  bool outline = false;
   int fontId = 10;
   bool bold = false;
   std::string text;

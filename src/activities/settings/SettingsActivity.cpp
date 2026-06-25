@@ -254,6 +254,14 @@ void SettingsActivity::toggleCurrentSetting() {
     }
   } else if (setting.type == SettingType::ACTION) {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    // For WiFi/network actions we release the SD theme before entering (to free
+    // a contiguous heap block) so the result handler must restore it.
+    auto networkResultHandler = [this](const ActivityResult&) {
+      SETTINGS.saveToFile();
+      UITheme::getInstance().reload();
+      UITheme::getInstance().prepareSdAssets(renderer);
+      rebuildSettingsLists();
+    };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -269,20 +277,28 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<OpdsServerListActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::Network:
-        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
+        releaseSettingsLists();
+        UITheme::getInstance().releaseSdThemeForNetwork(renderer);
+        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
+                               networkResultHandler);
         break;
       case SettingAction::ClearCache:
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::CheckForUpdates:
-        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
+        releaseSettingsLists();
+        UITheme::getInstance().releaseSdThemeForNetwork(renderer);
+        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), networkResultHandler);
         break;
       case SettingAction::SdFirmwareUpdate:
-        startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
+        releaseSettingsLists();
+        UITheme::getInstance().releaseSdThemeForNetwork(renderer);
+        startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput),
+                               networkResultHandler);
         break;
       case SettingAction::DownloadFonts:
         releaseSettingsLists();
-        UITheme::getInstance().releaseSdThemeAssetMemory();
+        UITheme::getInstance().releaseSdThemeForNetwork(renderer);
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
@@ -293,7 +309,7 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::DownloadThemes:
         releaseSettingsLists();
-        UITheme::getInstance().releaseSdThemeAssetMemory();
+        UITheme::getInstance().releaseSdThemeForNetwork(renderer);
         startActivityForResult(std::make_unique<ThemeDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();

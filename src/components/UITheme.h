@@ -31,6 +31,11 @@ class UITheme {
   SdCardThemeRegistry& registry() { return themeRegistry; }
   void refreshRegistry();
   void releaseSdThemeAssetMemory();
+  // Aggressive variant for WiFi/network entry points: unloads the SD theme's
+  // glyph data and reverts to the built-in theme so the session gets the
+  // largest possible contiguous heap block. Reversible via reload() +
+  // prepareSdAssets(); callers MUST restore on return.
+  void releaseSdThemeForNetwork(GfxRenderer& renderer);
   void prepareSdAssets(GfxRenderer& renderer);
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);

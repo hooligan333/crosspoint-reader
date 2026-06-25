@@ -6,9 +6,12 @@
 #include <JsonSettingsIO.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <Txt.h>
 #include <Xtc.h>
 
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <iterator>
 
 namespace {
@@ -17,6 +20,141 @@ constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
 constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
 constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
 constexpr int MAX_RECENT_BOOKS = 10;
+constexpr uint32_t TXT_CACHE_MAGIC = 0x54585449;  // "TXTI"
+constexpr uint8_t TXT_CACHE_VERSION = 3;
+
+int normalizeProgress(int progressPercent) {
+  if (progressPercent < 0) return -1;
+  if (progressPercent > 100) return 100;
+  return progressPercent;
+}
+
+int readEpubProgressPercent(const std::string& path) {
+  Epub epub(path, "/.crosspoint");
+  HalFile f;
+  if (!Storage.openFileForRead("RBS", epub.getCachePath() + "/progress.bin", f)) {
+    return -1;
+  }
+
+  uint8_t data[6];
+  const int dataSize = f.read(data, 6);
+  f.close();
+  if (dataSize != 6) {
+    return -1;
+  }
+
+  const int spineIndex = data[0] + (data[1] << 8);
+  const int currentPage = data[2] + (data[3] << 8);
+  const int pageCount = data[4] + (data[5] << 8);
+  if (pageCount <= 0 || currentPage == UINT16_MAX) {
+    return -1;
+  }
+
+  if (!epub.load(false, true) || epub.getBookSize() == 0) {
+    return -1;
+  }
+
+  const float chapterProgress = static_cast<float>(currentPage) / static_cast<float>(pageCount);
+  return normalizeProgress(static_cast<int>(epub.calculateProgress(spineIndex, chapterProgress) * 100.0f + 0.5f));
+}
+
+int readXtcProgressPercent(const std::string& path) {
+  Xtc xtc(path, "/.crosspoint");
+  HalFile f;
+  if (!Storage.openFileForRead("RBS", xtc.getCachePath() + "/progress.bin", f)) {
+    return -1;
+  }
+
+  uint8_t data[4];
+  const int dataSize = f.read(data, 4);
+  f.close();
+  if (dataSize != 4 || !xtc.load()) {
+    return -1;
+  }
+
+  const uint32_t pageCount = xtc.getPageCount();
+  if (pageCount == 0) {
+    return -1;
+  }
+
+  uint32_t currentPage = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+  if (currentPage >= pageCount) {
+    currentPage = pageCount - 1;
+  }
+  return normalizeProgress(xtc.calculateProgress(currentPage));
+}
+
+int readTxtCachedPageCount(const std::string& cachePath) {
+  HalFile f;
+  if (!Storage.openFileForRead("RBS", cachePath + "/index.bin", f)) {
+    return -1;
+  }
+
+  uint32_t magic;
+  uint8_t version;
+  uint32_t ignoredFileSize;
+  int32_t ignoredWidth;
+  int32_t ignoredLines;
+  int32_t ignoredFont;
+  int32_t ignoredMargin;
+  uint8_t ignoredAlignment;
+  uint32_t numPages;
+  serialization::readPod(f, magic);
+  serialization::readPod(f, version);
+  serialization::readPod(f, ignoredFileSize);
+  serialization::readPod(f, ignoredWidth);
+  serialization::readPod(f, ignoredLines);
+  serialization::readPod(f, ignoredFont);
+  serialization::readPod(f, ignoredMargin);
+  serialization::readPod(f, ignoredAlignment);
+  serialization::readPod(f, numPages);
+  f.close();
+
+  if (magic != TXT_CACHE_MAGIC || version != TXT_CACHE_VERSION || numPages == 0 || numPages > INT32_MAX) {
+    return -1;
+  }
+  return static_cast<int>(numPages);
+}
+
+int readTxtProgressPercent(const std::string& path) {
+  Txt txt(path, "/.crosspoint");
+  HalFile f;
+  if (!Storage.openFileForRead("RBS", txt.getCachePath() + "/progress.bin", f)) {
+    return -1;
+  }
+
+  uint8_t data[4];
+  const int dataSize = f.read(data, 4);
+  f.close();
+  if (dataSize != 4) {
+    return -1;
+  }
+
+  const int totalPages = readTxtCachedPageCount(txt.getCachePath());
+  if (totalPages <= 0) {
+    return -1;
+  }
+
+  int currentPage = data[0] + (data[1] << 8);
+  if (currentPage < 0) currentPage = 0;
+  if (currentPage >= totalPages) currentPage = totalPages - 1;
+  return normalizeProgress(static_cast<int>((currentPage + 1) * 100.0f / totalPages + 0.5f));
+}
+
+int readProgressPercent(const std::string& path) {
+  const size_t lastSlash = path.find_last_of('/');
+  const std::string fileName = lastSlash == std::string::npos ? path : path.substr(lastSlash + 1);
+  if (FsHelpers::hasEpubExtension(fileName)) {
+    return readEpubProgressPercent(path);
+  }
+  if (FsHelpers::hasXtcExtension(fileName)) {
+    return readXtcProgressPercent(path);
+  }
+  if (FsHelpers::hasTxtExtension(fileName) || FsHelpers::hasMarkdownExtension(fileName)) {
+    return readTxtProgressPercent(path);
+  }
+  return -1;
+}
 }  // namespace
 
 RecentBooksStore RecentBooksStore::instance;
@@ -34,7 +172,9 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  RecentBook book{path, title, author, coverBmpPath};
+  refreshProgress(book);
+  recentBooks.insert(recentBooks.begin(), book);
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -53,9 +193,12 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
     book.title = title;
     book.author = author;
     book.coverBmpPath = coverBmpPath;
+    refreshProgress(book);
     saveToFile();
   }
 }
+
+void RecentBooksStore::refreshProgress(RecentBook& book) const { book.progressPercent = readProgressPercent(book.path); }
 
 bool RecentBooksStore::removeByPath(const std::string& path) {
   auto it =
@@ -112,17 +255,25 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
     Epub epub(path, "/.crosspoint");
     epub.load(false, true);
-    return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
+    RecentBook book{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
+    refreshProgress(book);
+    return book;
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
     // Handle XTC file
     Xtc xtc(path, "/.crosspoint");
     if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      RecentBook book{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+      refreshProgress(book);
+      return book;
     }
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
-    return RecentBook{path, lastBookFileName, "", ""};
+    RecentBook book{path, lastBookFileName, "", ""};
+    refreshProgress(book);
+    return book;
   }
-  return RecentBook{path, "", "", ""};
+  RecentBook book{path, "", "", ""};
+  refreshProgress(book);
+  return book;
 }
 
 bool RecentBooksStore::loadFromFile() {
@@ -172,7 +323,9 @@ bool RecentBooksStore::loadFromBinaryFile() {
         std::string title, author;
         serialization::readString(inputFile, title);
         serialization::readString(inputFile, author);
-        recentBooks.push_back({path, title, author, ""});
+        RecentBook book{path, title, author, ""};
+        refreshProgress(book);
+        recentBooks.push_back(book);
       } else {
         recentBooks.push_back(book);
       }
@@ -198,7 +351,9 @@ bool RecentBooksStore::loadFromBinaryFile() {
         continue;
       }
 
-      recentBooks.push_back({path, title, author, coverBmpPath});
+      RecentBook book{path, title, author, coverBmpPath};
+      refreshProgress(book);
+      recentBooks.push_back(book);
     }
 
     if (omitted > 0) {
