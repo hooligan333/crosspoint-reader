@@ -57,6 +57,9 @@ class Epub {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
+  // True if a previously generated thumb at this path (or the empty "no usable cover"
+  // marker) can be reused for the requested height; false means (re)generate it
+  static bool hasUsableThumbBmp(const std::string& thumbPath, int height);
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
