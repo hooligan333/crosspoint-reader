@@ -120,8 +120,13 @@ void HomeActivity::resolveGridCoverPaths() {
 }
 
 void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoading, Rect& popupRect) {
-  if (!book.coverBmpPath.empty() && Storage.exists(UITheme::getCoverThumbPath(book.coverBmpPath, height).c_str()))
-    return;
+  if (!book.coverBmpPath.empty()) {
+    const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, height);
+    // Same epub header check as the list path below (truncated/wrong-size thumbs regenerate)
+    if (FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(coverPath, height)
+                                                : Storage.exists(coverPath.c_str()))
+      return;
+  }
   // Only one parser lives at a time; EPUB/XTC objects exceed the stack budget.
   if (FsHelpers::hasEpubExtension(book.path)) {
     auto epub = makeUniqueNoThrow<Epub>(book.path, "/.crosspoint");
@@ -130,7 +135,7 @@ void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoad
       return;
     }
     book.coverBmpPath = epub->getThumbBmpPath();
-    if (Storage.exists(epub->getThumbBmpPath(height).c_str())) return;
+    if (Epub::hasUsableThumbBmp(epub->getThumbBmpPath(height), height)) return;
     if (!showingLoading) {
       showingLoading = true;
       popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
@@ -177,7 +182,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     }
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, thumbHeight);
-      if (!Storage.exists(coverPath.c_str())) {
+      // Epub thumbs get a header check on top of existence, so a truncated or
+      // wrong-size cached file is regenerated instead of being drawn forever
+      const bool thumbUsable = FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(coverPath, thumbHeight)
+                                                                      : Storage.exists(coverPath.c_str());
+      if (!thumbUsable) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
