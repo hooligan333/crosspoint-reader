@@ -62,7 +62,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   for (RecentBook& book : recentBooks) {
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
+      // Epub thumbs get a header check on top of existence, so a truncated or
+      // wrong-size cached file is regenerated instead of being drawn forever
+      const bool thumbUsable = FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(coverPath, coverHeight)
+                                                                      : Storage.exists(coverPath.c_str());
+      if (!thumbUsable) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
