@@ -79,6 +79,56 @@ class FontDecompressor {
   uint8_t* hotGlyphBuf = nullptr;
   uint32_t hotGlyphBufCapacity = 0;
 
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+  // Session-persistent cache of decompressed glyph groups (byte-aligned form),
+  // PSRAM-ONLY. On PSRAM boards (X4 Pro) this makes group decompression a
+  // once-per-session cost instead of once-per-page: prewarmCache() and the
+  // getBitmap() fallback read the resident copy instead of re-inflating, while
+  // the per-page page slots / hot-group machinery (and clearCache()) behave
+  // exactly as before — only the DEFLATE step disappears after first touch.
+  // Builtin EpdFontData lives in flash for the app's lifetime, so entries are
+  // keyed by (fontData, groupIndex) and never invalidated; the budget bounds
+  // total residency (all builtin faces ≈ 3 MB decompressed). On budget
+  // exhaustion, PSRAM allocation failure, or absent PSRAM, getResidentGroup()
+  // returns nullptr and callers take the existing temp-buffer/hot-group path —
+  // deliberately NO internal-heap fallback, so the cache can never capture
+  // session-lifetime internal RAM the render path needs.
+  //
+  // Interaction with the heap-critical release path
+  // (FontCacheManager::releaseSdFontCaches(), used by #3035's WiFi + web-server
+  // start and #3093's transparent sleep-overlay decode): resident groups are
+  // EXEMPT. That path calls FontDecompressor::clearCache(), which still frees the
+  // page slots and hot group — every internal-heap byte this class held before the
+  // flag existed — so the protection it provides is unchanged with the flag on.
+  // What it is protecting is the INTERNAL heap (its own instrumentation reads
+  // ESP.getFreeHeap(), and the sleep decode's scanline/region buffers are what
+  // must fit), and resident payloads are PSRAM-only, so releasing them would hand
+  // back nothing where the pressure actually is. It would, however, throw away the
+  // entire once-per-session inflate saving on every sleep entry — the exact
+  // per-page DEFLATE cost this flag removes. The only internal-heap residency the
+  // flag adds is the ResidentGroup index array below (12 B/entry, sub-KB at real
+  // entry counts), which is the cache's identity and cannot be dropped without
+  // dropping the cache. Payload residency is bounded instead by
+  // RESIDENT_GROUP_BUDGET_BYTES, leaving >= 4 MB of an 8 MB part free for the
+  // decode paths that may spill to PSRAM under SPIRAM_USE_MALLOC.
+  struct ResidentGroup {  // 12 bytes on the 32-bit target
+    const EpdFontData* fontData;
+    uint16_t groupIndex;
+    uint8_t* data;  // owned; PSRAM (heap_caps), freed in freeResidentGroups()
+  };
+  static constexpr uint32_t RESIDENT_GROUP_BUDGET_BYTES = 4u * 1024u * 1024u;
+  static constexpr uint32_t RESIDENT_GROUP_MAX_ENTRIES = 4096;  // far above any real font set
+  ResidentGroup* residentGroups = nullptr;                      // grow-by-realloc array (internal heap; a few KB)
+  uint32_t residentGroupCount = 0;
+  uint32_t residentGroupCapacity = 0;
+  uint32_t residentGroupBytes = 0;
+  bool residentBudgetWarned = false;
+  // Returns the decompressed byte-aligned group, caching it on first request;
+  // nullptr when over budget / allocation failed / decompression failed.
+  const uint8_t* getResidentGroup(const EpdFontData* fontData, uint16_t groupIndex);
+  void freeResidentGroups();
+#endif
+
   // Grow (never shrink) an owned buffer to at least `needed` bytes; false on OOM, buffer freed.
   static bool ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed);
 
