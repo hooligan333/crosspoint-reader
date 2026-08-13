@@ -290,7 +290,16 @@ class SdCardFont {
   // Bounded to ADVANCE_CACHE_LIMIT entries; persists across layout passes
   // (across calls to clearCache()) so repeated indexing of the same font
   // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
-  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
+  // 768 bounds the always-resident heap (~6 KB/style at the 8-byte entry) on
+  // the ~380 KB C3, but starves CJK layout: a CJK section cycles thousands of
+  // unique codepoints, so once the table caps out every further advance lookup
+  // falls through to per-glyph SD reads. PSRAM boards can raise it via
+  // -DCROSSPOINT_SDFONT_ADVANCE_LIMIT=8192 (64 KB/style worst case, transiently
+  // ~2x during a merge; the table only grows as codepoints are actually seen).
+#ifndef CROSSPOINT_SDFONT_ADVANCE_LIMIT
+#define CROSSPOINT_SDFONT_ADVANCE_LIMIT 768
+#endif
+  static constexpr uint32_t ADVANCE_CACHE_LIMIT = CROSSPOINT_SDFONT_ADVANCE_LIMIT;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
