@@ -400,7 +400,7 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
 }
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                                   bool oneBit, bool crop) {
+                                                   bool oneBit, bool crop, bool boundOutputToTarget) {
   LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   // Verify PNG signature
@@ -601,17 +601,39 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
             targetHeight);
   }
 
-  // Write BMP header
+  // Crop mode scales to fill the target box (max of the two fit ratios), which overflows
+  // one axis whenever the source aspect doesn't match the box. For the bounded thumbnail
+  // APIs, emit only the centered targetWidth×targetHeight window; previously the overflow
+  // was written into the BMP, so consumers drawing the file 1:1 (home-screen thumbs)
+  // showed a corner of an oversized image instead of the intended crop. Full-screen
+  // conversions keep the oversized output — the sleep screen crops/letterboxes at draw
+  // time based on the user's cover mode setting. (Same logic as JpegToBmpConverter.)
+  int emitWidth = outWidth;
+  int emitHeight = outHeight;
+  int cropOffsetX = 0;
+  int cropOffsetY = 0;
+  if (boundOutputToTarget && targetWidth > 0 && targetHeight > 0) {
+    if (outWidth > targetWidth) {
+      emitWidth = targetWidth;
+      cropOffsetX = (outWidth - targetWidth) / 2;
+    }
+    if (outHeight > targetHeight) {
+      emitHeight = targetHeight;
+      cropOffsetY = (outHeight - targetHeight) / 2;
+    }
+  }
+
+  // Write BMP header with emitted dimensions
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth + 3) / 4 * 4;
+    writeBmpHeader8bit(bmpOut, emitWidth, emitHeight);
+    bytesPerRow = (emitWidth + 3) / 4 * 4;
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth + 31) / 32 * 4;
+    writeBmpHeader1bit(bmpOut, emitWidth, emitHeight);
+    bytesPerRow = (emitWidth + 31) / 32 * 4;
   } else {
-    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
+    writeBmpHeader2bit(bmpOut, emitWidth, emitHeight);
+    bytesPerRow = (emitWidth * 2 + 31) / 32 * 4;
   }
 
   // Allocate BMP row buffer
@@ -629,12 +651,12 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitDitherer = new Atkinson1BitDitherer(emitWidth);
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonDitherer = new AtkinsonDitherer(emitWidth);
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsDitherer = new FloydSteinbergDitherer(emitWidth);
     }
   }
 
@@ -682,44 +704,49 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     convertScanlineToGray(ctx, grayRow);
 
     if (!needsScaling) {
-      // Direct output (no scaling)
-      memset(rowBuffer, 0, bytesPerRow);
+      // Direct output (no scaling) — emit only rows/columns inside the crop window
+      // (skipped rows still fall through to the row-buffer swap so defiltering stays correct)
+      const int outY = static_cast<int>(y);
+      if (outY >= cropOffsetY && outY < cropOffsetY + emitHeight) {
+        memset(rowBuffer, 0, bytesPerRow);
 
-      if (USE_8BIT_OUTPUT && !oneBit) {
-        for (int x = 0; x < outWidth; x++) {
-          rowBuffer[x] = adjustPixel(grayRow[x]);
-        }
-      } else if (oneBit) {
-        for (int x = 0; x < outWidth; x++) {
-          const uint8_t bit =
-              atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(grayRow[x], x) : quantize1bit(grayRow[x], x, y);
-          const int byteIndex = x / 8;
-          const int bitOffset = 7 - (x % 8);
-          rowBuffer[byteIndex] |= (bit << bitOffset);
-        }
-        if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
-      } else {
-        for (int x = 0; x < outWidth; x++) {
-          const uint8_t gray = adjustPixel(grayRow[x]);
-          uint8_t twoBit;
-          if (atkinsonDitherer) {
-            twoBit = atkinsonDitherer->processPixel(gray, x);
-          } else if (fsDitherer) {
-            twoBit = fsDitherer->processPixel(gray, x);
-          } else {
-            twoBit = quantize(gray, x, y);
+        if (USE_8BIT_OUTPUT && !oneBit) {
+          for (int x = 0; x < emitWidth; x++) {
+            rowBuffer[x] = adjustPixel(grayRow[x + cropOffsetX]);
           }
-          const int byteIndex = (x * 2) / 8;
-          const int bitOffset = 6 - ((x * 2) % 8);
-          rowBuffer[byteIndex] |= (twoBit << bitOffset);
+        } else if (oneBit) {
+          for (int x = 0; x < emitWidth; x++) {
+            const uint8_t gray = grayRow[x + cropOffsetX];
+            const uint8_t bit =
+                atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(gray, x) : quantize1bit(gray, x, y);
+            const int byteIndex = x / 8;
+            const int bitOffset = 7 - (x % 8);
+            rowBuffer[byteIndex] |= (bit << bitOffset);
+          }
+          if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
+        } else {
+          for (int x = 0; x < emitWidth; x++) {
+            const uint8_t gray = adjustPixel(grayRow[x + cropOffsetX]);
+            uint8_t twoBit;
+            if (atkinsonDitherer) {
+              twoBit = atkinsonDitherer->processPixel(gray, x);
+            } else if (fsDitherer) {
+              twoBit = fsDitherer->processPixel(gray, x);
+            } else {
+              twoBit = quantize(gray, x, y);
+            }
+            const int byteIndex = (x * 2) / 8;
+            const int bitOffset = 6 - ((x * 2) % 8);
+            rowBuffer[byteIndex] |= (twoBit << bitOffset);
+          }
+          if (atkinsonDitherer)
+            atkinsonDitherer->nextRow();
+          else if (fsDitherer)
+            fsDitherer->nextRow();
         }
-        if (atkinsonDitherer)
-          atkinsonDitherer->nextRow();
-        else if (fsDitherer)
-          fsDitherer->nextRow();
+        bmpOut.write(rowBuffer, bytesPerRow);
+        yieldDuringDecode(rowsSinceYield);
       }
-      bmpOut.write(rowBuffer, bytesPerRow);
-      yieldDuringDecode(rowsSinceYield);
     } else {
       // Area-averaging scaling (same as JpegToBmpConverter)
       for (int outX = 0; outX < outWidth; outX++) {
@@ -746,47 +773,53 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
       const uint32_t srcY_fp = static_cast<uint32_t>(y + 1) << 16;
 
       // Output all rows whose boundaries we've crossed (handles both up and downscaling)
-      // For upscaling, one source row may produce multiple output rows
+      // For upscaling, one source row may produce multiple output rows.
+      // Rows outside the centered crop window are consumed without being emitted.
       while (srcY_fp >= nextOutY_srcStart && currentOutY < outHeight) {
-        memset(rowBuffer, 0, bytesPerRow);
+        if (currentOutY >= cropOffsetY && currentOutY < cropOffsetY + emitHeight) {
+          memset(rowBuffer, 0, bytesPerRow);
 
-        if (USE_8BIT_OUTPUT && !oneBit) {
-          for (int x = 0; x < outWidth; x++) {
-            const uint8_t gray = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
-            rowBuffer[x] = adjustPixel(gray);
-          }
-        } else if (oneBit) {
-          for (int x = 0; x < outWidth; x++) {
-            const uint8_t gray = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
-            const uint8_t bit =
-                atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(gray, x) : quantize1bit(gray, x, currentOutY);
-            const int byteIndex = x / 8;
-            const int bitOffset = 7 - (x % 8);
-            rowBuffer[byteIndex] |= (bit << bitOffset);
-          }
-          if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
-        } else {
-          for (int x = 0; x < outWidth; x++) {
-            const uint8_t gray = adjustPixel((rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0);
-            uint8_t twoBit;
-            if (atkinsonDitherer) {
-              twoBit = atkinsonDitherer->processPixel(gray, x);
-            } else if (fsDitherer) {
-              twoBit = fsDitherer->processPixel(gray, x);
-            } else {
-              twoBit = quantize(gray, x, currentOutY);
+          if (USE_8BIT_OUTPUT && !oneBit) {
+            for (int x = 0; x < emitWidth; x++) {
+              const int srcX = x + cropOffsetX;
+              const uint8_t gray = (rowCount[srcX] > 0) ? (rowAccum[srcX] / rowCount[srcX]) : 0;
+              rowBuffer[x] = adjustPixel(gray);
             }
-            const int byteIndex = (x * 2) / 8;
-            const int bitOffset = 6 - ((x * 2) % 8);
-            rowBuffer[byteIndex] |= (twoBit << bitOffset);
+          } else if (oneBit) {
+            for (int x = 0; x < emitWidth; x++) {
+              const int srcX = x + cropOffsetX;
+              const uint8_t gray = (rowCount[srcX] > 0) ? (rowAccum[srcX] / rowCount[srcX]) : 0;
+              const uint8_t bit = atkinson1BitDitherer ? atkinson1BitDitherer->processPixel(gray, x)
+                                                       : quantize1bit(gray, x, currentOutY);
+              const int byteIndex = x / 8;
+              const int bitOffset = 7 - (x % 8);
+              rowBuffer[byteIndex] |= (bit << bitOffset);
+            }
+            if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
+          } else {
+            for (int x = 0; x < emitWidth; x++) {
+              const int srcX = x + cropOffsetX;
+              const uint8_t gray = adjustPixel((rowCount[srcX] > 0) ? (rowAccum[srcX] / rowCount[srcX]) : 0);
+              uint8_t twoBit;
+              if (atkinsonDitherer) {
+                twoBit = atkinsonDitherer->processPixel(gray, x);
+              } else if (fsDitherer) {
+                twoBit = fsDitherer->processPixel(gray, x);
+              } else {
+                twoBit = quantize(gray, x, currentOutY);
+              }
+              const int byteIndex = (x * 2) / 8;
+              const int bitOffset = 6 - ((x * 2) % 8);
+              rowBuffer[byteIndex] |= (twoBit << bitOffset);
+            }
+            if (atkinsonDitherer)
+              atkinsonDitherer->nextRow();
+            else if (fsDitherer)
+              fsDitherer->nextRow();
           }
-          if (atkinsonDitherer)
-            atkinsonDitherer->nextRow();
-          else if (fsDitherer)
-            fsDitherer->nextRow();
-        }
 
-        bmpOut.write(rowBuffer, bytesPerRow);
+          bmpOut.write(rowBuffer, bytesPerRow);
+        }
         currentOutY++;
         yieldDuringDecode(rowsSinceYield);
 
@@ -836,10 +869,10 @@ bool PngToBmpConverter::pngFileToBmpStream(HalFile& pngFile, Print& bmpOut, bool
 
 bool PngToBmpConverter::pngFileToBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
                                                    int targetMaxHeight) {
-  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, false);
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, false, true, true);
 }
 
 bool PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
                                                        int targetMaxHeight) {
-  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, true);
 }
