@@ -9,6 +9,8 @@
 #include <Utf8.h>
 #include <ZipFile.h>
 
+#include <cstring>
+
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -729,9 +731,50 @@ bool Epub::generateCoverBmp(bool cropped) const {
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
+bool Epub::hasUsableThumbBmp(const std::string& thumbPath, const int height) {
+  if (!Storage.exists(thumbPath.c_str())) {
+    return false;
+  }
+
+  HalFile thumb;
+  if (!Storage.openFileForRead("EBP", thumbPath, thumb)) {
+    return false;
+  }
+  const size_t fileSize = thumb.size();
+  // An empty file is written deliberately when a book has no usable cover — keep
+  // honoring it as a "do not retry" marker
+  if (fileSize == 0) {
+    return true;
+  }
+
+  // Validate the header before trusting the file: a crash or power loss mid-write leaves
+  // a truncated BMP at the final path, and thumbs from before the converter's fill-crop
+  // fix can be far larger than the requested box — both would otherwise be reused forever.
+  uint8_t header[30];
+  if (thumb.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) {
+    return false;
+  }
+  if (header[0] != 'B' || header[1] != 'M') {
+    return false;
+  }
+  uint32_t declaredFileSize;
+  int32_t width;
+  int32_t rawHeight;
+  uint16_t bitCount;
+  memcpy(&declaredFileSize, header + 2, sizeof(declaredFileSize));
+  memcpy(&width, header + 18, sizeof(width));
+  memcpy(&rawHeight, header + 22, sizeof(rawHeight));
+  memcpy(&bitCount, header + 28, sizeof(bitCount));
+
+  const int64_t absHeight = rawHeight < 0 ? -static_cast<int64_t>(rawHeight) : rawHeight;  // negative = top-down
+  const int maxWidth = height * 0.6;  // the box generateThumbBmp requests
+  return fileSize >= declaredFileSize && declaredFileSize > sizeof(header) && bitCount == 1 && width >= 1 &&
+         width <= maxWidth && absHeight >= 1 && absHeight <= height;
+}
+
 bool Epub::generateThumbBmp(int height) const {
-  // Already generated, return true
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
+  // Already generated (or marked coverless) and still structurally sound — reuse
+  if (hasUsableThumbBmp(getThumbBmpPath(height), height)) {
     return true;
   }
 
@@ -759,23 +802,43 @@ bool Epub::generateThumbBmp(int height) const {
       return false;
     }
 
+    // Stream to a temp name and publish via rename below: a reset mid-write must never
+    // leave a half-written BMP at the final path, where it would be reused forever
+    const auto thumbTempPath = getThumbBmpPath(height) + ".tmp";
     HalFile thumbBmp;
-    if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+    if (!Storage.openFileForWrite("EBP", thumbTempPath, thumbBmp)) {
       return false;
     }
     // Use smaller target size for Continue Reading card (half of screen: 240x400)
     // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
     int THUMB_TARGET_WIDTH = height * 0.6;
     int THUMB_TARGET_HEIGHT = height;
-    const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
-                                                                             THUMB_TARGET_HEIGHT);
+    bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
+                                                                       THUMB_TARGET_HEIGHT);
     // Explicitly close() files before calling Storage.remove()
     coverJpg.close();
     thumbBmp.close();
     Storage.remove(coverJpgTempPath.c_str());
 
+    if (success) {
+      // The converters don't check Print::write results, so a full or failing SD can
+      // yield success with a silently short (even empty) file — validate before
+      // publishing. An empty temp must fail here, not pass as the "no cover" marker.
+      HalFile written;
+      size_t writtenSize = 0;
+      if (Storage.openFileForRead("EBP", thumbTempPath, written)) {
+        writtenSize = written.size();
+        written.close();
+      }
+      success = writtenSize > 0 && hasUsableThumbBmp(thumbTempPath, height);
+    }
+    if (success) {
+      Storage.remove(getThumbBmpPath(height).c_str());  // FAT rename cannot overwrite
+      success = Storage.rename(thumbTempPath.c_str(), getThumbBmpPath(height).c_str());
+    }
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image");
+      Storage.remove(thumbTempPath.c_str());
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");
@@ -796,21 +859,38 @@ bool Epub::generateThumbBmp(int height) const {
       return false;
     }
 
+    // Stream to a temp name and publish via rename below (see the JPG branch)
+    const auto thumbTempPath = getThumbBmpPath(height) + ".tmp";
     HalFile thumbBmp;
-    if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+    if (!Storage.openFileForWrite("EBP", thumbTempPath, thumbBmp)) {
       return false;
     }
     int THUMB_TARGET_WIDTH = height * 0.6;
     int THUMB_TARGET_HEIGHT = height;
-    const bool success =
+    bool success =
         PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
     // Explicitly close() files before calling Storage.remove()
     coverPng.close();
     thumbBmp.close();
     Storage.remove(coverPngTempPath.c_str());
 
+    if (success) {
+      // Validate the temp before publishing (see the JPG branch)
+      HalFile written;
+      size_t writtenSize = 0;
+      if (Storage.openFileForRead("EBP", thumbTempPath, written)) {
+        writtenSize = written.size();
+        written.close();
+      }
+      success = writtenSize > 0 && hasUsableThumbBmp(thumbTempPath, height);
+    }
+    if (success) {
+      Storage.remove(getThumbBmpPath(height).c_str());  // FAT rename cannot overwrite
+      success = Storage.rename(thumbTempPath.c_str(), getThumbBmpPath(height).c_str());
+    }
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image");
+      Storage.remove(thumbTempPath.c_str());
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
