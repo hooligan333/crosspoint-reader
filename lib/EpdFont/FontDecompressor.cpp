@@ -6,6 +6,10 @@
 
 #include <cstdlib>
 
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+#include <esp_heap_caps.h>
+#endif
+
 FontDecompressor::~FontDecompressor() { deinit(); }
 
 bool FontDecompressor::init() {
@@ -16,9 +20,83 @@ bool FontDecompressor::init() {
 void FontDecompressor::deinit() {
   freePageBuffer();
   freeHotGroup();
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+  freeResidentGroups();
+#endif
 }
 
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+const uint8_t* FontDecompressor::getResidentGroup(const EpdFontData* fontData, uint16_t groupIndex) {
+  // Serve an existing entry. Linear scan: entries number in the dozens-to-low
+  // hundreds (13 groups/style x 4 styles for a reading face plus UI fonts) and
+  // this runs once per group per prewarm, not per glyph.
+  for (uint32_t i = 0; i < residentGroupCount; i++) {
+    if (residentGroups[i].fontData == fontData && residentGroups[i].groupIndex == groupIndex) {
+      return residentGroups[i].data;
+    }
+  }
+
+  const EpdFontGroup& group = fontData->groups[groupIndex];
+  if (residentGroupBytes + group.uncompressedSize > RESIDENT_GROUP_BUDGET_BYTES) {
+    if (!residentBudgetWarned) {
+      LOG_DBG("FDC", "Resident group budget (%lu KB) reached; further groups use the per-page path",
+              (unsigned long)(RESIDENT_GROUP_BUDGET_BYTES / 1024));
+      residentBudgetWarned = true;
+    }
+    return nullptr;
+  }
+
+  // Grow the entry array (internal heap; 12 bytes/entry, entry count capped far
+  // above any real builtin font set so the doubling arithmetic can't overflow).
+  if (residentGroupCount == residentGroupCapacity) {
+    if (residentGroupCapacity >= RESIDENT_GROUP_MAX_ENTRIES) return nullptr;
+    const uint32_t newCap = residentGroupCapacity == 0 ? 32 : residentGroupCapacity * 2;
+    auto* grown = static_cast<ResidentGroup*>(realloc(residentGroups, newCap * sizeof(ResidentGroup)));
+    if (!grown) return nullptr;
+    residentGroups = grown;
+    residentGroupCapacity = newCap;
+  }
+
+  // Group payloads live in PSRAM only. Deliberately no internal-heap fallback:
+  // a session-lifetime cache must never capture internal RAM the render path
+  // needs — when PSRAM is absent or exhausted, returning nullptr sends the
+  // caller down the existing per-page temp-buffer path, i.e. today's behavior.
+  auto* data = static_cast<uint8_t*>(heap_caps_malloc(group.uncompressedSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!data) return nullptr;
+
+  if (!decompressGroup(fontData, groupIndex, data, group.uncompressedSize)) {
+    free(data);
+    return nullptr;
+  }
+
+  residentGroups[residentGroupCount++] = {fontData, groupIndex, data};
+  residentGroupBytes += group.uncompressedSize;
+  return data;
+}
+
+void FontDecompressor::freeResidentGroups() {
+  for (uint32_t i = 0; i < residentGroupCount; i++) {
+    free(residentGroups[i].data);  // heap_caps_malloc'd memory is free()-compatible
+  }
+  free(residentGroups);
+  residentGroups = nullptr;
+  residentGroupCount = 0;
+  residentGroupCapacity = 0;
+  residentGroupBytes = 0;
+  residentBudgetWarned = false;
+}
+#endif
+
 void FontDecompressor::clearCache() {
+  // Frees exactly what it always has: the per-page slots and the hot group, both
+  // internal-heap. With CROSSPOINT_RESIDENT_FONT_GROUPS the resident group cache
+  // deliberately SURVIVES this call and is released only in deinit(). clearCache()
+  // is what FontCacheManager::releaseSdFontCaches() reaches for on heap-critical
+  // transitions (#3035 WiFi + web server, #3093 transparent sleep overlay decode),
+  // and those exist to reclaim INTERNAL heap — the resident payloads are PSRAM-only
+  // by construction, so dropping them would return zero bytes to the heap under
+  // pressure while forfeiting the whole once-per-session inflate saving. See the
+  // ResidentGroup block in the header.
   freePageBuffer();
   freeHotGroup();
 }
@@ -180,6 +258,24 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
   }
+
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+  // Serve the miss from the session-resident decompressed group when available,
+  // skipping the per-miss inflate entirely. Falls through to the hot-group path
+  // (identical to the non-resident build) when the cache can't hold the group.
+  if (const uint8_t* resident = getResidentGroup(fontData, groupIndex)) {
+    if (!ensureCapacity(hotGlyphBuf, hotGlyphBufCapacity, glyph->dataLength)) {
+      LOG_ERR("FDC", "Failed to allocate %u bytes for glyph scratch", (unsigned)glyph->dataLength);
+      stats.getBitmapTimeUs += micros() - tStart;
+      return nullptr;
+    }
+    stats.cacheHits++;
+    uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
+    compactSingleGlyph(&resident[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
+    stats.getBitmapTimeUs += micros() - tStart;
+    return hotGlyphBuf;
+  }
+#endif
 
   // Check if hot group already has this group decompressed — if not, decompress it
   if (!(hotGroup != nullptr && hotGroupFont == fontData && hotGroupIndex == groupIndex)) {
@@ -468,35 +564,48 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     uint16_t groupIdx = neededGroups[g];
     const EpdFontGroup& group = fontData->groups[groupIdx];
 
-    auto* tempBuf = static_cast<uint8_t*>(malloc(group.uncompressedSize));
-    if (!tempBuf) {
-      LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for group %u", group.uncompressedSize, groupIdx);
-      missed++;
-      continue;
-    }
-    if (group.uncompressedSize > stats.peakTempBytes) {
-      stats.peakTempBytes = group.uncompressedSize;
+    // Source of the decompressed byte-aligned group for this extraction pass.
+    // Resident builds read the session-persistent copy (decompressed once per
+    // session); otherwise — and as the resident cache's fallback — the group is
+    // inflated into a per-page temp buffer exactly as before.
+    const uint8_t* groupData = nullptr;
+    uint8_t* tempBuf = nullptr;
+#ifdef CROSSPOINT_RESIDENT_FONT_GROUPS
+    groupData = getResidentGroup(fontData, groupIdx);
+#endif
+    if (!groupData) {
+      tempBuf = static_cast<uint8_t*>(malloc(group.uncompressedSize));
+      if (!tempBuf) {
+        LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for group %u", group.uncompressedSize, groupIdx);
+        missed++;
+        continue;
+      }
+      if (group.uncompressedSize > stats.peakTempBytes) {
+        stats.peakTempBytes = group.uncompressedSize;
+      }
+
+      if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
+        free(tempBuf);
+        missed++;
+        continue;
+      }
+      groupData = tempBuf;
     }
 
-    if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
-      free(tempBuf);
-      missed++;
-      continue;
-    }
-
-    // Extract needed glyphs directly from the byte-aligned temp buffer, compacting on the fly.
+    // Extract needed glyphs directly from the byte-aligned group data, compacting on the fly.
     // alignedOffset was pre-computed in step 3b — no full-group compact scan needed.
     for (uint16_t i = 0; i < slot.glyphCount; i++) {
       if (slot.glyphs[i].bufferOffset != UINT32_MAX) continue;  // already extracted
       if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
 
       const EpdGlyph& glyph = fontData->glyph[slot.glyphs[i].glyphIndex];
-      compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width, glyph.height);
+      compactSingleGlyph(&groupData[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width,
+                         glyph.height);
       slot.glyphs[i].bufferOffset = writeOffset;
       writeOffset += glyph.dataLength;
     }
 
-    free(tempBuf);
+    free(tempBuf);  // nullptr-safe; resident copies are owned by the cache
   }
 
   LOG_DBG("FDC", "Prewarm: %u glyphs in %u bytes from %u groups (%d missed)", glyphCount, writeOffset, groupCount,
