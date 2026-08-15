@@ -12,6 +12,9 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
 
   uint8_t brightness = 60;
   uint8_t warmth = 50;
+  // Active Night Light step (0 = none); mirrors HalFrontlight, persisted on
+  // exit like brightness. Only reachable while SETTINGS.frontlightNightLight.
+  uint8_t dimStep = 0;
   bool lightOn = false;
   // lightOn is seeded from the live hardware state (Frontlight.isOn()), which
   // legitimately diverges from the saved SETTINGS.frontlightOn preference —
