@@ -163,8 +163,34 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PWR_BOOKMARK = 7,
     PWR_SYNC = 8,
     PWR_READER_MENU = 9,
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+    // Blacks out the reading lights (frontlight + night mode) and later brings
+    // back exactly the ones that were on. Appended at the END so every stored
+    // value above keeps its meaning; on a build without the flag the value is
+    // past SHORT_PWRBTN_COUNT and the load-time clamp in fromJson() folds it
+    // back to IGNORE.
+    //
+    // r8: upstream appended CREATE_CLIPPING..PWR_READER_MENU (6..9), so the
+    // fork value moved 6 -> 10. Settings written by r7b and earlier carry 6
+    // (LEGACY_TOGGLE_LIGHT); fromJson() maps it back to TOGGLE_LIGHT on touch
+    // boards, where upstream never offers CREATE_CLIPPING as a short-press
+    // action (shortPowerButtonOptions()), so a stored 6 there can only be the
+    // fork's.
+    //
+    // Unlike SLEEP this leaves getPowerButtonDuration() at its 400 ms default,
+    // so a long hold still sleeps exactly as it does in a stock build.
+    TOGGLE_LIGHT = 10,
+#endif
     SHORT_PWRBTN_COUNT
   };
+
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  static constexpr uint8_t LEGACY_TOGGLE_LIGHT = 6;  // r7b-and-earlier stored value
+  // Bits of the "Toggle Light" remembered set (pwrToggleLightRemembered).
+  static constexpr uint8_t TOGGLE_LIGHT_FRONTLIGHT = 1 << 0;
+  static constexpr uint8_t TOGGLE_LIGHT_NIGHT_MODE = 1 << 1;
+  static constexpr uint8_t TOGGLE_LIGHT_MASK = TOGGLE_LIGHT_FRONTLIGHT | TOGGLE_LIGHT_NIGHT_MODE;
+#endif
 
   // Long-press Confirm action while reading an EPUB. Persisted values are stable;
   // SettingsList maps them to the device-specific option list shown to the user.
@@ -285,6 +311,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t homeButtonTapAction = static_cast<uint8_t>(HomeButtonAction::Home);
   uint8_t homeButtonDoubleTapAction = static_cast<uint8_t>(HomeButtonAction::ToggleFrontlight);
   uint8_t homeButtonLongPressAction = static_cast<uint8_t>(HomeButtonAction::ReaderMenu);
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // "Toggle Light" remembered set: which of the frontlight (bit0) and night
+  // mode (bit1) were on when the action last switched them off. Lives in
+  // settings.json so the restore survives sleep and reboots; cleared once a
+  // restore consumes it. The frontlight LEVEL is not part of it — the existing
+  // frontlightBrightness persistence already holds that.
+  uint8_t pwrToggleLightRemembered = 0;
+#endif
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;

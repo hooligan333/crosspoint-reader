@@ -253,6 +253,15 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   longPressMenuFunction = clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DISABLED,
                                 (uint8_t)LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)IGNORE, (uint8_t)SHORT_PWRBTN_COUNT, (uint8_t)IGNORE);
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // r7b and earlier stored Toggle Light as 6, which upstream has since given to
+  // CREATE_CLIPPING. Touch boards never offer CREATE_CLIPPING as a short press,
+  // so there a stored 6 can only be the fork's legacy value: move it to 10.
+  if (BoardConfig::hasTouch() && shortPwrBtn == LEGACY_TOGGLE_LIGHT) {
+    shortPwrBtn = TOGGLE_LIGHT;
+    needsResave = true;
+  }
+#endif
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
       !doc["longPressMenuFunction"].isNull()) {
     static constexpr HomeButtonAction LEGACY[] = {HomeButtonAction::Sync,       HomeButtonAction::Ignore,
