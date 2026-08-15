@@ -3,6 +3,18 @@
 #include <Arduino.h>
 #include <Logging.h>
 
+#ifdef CROSSPOINT_BG_IMAGE_DECODE
+#include <atomic>
+
+namespace {
+std::atomic<bool> decodeAbort{false};
+}  // namespace
+
+void ImageToFramebufferDecoder::requestAbort(const bool abort) { decodeAbort.store(abort, std::memory_order_release); }
+
+bool ImageToFramebufferDecoder::abortRequested() { return decodeAbort.load(std::memory_order_acquire); }
+#endif
+
 bool ImageToFramebufferDecoder::validateAndStoreDimensions(const int64_t width, const int64_t height,
                                                            ImageDimensions& out, const char* format) {
   if (width <= 0 || height <= 0) {
