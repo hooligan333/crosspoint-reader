@@ -44,8 +44,16 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
   }
   powerSleepFrame = false;
   powerSingleClickFrame = false;
-  const bool classifyPower =
-      CrossPointSettings::hasPowerDoubleClick() && SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE;
+  // Fork (CROSSPOINT_PWR_TOGGLE_LIGHT): under the Toggle Light short press every
+  // short release toggles at once (main.cpp dispatches it), with no double-click
+  // wait in front of it -- the double-click action is inert while it is bound, as
+  // the r10 frontlight shortcut was. wasReleased(Power) below carries the same term.
+  const bool classifyPower = CrossPointSettings::hasPowerDoubleClick() &&
+                             SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+                             && SETTINGS.shortPwrBtn != CrossPointSettings::TOGGLE_LIGHT
+#endif
+      ;
   if (classifyPower && !gpio.isPressed(HalGPIO::BTN_DOWN) && !powerButtonInput.suppressesHold() &&
       !wasPowerReleaseConsumed()) {
     const auto click = powerButtonClickInput.update(millis(), gpio.isPressed(HalGPIO::BTN_POWER),
@@ -469,7 +477,11 @@ bool MappedInputManager::wasPressed(const Button button) const {
 
 bool MappedInputManager::wasReleased(const Button button) const {
   if (button == Button::Power && CrossPointSettings::hasPowerDoubleClick() &&
-      SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE) {
+      SETTINGS.doublePwrBtn != CrossPointSettings::IGNORE
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+      && SETTINGS.shortPwrBtn != CrossPointSettings::TOGGLE_LIGHT  // not classified then, see update()
+#endif
+  ) {
     return false;  // Classified clicks are dispatched once through homeAction.
   }
   if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;
