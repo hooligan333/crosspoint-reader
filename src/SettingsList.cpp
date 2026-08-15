@@ -228,6 +228,18 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   emit(SettingInfo::Value(StrId::STR_WARMTH, &CrossPointSettings::frontlightWarmth, {0, 100, 5}, "frontlightWarmth"));
 #endif
   emit(SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightOn, "frontlightOn"));
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // Remembered set of the "Toggle Light" action (bit0 frontlight, bit1
+  // night mode). Persisted + web-exposed, but category-less so it stays
+  // out of the on-device Settings screen: it is state the action writes,
+  // not a preference. The range clamps a corrupt file to the two bits.
+  // Kept here with the other category-less state rather than next to the
+  // shortPwrBtn preference it belongs to: the web page groups settings in
+  // list order, so a category-less entry inside Controls would open the
+  // catch-all "None" card early and split the page.
+  emit(SettingInfo::Value(StrId::STR_TOGGLE_LIGHT, &CrossPointSettings::pwrToggleLightRemembered,
+                          {0, CrossPointSettings::TOGGLE_LIGHT_MASK, 1}, "pwrToggleLightRemembered"));
+#endif
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
   emit(SettingInfo::DynamicString(

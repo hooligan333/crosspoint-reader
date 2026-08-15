@@ -239,6 +239,13 @@ inline std::vector<ShortPowerButtonOption> shortPowerButtonOptions() {
     options.push_back({StrId::STR_KOSYNC, CrossPointSettings::PWR_SYNC});
     options.push_back({StrId::STR_READER_MENU, CrossPointSettings::PWR_READER_MENU});
   }
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // "Toggle Light" is compiled in only under CROSSPOINT_PWR_TOGGLE_LIGHT and is
+  // listed last. Persistence is by value (TOGGLE_LIGHT = 10), not by menu index,
+  // so it is safe on every board variant of this row; on a flag-off build the
+  // value is past SHORT_PWRBTN_COUNT and fromJson()'s clamp folds it to Ignore.
+  options.push_back({StrId::STR_TOGGLE_LIGHT, CrossPointSettings::TOGGLE_LIGHT});
+#endif
   return options;
 }
 
