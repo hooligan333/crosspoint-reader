@@ -6,6 +6,9 @@
 #include <KOReaderDocumentId.h>
 #include <Memory.h>
 #include <TrustedTime.h>
+#ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
+#include <Epub/blocks/ImageBlock.h>  // PSRAM render cache, released below
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -114,6 +117,13 @@ void ReaderActivity::onExit() {
     const pluginevents::Var vars[] = {{"book", bookPath.c_str()}, {"percent", percent}};
     pluginevents::emit(pluginevents::Event::ReaderExit, vars, 2);
   }
+
+#ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
+  // ~750 KB of PSRAM at full occupancy, holding decoded pages of a book nothing
+  // outside the reader will draw again. onExit runs with the RenderLock held
+  // (ActivityManager::exitActivity), which is the cache's access rule.
+  ImageBlock::clearPxcLru();
+#endif
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   APP_STATE.readerActivityLoadCount = 0;
