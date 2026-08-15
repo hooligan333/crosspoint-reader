@@ -21,4 +21,7 @@ class JpegToFramebufferConverter final : public ImageToFramebufferDecoder {
 
   static bool supportsFormat(const std::string& extension);
   const char* getFormatName() const override { return "JPEG"; }
+#ifdef CROSSPOINT_BG_IMAGE_DECODE
+  bool supportsCacheOnly() const override { return true; }
+#endif
 };
