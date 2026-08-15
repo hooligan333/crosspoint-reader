@@ -3,6 +3,9 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Memory.h>
+#ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
+#include <Epub/blocks/ImageBlock.h>  // PSRAM render cache, released below
+#endif
 
 #include <algorithm>
 
@@ -77,6 +80,13 @@ void ReaderActivity::onExit() {
   Activity::onExit();
 
   LOG_INF("MEM", "reader exit: free=%u max_block=%u", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+
+#ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
+  // ~750 KB of PSRAM at full occupancy, holding decoded pages of a book nothing
+  // outside the reader will draw again. onExit runs with the RenderLock held
+  // (ActivityManager::exitActivity), which is the cache's access rule.
+  ImageBlock::clearPxcLru();
+#endif
 
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   APP_STATE.readerActivityLoadCount = 0;
