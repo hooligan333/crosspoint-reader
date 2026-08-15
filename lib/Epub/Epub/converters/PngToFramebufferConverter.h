@@ -14,4 +14,7 @@ class PngToFramebufferConverter final : public ImageToFramebufferDecoder {
 
   static bool supportsFormat(const std::string& extension);
   const char* getFormatName() const override { return "PNG"; }
+#ifdef CROSSPOINT_BG_IMAGE_DECODE
+  bool supportsCacheOnly() const override { return true; }
+#endif
 };

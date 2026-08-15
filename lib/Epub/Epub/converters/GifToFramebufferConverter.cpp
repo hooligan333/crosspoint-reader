@@ -239,6 +239,12 @@ bool GifToFramebufferConverter::getDimensionsStatic(const std::string& imagePath
 
 bool GifToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
                                                     const RenderConfig& config) {
+#ifdef CROSSPOINT_BG_IMAGE_DECODE
+  // No cache-only mode here (supportsCacheOnly() is false, so the background
+  // pre-decode never selects this converter); refuse rather than draw into the
+  // framebuffer from a task that does not hold the RenderLock.
+  if (config.cacheOnly) return false;
+#endif
   LOG_DBG("GIF", "Decoding GIF: %s", imagePath.c_str());
 
   GifBasicInfo info;
