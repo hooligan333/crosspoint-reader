@@ -35,6 +35,14 @@ class ReaderActivity : public Activity {
   virtual void applyInitialOrientation();
   virtual void onEndOfBookRendered() {}
 
+#ifdef CROSSPOINT_PAGE_CACHE
+  // Called from handleForcedRefresh() with the RenderLock already held, before the
+  // re-render is requested. handleForcedRefresh() is final here, so this is how the
+  // EPUB reader (the only subclass with an idle prewarm) re-arms it -- see
+  // EpubReaderActivity::onForcedRefreshLocked().
+  virtual void onForcedRefreshLocked() {}
+#endif
+
   bool handleBackNavigation();
   /** True while the end-of-book suggestion menu is on screen and owning input. */
   bool endOfBookMenuActive() const;
