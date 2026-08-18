@@ -921,9 +921,10 @@ void EpubReaderActivity::loop() {
       // the book to probe their dimensions, and a pre-decode in flight extracts
       // too, with no lock -- both derive the same destination path from the
       // book-internal href, so the two would be writing the SAME file. Stop it
-      // before the build exists. The wait is bounded by the cancel timeout and
-      // this is deferrable background work, not a page turn; on a timeout the
-      // overlap stays open exactly as it does at the render site.
+      // before the build exists, and only once the re-check says there IS going
+      // to be a build: the wait is bounded by the cancel timeout and there is no
+      // reason to pay it for a start that a render just made moot. On a timeout
+      // the overlap stays open exactly as it does at the render site.
       ImageBlock::cancelBackgroundDecode();
 #endif
       const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
