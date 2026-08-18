@@ -837,29 +837,39 @@ void EpubReaderActivity::loop() {
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
+    // Re-check under the lock: the peek above and this acquire are not atomic, and a render
+    // that won the race may have finalized the extension, replaced the section, or reset it
+    // to null on its page-load-failure path -- startBuild through a stale or null section
+    // pointer is a crash. Mirrors the build pump below. cppcheck can't see the cross-task
+    // mutation, so it flags the re-check as always true.
+    // cppcheck-suppress knownConditionTrueFalse
+    if (section && !section->isBuilding() && section->isPartial() &&
+        section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
-    // Same reason as the renderBook()-site cancel: this build's parse pump (the
-    // buildSomeMore ticks that follow, wherever they run) extracts images out of
-    // the book to probe their dimensions, and a pre-decode in flight extracts
-    // too, with no lock -- both derive the same destination path from the
-    // book-internal href, so the two would be writing the SAME file. Stop it
-    // before the build exists. The wait is bounded by the cancel timeout and
-    // this is deferrable background work, not a page turn; on a timeout the
-    // overlap stays open exactly as it does at the render site.
-    ImageBlock::cancelBackgroundDecode();
+      // Same reason as the renderBook()-site cancel: this build's parse pump (the
+      // buildSomeMore ticks that follow, wherever they run) extracts images out of
+      // the book to probe their dimensions, and a pre-decode in flight extracts
+      // too, with no lock -- both derive the same destination path from the
+      // book-internal href, so the two would be writing the SAME file. Stop it
+      // before the build exists, and only once the re-check says there IS going
+      // to be a build: the wait is bounded by the cancel timeout and there is no
+      // reason to pay it for a start that a render just made moot. On a timeout
+      // the overlap stays open exactly as it does at the render site.
+      ImageBlock::cancelBackgroundDecode();
 #endif
-    const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
-    if (!section->startBuild(buildSpec)) {
-      partialRebuildStartFailed = true;
-      LOG_ERR("ERS", "Failed to start deferred partial extension build");
-    } else {
-      LOG_DBG("ERS", "Reader near partial watermark (%d/%d), resuming extension build", section->currentPage,
-              section->pageCount);
+      const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+      if (!section->startBuild(buildSpec)) {
+        partialRebuildStartFailed = true;
+        LOG_ERR("ERS", "Failed to start deferred partial extension build");
+      } else {
+        LOG_DBG("ERS", "Reader near partial watermark (%d/%d), resuming extension build", section->currentPage,
+                section->pageCount);
 #ifdef CROSSPOINT_BG_BUILD_TASK
-      // The one build start that doesn't flow through a render: wake the build
-      // task directly so pickup isn't left to its long idle-wait fallback.
-      if (bgBuildTaskHandle) xTaskNotifyGive(bgBuildTaskHandle);
+        // The one build start that doesn't flow through a render: wake the build
+        // task directly so pickup isn't left to its long idle-wait fallback.
+        if (bgBuildTaskHandle) xTaskNotifyGive(bgBuildTaskHandle);
 #endif
+      }
     }
   }
 
@@ -890,7 +900,10 @@ void EpubReaderActivity::loop() {
       buildTickHeapGate()) {
 #endif
     RenderLock lock;
-    if (section->isBuilding() && buildTickHeapGate()) {
+    // Same window as above: a render can reset the section between the unlocked peek and
+    // this acquire, so the isBuilding() re-check must not deref without a null re-check.
+    // cppcheck-suppress knownConditionTrueFalse
+    if (section && section->isBuilding() && buildTickHeapGate()) {
       if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
         LOG_ERR("ERS", "Background section build failed");
         section.reset();
