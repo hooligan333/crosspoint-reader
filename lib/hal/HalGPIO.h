@@ -84,11 +84,14 @@ class HalGPIO {
   bool hasHomeKey() const;
   bool wasHomeKeyTapped() const;
   bool wasHomeKeyLongPressed() const;
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
   // Home key currently held, as a level rather than an edge. A motionless hold
   // produces no new touch frames, so its long-press threshold is timed by
   // update() against the wall clock: callers that may stop polling have to
   // check this or they stretch that threshold by however long they stay away.
+  // Flag-gated: the SDK-side accessor exists only on the INT-wake fork branch.
   bool isHomeKeyDown() const;
+#endif
   bool wasTouchTap(float& nx, float& ny) const;
   bool wasTouchDown(float& nx, float& ny) const;
   // Raw release edge, reported even when the contact was not a tap (swipe end,
