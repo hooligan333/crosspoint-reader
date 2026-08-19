@@ -11,6 +11,13 @@
 #error "CROSSPOINT_BG_IMAGE_DECODE requires CROSSPOINT_BG_BUILD_TASK: it runs as that task's idle work"
 #endif
 
+#if defined(CROSSPOINT_BG_IDLE_STRETCH_MS) && !defined(CROSSPOINT_BG_BUILD_TASK)
+#error "CROSSPOINT_BG_IDLE_STRETCH_MS requires CROSSPOINT_BG_BUILD_TASK: it stretches that task's parked fallback"
+#endif
+#if defined(CROSSPOINT_BG_BUILD_TASK) && !defined(CROSSPOINT_BG_IDLE_STRETCH_MS)
+#define CROSSPOINT_BG_IDLE_STRETCH_MS 250
+#endif
+
 #ifdef CROSSPOINT_BG_BUILD_TASK
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -217,6 +224,18 @@ class EpubReaderActivity final : public ReaderActivity {
   void bgBuildTaskLoop();
   void startBgBuildTask();
   void stopBgBuildTask();
+  // Fallback wake for the fully-parked idle wait (see bgBuildTaskLoop): every
+  // work arrival is notified, so this only bounds a retry of deferrable idle
+  // work. On a tickless-idle board it is also this task's last residual wake
+  // source, so -DCROSSPOINT_BG_IDLE_STRETCH_MS=1000 trades that bound for
+  // second-long in-reader sleep windows. (Default is defined beside the flag
+  // checks at the top of this header.)
+  static constexpr uint32_t BACKGROUND_IDLE_PARKED_WAIT_MS = CROSSPOINT_BG_IDLE_STRETCH_MS;
+  // A zero/short value would make ulTaskNotifyTake non-blocking: this task would
+  // free-spin on core 0 at priority 1, starve IDLE0, and trip the task WDT panic
+  // ~5 s into any book.
+  static_assert(BACKGROUND_IDLE_PARKED_WAIT_MS >= 25,
+                "CROSSPOINT_BG_IDLE_STRETCH_MS must not undercut the 25 ms transient cadence");
 #endif
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
   // Prebuild (cache pre-load) of the NEXT spine's Section by the background
