@@ -78,6 +78,11 @@ class HalPowerManager {
   // HalGPIO::isUsbConnected() can only ever answer false there) and setup(),
   // which runs before the first call to this.
   void noteUsbConnected(bool connected);
+  // Refresh the WiFi half of the no-light-sleep lock. setPowerSaving() samples
+  // WiFi too, but is not called on every loop pass; loop() calls this one
+  // unconditionally so the lock can never go stale between mode changes.
+  // loopTask-only, like every other writer of the pm* flags.
+  void noteWifiEnabled(bool enabled);
 #endif
 
   // Get battery percentage (range 0-100)
