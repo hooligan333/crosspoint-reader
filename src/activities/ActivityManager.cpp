@@ -450,9 +450,7 @@ RenderLock::RenderLock(Mode mode) {
 
 RenderLock::RenderLock(Activity&) : RenderLock(Mode::Blocking) {}
 
-#ifdef CROSSPOINT_BG_BUILD_TASK
 RenderLock::RenderLock(TryAcquire) { isLocked = xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE; }
-#endif
 
 RenderLock::~RenderLock() {
   if (isLocked) {

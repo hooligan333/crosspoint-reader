@@ -497,8 +497,15 @@ void EpubReaderActivity::startBgBuildTask() {
   // abort flag lowers it in its own scope. Clear both here so a restarted task
   // does not inherit "a decode is running" (every render would then pay a
   // cancel-and-wait) or "abort" (the first pre-decode would bail instantly).
-  ImageBlock::endBackgroundDecode();
-  ImageToFramebufferDecoder::requestAbort(false);
+  // Under a RenderLock: onEnter() runs after ActivityManager released its own
+  // lock, so a render of this freshly-installed reader can already be in
+  // flight — take the lock so these stores keep the "mutated inside one
+  // RenderLock scope" invariant the interlock's users rely on.
+  {
+    RenderLock lock;
+    ImageBlock::endBackgroundDecode();
+    ImageToFramebufferDecoder::requestAbort(false);
+  }
 #endif
   // Core 0: WiFi's home core, idle while reading (loopTask and the render task
   // are both pinned to core 1). Priority 1 matches them; the RenderLock is the
