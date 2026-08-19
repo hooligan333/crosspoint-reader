@@ -76,10 +76,19 @@ class EpubReaderActivity final : public ReaderActivity {
   // share the base have no Section and no prewarm.
   //
   // Steady-state cost: ONE retained Page (tens of KB of text blocks), live from
-  // the prewarm that fills the entry until the render that consumes it. Never
-  // two: ANY key mismatch, page number included, drops the entry on the spot, so
-  // the next prewarm can't allocate a second Page beside a resident one -- which
-  // is also why a hit-for-its-own-page-later policy is deliberately not offered.
+  // the prewarm that fills the entry until the render that consumes it. Never a
+  // second RETAINED one: ANY key mismatch, page number included, drops the entry
+  // on the spot, so the next prewarm can't allocate a second Page beside a
+  // resident one -- which is also why a hit-for-its-own-page-later policy is
+  // deliberately not offered.
+  //
+  // One transient exception, with CROSSPOINT_BG_IMAGE_DECODE: the bg task's
+  // lookahead scan (imageDecodeStep) deserializes a Page of its own to look for
+  // undecoded images, so a second Page is live for the length of that scan while
+  // an entry is resident. It is scoped to the task's locked phase and freed
+  // there, never stored. The scan reuses the resident entry read-only when the
+  // keys match, so the two only coexist for a lookahead page the cache is not
+  // already holding.
   //
   // A hit requires ALL of: same section generation, same spine, same page
   // number, same pageCount, same isPartial(), and a section that is not
