@@ -84,6 +84,11 @@ class HalGPIO {
   bool hasHomeKey() const;
   bool wasHomeKeyTapped() const;
   bool wasHomeKeyLongPressed() const;
+  // Home key currently held, as a level rather than an edge. A motionless hold
+  // produces no new touch frames, so its long-press threshold is timed by
+  // update() against the wall clock: callers that may stop polling have to
+  // check this or they stretch that threshold by however long they stay away.
+  bool isHomeKeyDown() const;
   bool wasTouchTap(float& nx, float& ny) const;
   bool wasTouchDown(float& nx, float& ny) const;
   // Raw release edge, reported even when the contact was not a tap (swipe end,
@@ -119,6 +124,38 @@ class HalGPIO {
   enum class WakeupReason { PowerButton, AfterFlash, AfterUSBPower, Other };
 
   WakeupReason getWakeupReason() const;
+
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+  // --- Interrupt-woken idle wait ---------------------------------------------
+  // Lets the main loop block for hundreds of ms instead of re-polling every
+  // 50 ms, so tickless light sleep gets one long window instead of twenty short
+  // ones. Only a waker: the wake pins feed an ISR that unblocks the loop task,
+  // and the existing update() poll then classifies every press, gesture and
+  // debounce exactly as before.
+
+  // Attach the wake ISRs and latch the CALLING task as the one they notify —
+  // must run on the task that later calls waitForInput() (loopTask, i.e. from
+  // setup()), after begin() has probed the touch controller.
+  void beginInputWake();
+
+  // False when no wake source could be armed, or when this board has inputs no
+  // GPIO level can represent: ADC-ladder nav keys, a button behind an I2C
+  // expander, or a live touch panel whose INT cannot hold a level. Callers then
+  // keep polling, which sees every input.
+  bool inputWakeAvailable() const;
+
+  // Block up to maxMs, returning as soon as a wake pin asserts. Arms the pins as
+  // light-sleep wake sources for the duration of the call ONLY — esp_sleep's
+  // GPIO trigger bit is shared with deep sleep, and deep-sleep entry always
+  // happens outside this call. Returns true when a pin (not the timeout) ended
+  // the wait. A pin already sitting at its wake level (an INT stuck low after
+  // an I2C fault, a button held down in a bag) would fire the instant it was
+  // armed, so it is left unarmed and the round falls back to the loop's stock
+  // 50 ms cadence — which is also the floor for how fast this can return. A
+  // held level can therefore neither busy-loop the caller nor hide an input
+  // behind the full cap.
+  bool waitForInput(uint32_t maxMs);
+#endif
 
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
