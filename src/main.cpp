@@ -658,8 +658,41 @@ void setup() {
     gpio.update();
   }
 
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+  // Runs on loopTask, which is also what waitForInput() blocks below, and after
+  // gpio.begin() has probed the touch controller — so the GT911 INT is already
+  // either configured as a level hold or reported unusable.
+  gpio.beginInputWake();
+#endif
   allowSleepAt = millis() + 2000;
 }
+
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+// How long the idle loop tail may block on an input interrupt instead of
+// polling. 0 = keep the stock 50 ms poll, which every condition below demands
+// for a reason the interrupt cannot cover:
+//   * no usable wake source (see HalGPIO::inputWakeAvailable);
+//   * tilt page turn armed — the IMU has no interrupt line here and its flick
+//     detector needs its 20 Hz sampling (HalTiltSensor::POLL_INTERVAL_MS);
+//   * a contact is down — the touch long-press and hold timers are evaluated by
+//     the poll, and a motionless finger produces no new GT911 frame to wake on;
+//   * the capacitive home key is down — same reason, and it is a separate latch
+//     from the contact one: a held key reports no frames either, so its
+//     HOME_KEY_LONG_PRESS_MS threshold is timed purely by the poll.
+// The caller has already established the other two: the power-saving idle state
+// is engaged, and no activity requested skipLoopDelay.
+static uint32_t idleInputWaitMs() {
+  if (!gpio.inputWakeAvailable()) return 0;
+  if (SETTINGS.tiltPageTurn != CrossPointTiltPageTurn::TILT_OFF && halTiltSensor.isAvailable()) return 0;
+  float nx = 0.0f;
+  float ny = 0.0f;
+  if (gpio.isTouchHeldAt(nx, ny) || gpio.isHomeKeyDown()) return 0;
+  // Serial CMD: handling is polled from this loop, so stay responsive while a
+  // host is attached (light sleep is suppressed then anyway — see
+  // HalPowerManager::noteUsbConnected and the env's USJ sdkconfig option).
+  return Serial ? 250 : 1000;
+}
+#endif
 
 void loop() {
   static unsigned long maxLoopDuration = 0;
@@ -889,7 +922,23 @@ void loop() {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+      // Wait on the touch INT / button GPIOs instead of re-polling every 50 ms,
+      // so tickless light sleep gets one long window instead of twenty short
+      // ones. The wake only unblocks the loop; the poll above still classifies
+      // the input. Residual risk: a press that both starts AND ends inside the
+      // wait is lost, same as a press between two of today's 50 ms polls — the
+      // window collapses to ISR latency whenever the ISR fires, so this needs
+      // the interrupt to be missed (masked during a flash operation) first.
+      const uint32_t waitMs = idleInputWaitMs();
+      if (waitMs > 0) {
+        gpio.waitForInput(waitMs);
+      } else {
+        delay(50);
+      }
+#else
       delay(50);
+#endif
     } else {
       // Short delay to prevent tight loop while still being responsive
       delay(10);
