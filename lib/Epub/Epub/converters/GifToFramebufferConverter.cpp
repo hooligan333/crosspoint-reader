@@ -336,7 +336,10 @@ bool GifToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   ctx.caching = !config.cachePath.empty();
   if (ctx.caching) {
-    if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1)) {
+    // Fork (CROSSPOINT_PSRAM_IMAGE_CACHE's PixelCache::begin takes the decode
+    // mode): a GIF decode only ever runs on the render path, under the
+    // RenderLock, so it is never a cache-only decode and may donate.
+    if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1, /*cacheOnly=*/false)) {
       LOG_ERR("GIF", "Failed to start cache stream");
       return false;
     }
