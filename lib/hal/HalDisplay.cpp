@@ -103,6 +103,12 @@ void HalDisplay::deepSleep() { einkDisplay.deepSleep(); }
 
 void HalDisplay::controllerIdle() { einkDisplay.controllerIdle(); }
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+void HalDisplay::setBusyWaitSliceHook(bool (*sliceHook)(int8_t busyPin, uint8_t busyLevel)) {
+  einkDisplay.setBusyWaitSliceHook(sliceHook);
+}
+#endif
+
 uint8_t* HalDisplay::getFrameBuffer() const { return einkDisplay.getFrameBuffer(); }
 
 uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisplay.lendBuildStorage(sizeOut); }
