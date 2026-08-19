@@ -66,6 +66,15 @@ struct PixelCache {
   // or a failed PSRAM allocation, leaves `whole` null and the banded path below
   // runs exactly as before.
   uint8_t* whole = nullptr;
+
+  // Donating into the render cache is only legal from a decode that holds the
+  // RenderLock, because that cache has no lock of its own.
+  // CROSSPOINT_BG_IMAGE_DECODE's lock-free background decode may not, and its
+  // .pxc is picked up from the file by whichever render wants it first. Derived
+  // in begin() from the cacheOnly flag it is handed, and false until then: the
+  // permission is granted by construction, never by a caller remembering to
+  // revoke it.
+  bool mayDonate = false;
 #endif
 
   PixelCache()
@@ -88,7 +97,11 @@ struct PixelCache {
 
   // Open the cache file, write the header, and allocate a band buffer big enough
   // to hold the tallest single decode block (maxBlockDstRows output rows).
-  bool begin(const std::string& cachePath, int w, int h, int ox, int oy, int maxBlockDstRows) {
+  // `cacheOnly` is the decode mode: a cacheOnly decode runs without the
+  // RenderLock, which is exactly the decode that may not donate into the render
+  // cache (see mayDonate).
+  bool begin(const std::string& cachePath, int w, int h, int ox, int oy, int maxBlockDstRows,
+             [[maybe_unused]] const bool cacheOnly) {
     width = w;
     height = h;
     originX = ox;
@@ -99,6 +112,7 @@ struct PixelCache {
     ok = false;
 
 #ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
+    mayDonate = !cacheOnly;
     if (!beginWholeBuffer(w, h) && !beginBandBuffer(w, h, maxBlockDstRows)) return false;
 #else
     if (!beginBandBuffer(w, h, maxBlockDstRows)) return false;
@@ -260,14 +274,8 @@ struct PixelCache {
 
 #ifdef CROSSPOINT_PSRAM_IMAGE_CACHE
   // One-shot finish: header + payload in a SINGLE write, then hand the block to
-  // the render cache instead of making the passes that follow read it back.
-  //
-  // Donating is only legal from a decode that holds the RenderLock, because
-  // that cache has no lock of its own. It holds here by construction: a
-  // PixelCache exists only for a decode with config.cachePath set, and the sole
-  // producer of those is ImageBlock::render(), which the render task runs under
-  // the lock. Any future off-lock decode that wants a .pxc has to opt out of the
-  // donation before it can use this writer.
+  // the render cache instead of making the passes that follow read it back --
+  // but only when this decode holds the RenderLock (see mayDonate).
   bool finalizeWhole() {
     const size_t total = PXC_HEADER_BYTES + (size_t)bytesPerRow * height;
     if (file.write(whole, total) != total) {
@@ -280,7 +288,7 @@ struct PixelCache {
     LOG_DBG("IMG", "Cache written in one pass: %s (%dx%d, %u bytes)", cachePathStr.c_str(), width, height,
             (unsigned)total);
 
-    if (adoptPxcImage(cachePathStr, whole, total)) {
+    if (mayDonate && adoptPxcImage(cachePathStr, whole, total)) {
       whole = nullptr;  // ownership transferred to the render cache
       buffer = nullptr;
     }
