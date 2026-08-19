@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#ifdef CROSSPOINT_PM_STATS
+#include <esp_pm.h>
+#endif
 #include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
@@ -795,8 +798,33 @@ void loop() {
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
       }
+#ifdef CROSSPOINT_PM_STATS
+      // Dump esp_pm's cumulative per-mode residency (CONFIG_PM_PROFILING) — the
+      // "light sleep" row is total time slept since boot. Sleep is suppressed
+      // while this console is attached (USJ lock), so the numbers reflect the
+      // preceding detached window: unplug, read for a while, replug, dump.
+      else if (cmd == "PMSTATS") {
+        logSerial.printf("PMSTATS uptime_ms=%lu\n", millis());
+        esp_pm_dump_locks(stdout);
+        fflush(stdout);
+      }
+#endif
     }
   }
+
+#ifdef CROSSPOINT_PM_STATS
+  // Also print unprompted once a minute while a host is attached, so just
+  // opening the monitor after a detached soak shows the accumulated stats.
+  {
+    static unsigned long lastPmStatsPrint = 0;
+    if (Serial && millis() - lastPmStatsPrint >= 60000) {
+      lastPmStatsPrint = millis();
+      logSerial.printf("PMSTATS uptime_ms=%lu\n", millis());
+      esp_pm_dump_locks(stdout);
+      fflush(stdout);
+    }
+  }
+#endif
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
