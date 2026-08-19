@@ -22,21 +22,21 @@ class PixelCacheTest : public ::testing::Test {
 };
 TEST_F(PixelCacheTest, PublishesCompleteCache) {
   PixelCache cache;
-  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1));
+  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1, false));
   EXPECT_TRUE(cache.finalize());
   EXPECT_TRUE(Storage.exists(path.c_str()));
   EXPECT_EQ(std::filesystem::file_size(path), 5u);
 }
 TEST_F(PixelCacheTest, RejectsFinalWriteFailure) {
   PixelCache cache;
-  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1));
+  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1, false));
   HalFileTest::failNextWrite = true;
   EXPECT_FALSE(cache.finalize());
   EXPECT_FALSE(Storage.exists(path.c_str()));
 }
 TEST_F(PixelCacheTest, RejectsCloseFailure) {
   PixelCache cache;
-  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1));
+  ASSERT_TRUE(cache.begin(path, 4, 1, 0, 0, 1, false));
   HalFileTest::failNextClose = true;
   EXPECT_FALSE(cache.finalize());
   EXPECT_FALSE(Storage.exists(path.c_str()));
