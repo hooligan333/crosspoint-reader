@@ -38,6 +38,10 @@ void HalPowerManager::begin() {
   modeMutex = xSemaphoreCreateMutex();
   assert(modeMutex != nullptr);
 #ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+#if !BOARD_HAS_PSRAM
+#error \
+    "CROSSPOINT_AUTO_LIGHT_SLEEP assumes a PSRAM board: min DFS = LOW_POWER_FREQ (80) keeps APB pinned at 80 MHz. On a non-PSRAM board LOW_POWER_FREQ is 10, and a 10 MHz APB under the lock-less peripheral drivers (SPI.writeBytes, Wire, LEDC) is unvalidated -- review before enabling."
+#endif
   // Automatic light sleep: let esp_pm scale the clock between LOW_POWER_FREQ
   // and the boot clock, and light-sleep the chip whenever every task is idle
   // (FreeRTOS tickless idle) instead of burning the loop's delays awake. Needs
@@ -107,6 +111,11 @@ void HalPowerManager::updateNoLightSleepLock() {
 
 void HalPowerManager::noteUsbConnected(const bool connected) {
   pmUsbBlocked = connected;
+  updateNoLightSleepLock();
+}
+
+void HalPowerManager::noteWifiEnabled(const bool enabled) {
+  pmWifiBlocked = enabled;
   updateNoLightSleepLock();
 }
 #endif
@@ -182,6 +191,23 @@ void HalPowerManager::setPowerSaving(bool enabled) {
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // esp_pm's auto light sleep keeps ESP_SLEEP_WAKEUP_TIMER armed: esp_pm_configure()
+  // with light_sleep_enable enables the RTC timer trigger globally, and every tickless
+  // window re-arms it with that window's duration. esp_sleep's wakeup config is shared
+  // with deep sleep — and the S3 deep-sleep path applies it with no minimum-duration
+  // guard — so "off" would become a nap of whatever the last light-sleep window was,
+  // and the device would boot-loop instead of powering down. Reconfiguring with light
+  // sleep disabled is the documented way out: it disarms the timer source itself.
+  // Done first, so nothing can re-arm the timer during the power-button-release wait
+  // at the bottom of this function.
+  esp_pm_config_t pmOff = {};
+  pmOff.max_freq_mhz = normalFreq > 0 ? normalFreq : 240;
+  pmOff.min_freq_mhz = pmOff.max_freq_mhz;
+  pmOff.light_sleep_enable = false;
+  esp_pm_configure(&pmOff);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);  // belt and braces
+#endif
 #if FREEINK_DEVICE_EEGO_A4
   // LM3630A and GSL share I2C; turn the light off before touch releases the bus.
   Frontlight.setOn(false);
