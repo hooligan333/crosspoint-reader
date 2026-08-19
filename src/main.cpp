@@ -289,7 +289,13 @@ void handlePowerToggleLight() {
       // broken. Give it a floor here. The capture/restore branches are left
       // alone on purpose — restoring a remembered 0% mirrors what the
       // double-click frontlight toggle does with the same level.
-      if ((target & CrossPointSettings::TOGGLE_LIGHT_FRONTLIGHT) != 0 && Frontlight.brightness() == 0) {
+      //
+      // A Night Light dim step is exempt: it is a deliberate (and visible)
+      // sub-1% dark-room level that lives outside percent mode, so
+      // brightness() reads 0 while the panel is set exactly where the user
+      // wants it — and setBrightness() below would clear the step.
+      if ((target & CrossPointSettings::TOGGLE_LIGHT_FRONTLIGHT) != 0 && Frontlight.brightness() == 0 &&
+          Frontlight.dimStep() == 0) {
         if (SETTINGS.frontlightBrightness == 0) SETTINGS.frontlightBrightness = TOGGLE_LIGHT_DEFAULT_BRIGHTNESS;
         Frontlight.setBrightness(SETTINGS.frontlightBrightness);
       }
