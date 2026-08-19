@@ -158,8 +158,10 @@ enum class BootResume : uint8_t {
 // level after every idle step and is immune either way — waitRefreshComplete()
 // documents exactly this fallback and selects it on the hook's mere presence.
 // Returning false keeps the SDK's own delay() pacing for the idle step, which
-// is a single tick: below the tickless-idle threshold, so an active wait does
-// not sleep at all, and harmless if it ever did (the level is re-read).
+// is a single tick: far below the 8-tick tickless-idle threshold (the
+// CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP default at FREERTOS_HZ=1000 without
+// PM_SLP_IRAM_OPT), so an active wait does not sleep at all, and it would be
+// harmless if it ever did (the level is re-read).
 static bool lightSleepBusySlice(int8_t /*busyPin*/, uint8_t /*busyLevel*/) { return false; }
 #endif
 
@@ -306,9 +308,12 @@ void handlePowerToggleLight() {
       // A Night Light dim step is exempt: it is a deliberate (and visible)
       // sub-1% dark-room level that lives outside percent mode, so
       // brightness() reads 0 while the panel is set exactly where the user
-      // wants it — and setBrightness() below would clear the step.
+      // wants it — and setBrightness() below would clear the step. The
+      // exemption holds only while the feature is enabled: disabling Night
+      // Light in Settings doesn't reconcile the HAL's step until the light
+      // panel is next opened, and a stale step must not dodge the floor.
       if ((target & CrossPointSettings::TOGGLE_LIGHT_FRONTLIGHT) != 0 && Frontlight.brightness() == 0 &&
-          Frontlight.dimStep() == 0) {
+          (Frontlight.dimStep() == 0 || SETTINGS.frontlightNightLight == 0)) {
         if (SETTINGS.frontlightBrightness == 0) SETTINGS.frontlightBrightness = TOGGLE_LIGHT_DEFAULT_BRIGHTNESS;
         Frontlight.setBrightness(SETTINGS.frontlightBrightness);
       }
@@ -735,6 +740,11 @@ void loop() {
   if (gpio.wasUsbStateChanged()) {
     powerManager.noteUsbConnected(gpio.isUsbConnected());
   }
+  // WiFi half of the same lock, refreshed every pass: setPowerSaving() samples
+  // it too, but only runs on some iterations, and the enable/disable sites all
+  // live in activity code that this keeps covered without relying on their
+  // input events also having taken the interactive CPU lock.
+  powerManager.noteWifiEnabled(WiFi.getMode() != WIFI_MODE_NULL);
 #endif
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
