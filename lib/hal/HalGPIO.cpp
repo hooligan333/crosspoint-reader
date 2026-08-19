@@ -8,6 +8,10 @@
 #include <XteinkDetect.h>
 #include <esp_sleep.h>
 
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+#include <driver/gpio.h>
+#endif
+
 // Global HalGPIO instance
 HalGPIO gpio;
 
@@ -170,6 +174,8 @@ bool HalGPIO::wasHomeKeyTapped() const { return inputMgr.wasHomeKeyTapped(); }
 
 bool HalGPIO::wasHomeKeyLongPressed() const { return inputMgr.wasHomeKeyLongPressed(); }
 
+bool HalGPIO::isHomeKeyDown() const { return inputMgr.isHomeKeyDown(); }
+
 bool HalGPIO::wasTouchTap(float& nx, float& ny) const { return inputMgr.wasTouchTap(nx, ny); }
 
 bool HalGPIO::wasTouchDown(float& nx, float& ny) const { return inputMgr.wasTouchPressedAt(nx, ny); }
@@ -290,3 +296,197 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   }
   return WakeupReason::Other;
 }
+
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+
+namespace {
+
+struct WakePin {
+  gpio_num_t pin;
+  bool activeLow;
+};
+
+constexpr uint8_t MAX_WAKE_PINS = 8;
+WakePin wakePins[MAX_WAKE_PINS];
+uint8_t wakePinCount = 0;
+bool wakePinOverflow = false;
+bool wakeUsable = false;
+TaskHandle_t wakeNotifyTask = nullptr;
+
+// The stock idle cadence of the loop tail, and the floor this wait may not
+// undercut. A LEVEL interrupt on a pin that is ALREADY asserted when it is
+// armed — a GT911 INT stuck low after an I2C fault, a button held down in a
+// bag — fires the instant gpio_intr_enable() runs, so ulTaskNotifyTake()
+// returns immediately and the loop would spin at full rate with no delay at
+// all: the opposite of what this is for, and light sleep never engages. A
+// return faster than IMMEDIATE_RETURN_MS is taken as that case and padded back
+// out to LOOP_FLOOR_MS, which bounds the loop to today's cadence while still
+// letting the poll run right away.
+constexpr uint32_t LOOP_FLOOR_MS = 50;
+constexpr uint32_t IMMEDIATE_RETURN_MS = 20;
+
+// The Arduino GPIO ISR service is installed without ESP_INTR_FLAG_IRAM, which
+// is what makes the flash-resident gpio_intr_disable() call in the handler
+// below safe (the allocator then masks this interrupt for the duration of every
+// flash operation, so it never runs with the cache disabled). Fail the build
+// loudly if that ever flips rather than ship a cache-disabled crash.
+#if CONFIG_ARDUINO_ISR_IRAM
+#error \
+    "CROSSPOINT_TOUCH_INT_WAKE needs a non-IRAM GPIO ISR service: inputWakeIsr calls flash-resident gpio_intr_disable()."
+#endif
+
+// Level-triggered by necessity: light sleep clock-gates the GPIO edge detector,
+// so gpio_wakeup_enable() accepts nothing else. A level interrupt re-latches its
+// status bit for as long as the line is held, re-entering the handler until the
+// source clears — so the handler must mask its own pin, and waitForInput()
+// re-enables it for the next wait.
+void IRAM_ATTR inputWakeIsr(void* arg) {
+  gpio_intr_disable(static_cast<gpio_num_t>(reinterpret_cast<intptr_t>(arg)));
+  if (wakeNotifyTask == nullptr) {
+    return;
+  }
+  BaseType_t higherPriorityWoken = pdFALSE;
+  vTaskNotifyGiveFromISR(wakeNotifyTask, &higherPriorityWoken);
+  if (higherPriorityWoken) {
+    portYIELD_FROM_ISR();
+  }
+}
+
+void addWakePin(const int8_t pin, const bool activeLow) {
+  if (pin < 0) {
+    return;
+  }
+  for (uint8_t i = 0; i < wakePinCount; ++i) {
+    if (wakePins[i].pin == static_cast<gpio_num_t>(pin)) return;  // shared pin (confirm/power)
+  }
+  if (wakePinCount >= MAX_WAKE_PINS) {
+    // Silently dropping a pin would leave the wait deaf to that input for up to
+    // a full second. Fail the whole mechanism closed instead; the caller then
+    // keeps the stock 50 ms poll, which sees every button.
+    wakePinOverflow = true;
+    return;
+  }
+  wakePins[wakePinCount++] = {static_cast<gpio_num_t>(pin), activeLow};
+}
+
+// True while the pin sits at the level it would wake on.
+bool wakePinAsserted(const WakePin& p) { return digitalRead(p.pin) == (p.activeLow ? LOW : HIGH); }
+
+}  // namespace
+
+void HalGPIO::beginInputWake() {
+  wakePinCount = 0;
+  wakePinOverflow = false;
+  wakeUsable = false;
+
+  // Button pin modes already belong to InputManager::begin() (INPUT_PULLUP for
+  // the nav keys, powerActiveHigh for power) and the touch INT's to the GT911
+  // driver; this only reads their polarity. ADC-ladder boards multiplex the nav
+  // keys onto ADC pins, where only power is a real GPIO.
+  const auto& in = BoardConfig::ACTIVE.input;
+  if (BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::XteinkAdcLadder) {
+    for (const int8_t pin : {in.back, in.confirm, in.left, in.right, in.up, in.down}) {
+      addWakePin(pin, true);
+    }
+  }
+  addWakePin(in.power, !in.powerActiveHigh);
+
+  const int8_t touchIrq = inputMgr.touchWakeIrqPin();
+  addWakePin(touchIrq, inputMgr.touchWakeIrqActiveLow());
+
+  // Every input the loop can act on has to be something this can arm, or the
+  // wait would be deaf to the rest of them for up to its full cap. Boards that
+  // fail that test keep the stock poll:
+  //   * XteinkAdcLadder (X4, X3): the nav keys are resistor steps on a single
+  //     ADC pin, found by sampling — there is no per-key level to interrupt on;
+  //   * a board button hook (LilyGo T5 S3's user button on its PCA9535): the
+  //     key is behind an I2C expander, invisible to a GPIO interrupt, and the
+  //     expander's own INT line is not modeled here;
+  //   * a live touch panel with no level-holding INT: a contact would have no
+  //     way to signal during a long wait (see FREEINK_GT911_INT_WAKE, which is
+  //     what makes touchWakeIrqPin() report a pin at all);
+  //   * more wake pins than the table holds (see addWakePin).
+  const bool navKeysAreGpio =
+      BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::XteinkAdcLadder && !InputManager::hasButtonHook();
+  wakeUsable = wakePinCount > 0 && !wakePinOverflow && navKeysAreGpio && (!inputMgr.hasTouch() || touchIrq >= 0);
+  LOG_INF("PWR", "Input wake: %u pin(s), touch INT %d, gpioKeys=%d usable=%d", static_cast<unsigned>(wakePinCount),
+          static_cast<int>(touchIrq), static_cast<int>(navKeysAreGpio), static_cast<int>(wakeUsable));
+  if (!wakeUsable) {
+    wakePinCount = 0;
+    return;
+  }
+
+  for (uint8_t i = 0; i < wakePinCount; ++i) {
+    attachInterruptArg(wakePins[i].pin, inputWakeIsr, reinterpret_cast<void*>(static_cast<intptr_t>(wakePins[i].pin)),
+                       wakePins[i].activeLow ? ONLOW : ONHIGH);
+    gpio_intr_disable(wakePins[i].pin);  // enabled only inside waitForInput()
+  }
+  wakeNotifyTask = xTaskGetCurrentTaskHandle();
+}
+
+bool HalGPIO::inputWakeAvailable() const { return wakeUsable && wakeNotifyTask != nullptr; }
+
+bool HalGPIO::waitForInput(const uint32_t maxMs) {
+  if (!inputWakeAvailable()) {
+    // Deliberately NOT delay(maxMs): with no wake source at all that would be a
+    // silent stall of up to the caller's full cap. The caller's gate keeps this
+    // unreachable today (it asks for no wait when the wait is unavailable), so
+    // this is a floor for a future caller, not a live path.
+    delay(LOOP_FLOOR_MS);
+    return false;
+  }
+
+  const uint32_t startMs = millis();
+
+  // Arm only the pins that are currently released. One already sitting at its
+  // wake level would interrupt the moment it is enabled and keep doing so until
+  // the line lets go, which is the busy loop LOOP_FLOOR_MS exists to bound;
+  // leaving it disarmed costs nothing, because the poll that runs immediately
+  // after this call is what reads its state anyway.
+  uint8_t armedCount = 0;
+  for (uint8_t i = 0; i < wakePinCount; ++i) {
+    if (wakePinAsserted(wakePins[i])) continue;
+    gpio_wakeup_enable(wakePins[i].pin, wakePins[i].activeLow ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+    gpio_intr_enable(wakePins[i].pin);
+    ++armedCount;
+  }
+  if (armedCount == 0) {
+    // Every wake-capable input is held down: nothing left that could change
+    // state and signal it, so skip the long wait and keep the stock cadence.
+    delay(LOOP_FLOOR_MS);
+    return false;
+  }
+  // With a pin left out, fall back to the stock cadence for this round rather
+  // than the caller's full cap: an asserted line is state the poll has not
+  // consumed yet (a GT911 INT still held because update() skipped its I2C
+  // slot, a button mid-press), and a long wait would sit on it for up to a
+  // second. The pins that ARE armed can still end the wait sooner.
+  const uint32_t waitMs = armedCount == wakePinCount ? maxMs : LOOP_FLOOR_MS;
+  esp_sleep_enable_gpio_wakeup();
+
+  // Not cleared before the take: the previous wait drained its own slot below,
+  // so a count pending here came from outside this mechanism — returning early
+  // on it costs one extra poll, which is cheaper than dropping a real input.
+  const uint32_t woken = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
+
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+  for (uint8_t i = 0; i < wakePinCount; ++i) {
+    gpio_intr_disable(wakePins[i].pin);
+    gpio_wakeup_disable(wakePins[i].pin);
+  }
+  // Drop anything the ISR posted between the take and the disarm above: this
+  // task's notification index 0 is shared with
+  // ActivityManager::requestUpdateAndWait(), which blocks on it for the render
+  // task's ack, and a leftover wake notification there would make it return
+  // before the render had actually happened. Nothing is lost — the pin that
+  // fired is still asserted for the poll that follows.
+  ulTaskNotifyTake(pdTRUE, 0);
+
+  const uint32_t elapsedMs = millis() - startMs;
+  if (elapsedMs < IMMEDIATE_RETURN_MS) {
+    delay(LOOP_FLOOR_MS - elapsedMs);
+  }
+  return woken != 0;
+}
+
+#endif  // CROSSPOINT_TOUCH_INT_WAKE
