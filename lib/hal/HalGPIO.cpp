@@ -7,6 +7,8 @@
 #include <XteinkDetect.h>
 #include <esp_sleep.h>
 
+#include <atomic>
+
 #ifdef CROSSPOINT_TOUCH_INT_WAKE
 #include <driver/gpio.h>
 #endif
@@ -173,7 +175,12 @@ bool HalGPIO::wasHomeKeyTapped() const { return inputMgr.wasHomeKeyTapped(); }
 
 bool HalGPIO::wasHomeKeyLongPressed() const { return inputMgr.wasHomeKeyLongPressed(); }
 
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+// InputManager::isHomeKeyDown() exists only on the fork SDK carrying the
+// GT911 INT-wake work; keep this passthrough behind the same flag so
+// flags-off builds of the app still compile against the upstream SDK.
 bool HalGPIO::isHomeKeyDown() const { return inputMgr.isHomeKeyDown(); }
+#endif
 
 bool HalGPIO::wasTouchTap(float& nx, float& ny) const { return inputMgr.wasTouchTap(nx, ny); }
 
@@ -286,7 +293,10 @@ WakePin wakePins[MAX_WAKE_PINS];
 uint8_t wakePinCount = 0;
 bool wakePinOverflow = false;
 bool wakeUsable = false;
-TaskHandle_t wakeNotifyTask = nullptr;
+// Written once on loopTask (before any wake interrupt is ever enabled), read
+// from the ISR: atomic so the ISR/task sharing is formally synchronised, not
+// merely benign-by-ordering. Relaxed is enough — there is no dependent data.
+std::atomic<TaskHandle_t> wakeNotifyTask{nullptr};
 
 // The stock idle cadence of the loop tail, and the floor this wait may not
 // undercut. A LEVEL interrupt on a pin that is ALREADY asserted when it is
@@ -317,11 +327,12 @@ constexpr uint32_t IMMEDIATE_RETURN_MS = 20;
 // re-enables it for the next wait.
 void IRAM_ATTR inputWakeIsr(void* arg) {
   gpio_intr_disable(static_cast<gpio_num_t>(reinterpret_cast<intptr_t>(arg)));
-  if (wakeNotifyTask == nullptr) {
+  TaskHandle_t task = wakeNotifyTask.load(std::memory_order_relaxed);
+  if (task == nullptr) {
     return;
   }
   BaseType_t higherPriorityWoken = pdFALSE;
-  vTaskNotifyGiveFromISR(wakeNotifyTask, &higherPriorityWoken);
+  vTaskNotifyGiveFromISR(task, &higherPriorityWoken);
   if (higherPriorityWoken) {
     portYIELD_FROM_ISR();
   }
