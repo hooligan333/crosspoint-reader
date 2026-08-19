@@ -425,8 +425,15 @@ void EpubReaderActivity::startBgBuildTask() {
   // abort flag lowers it in its own scope. Clear both here so a restarted task
   // does not inherit "a decode is running" (every render would then pay a
   // cancel-and-wait) or "abort" (the first pre-decode would bail instantly).
-  ImageBlock::endBackgroundDecode();
-  ImageToFramebufferDecoder::requestAbort(false);
+  // Under a RenderLock: onEnter() runs after ActivityManager released its own
+  // lock, so a render of this freshly-installed reader can already be in
+  // flight — take the lock so these stores keep the "mutated inside one
+  // RenderLock scope" invariant the interlock's users rely on.
+  {
+    RenderLock lock;
+    ImageBlock::endBackgroundDecode();
+    ImageToFramebufferDecoder::requestAbort(false);
+  }
 #endif
   // Core 0: WiFi's home core, idle while reading (loopTask and the render task
   // are both pinned to core 1). Priority 1 matches them; the RenderLock is the
@@ -836,11 +843,13 @@ void EpubReaderActivity::loop() {
   // section is owned by the RenderLock: the render task resets or replaces it on its
   // failure/load paths while holding the lock, so even eligibility peeks must not
   // dereference it unlocked -- a concurrent reset would leave this task reading a freed
-  // Section mid-expression. Only lock-free state is checked outside; RenderLock::peek()
-  // is a no-wait fast gate that skips the acquire while a render is in flight.
+  // Section mid-expression. Only lock-free state is checked outside. The acquire is
+  // NON-BLOCKING: this outer gate passes on virtually every pass, and a blocking
+  // acquire that loses the peek→acquire race would park the loop task behind a whole
+  // page render, stalling input polling. Deferrable work retries next pass instead.
   if (!RenderLock::peek() && buildViewportWidth > 0 && !partialRebuildStartFailed) {
-    RenderLock lock;
-    if (section && !section->isBuilding() && section->isPartial() &&
+    RenderLock lock{RenderLock::TryAcquire{}};
+    if (lock.locked() && section && !section->isBuilding() && section->isPartial() &&
         section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
       // Same reason as the renderBook()-site cancel: this build's parse pump (the
@@ -888,17 +897,18 @@ void EpubReaderActivity::loop() {
       requestUpdate();
     }
   }
-  // Same locking rule as above; the heap gate is re-checked under the lock because the
-  // acquire can block long enough for the heap picture to change. bgBuildTaskHandle is
-  // this task's own state (created and cleared here), so it stays outside.
+  // Same locking rule (and same non-blocking acquire) as above; the heap gate is
+  // re-checked under the lock because state can shift between gate and acquire.
+  // bgBuildTaskHandle is this task's own state (created and cleared here), so it
+  // stays outside.
   if (bgBuildTaskHandle == nullptr && !RenderLock::peek() && buildTickHeapGate()) {
 #else
-  // Same locking rule as above; the heap gate is re-checked under the lock because the
-  // acquire can block long enough for the heap picture to change.
+  // Same locking rule (and same non-blocking acquire) as above; the heap gate is
+  // re-checked under the lock because state can shift between gate and acquire.
   if (!RenderLock::peek() && buildTickHeapGate()) {
 #endif
-    RenderLock lock;
-    if (section && section->isBuilding() &&
+    RenderLock lock{RenderLock::TryAcquire{}};
+    if (lock.locked() && section && section->isBuilding() &&
         (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD) &&
         buildTickHeapGate()) {
       if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
