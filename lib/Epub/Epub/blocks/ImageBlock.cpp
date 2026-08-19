@@ -590,11 +590,15 @@ bool ImageBlock::hasValidCache() const {
   // A payload already resident in the render cache is as good as the file, and
   // answering from RAM costs no SD access at all -- which is the point, because
   // this runs per image on the page-turn path (renderContents, via
-  // Page::hasImagesNeedingDecode). It also means an image whose file was removed
-  // underneath a live slot (cache cleanup) stops looking like undecoded work.
-  // That caller holds the RenderLock, which is this cache's only
-  // synchronization. The file check below remains the fallback for anything not
-  // (or no longer) resident.
+  // Page::hasImagesNeedingDecode) and, with CROSSPOINT_BG_IMAGE_DECODE, per
+  // image on up to three lookahead pages in the background pre-decoder's
+  // needsDecode() probe. Without it the pre-decoder re-opens the .pxc of every
+  // image it has already put in RAM, and an image whose file was removed
+  // underneath a live slot (cache cleanup) looks like undecoded work forever.
+  // Both of those callers hold the RenderLock, which is this cache's only
+  // synchronization -- verified: render() is handed the lock, and
+  // imageDecodeStep does its scan under a try-acquired one. The file check below
+  // remains the fallback for anything not (or no longer) resident.
   if (pxcLruHasImage(cachePath, width, height)) return true;
 #endif
   HalFile cacheFile;
