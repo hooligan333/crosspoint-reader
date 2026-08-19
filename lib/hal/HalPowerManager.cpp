@@ -9,6 +9,10 @@
 
 #include <cassert>
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+#include <esp_pm.h>
+#endif
+
 #include "HalGPIO.h"
 
 #if FREEINK_DEVICE_PAPERMONO
@@ -29,7 +33,79 @@ void HalPowerManager::begin() {
   normalFreq = getCpuFrequencyMhz();
   modeMutex = xSemaphoreCreateMutex();
   assert(modeMutex != nullptr);
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // Automatic light sleep: let esp_pm scale the clock between LOW_POWER_FREQ
+  // and the boot clock, and light-sleep the chip whenever every task is idle
+  // (FreeRTOS tickless idle) instead of burning the loop's delays awake. Needs
+  // CONFIG_PM_ENABLE + CONFIG_FREERTOS_USE_TICKLESS_IDLE in the env's
+  // sdkconfig; without them esp_pm_configure() fails and everything below
+  // degrades to a logged no-op — including the manual DFS this replaces, so
+  // the flag and the sdkconfig must ship together (they do, in [env:x4pro-combo]).
+  esp_pm_config_t pmCfg = {};
+  pmCfg.max_freq_mhz = normalFreq > 0 ? normalFreq : 240;
+  pmCfg.min_freq_mhz = LOW_POWER_FREQ;
+  pmCfg.light_sleep_enable = true;
+  const esp_err_t pmErr = esp_pm_configure(&pmCfg);
+  if (pmErr != ESP_OK) {
+    LOG_ERR("PWR", "esp_pm_configure failed (%d); auto light sleep unavailable", static_cast<int>(pmErr));
+    return;
+  }
+
+  esp_pm_lock_handle_t active = nullptr;
+  esp_pm_lock_handle_t render = nullptr;
+  esp_pm_lock_handle_t noSleep = nullptr;
+  esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "cpActive", &active);
+  esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "cpRender", &render);
+  esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "cpAwake", &noSleep);
+  if (active == nullptr || render == nullptr || noSleep == nullptr) {
+    // Locks are the only way back to full speed (and the only way to hold sleep
+    // off for WiFi/USB) once this config is live, so a config applied without
+    // them would strand the device at the floor. Revert to a fixed-max
+    // no-sleep config and disable the feature for this session.
+    LOG_ERR("PWR", "esp_pm lock creation failed; auto light sleep disabled");
+    esp_pm_config_t fixed = {};
+    fixed.max_freq_mhz = pmCfg.max_freq_mhz;
+    fixed.min_freq_mhz = pmCfg.max_freq_mhz;
+    fixed.light_sleep_enable = false;
+    esp_pm_configure(&fixed);
+    if (active != nullptr) esp_pm_lock_delete(active);
+    if (render != nullptr) esp_pm_lock_delete(render);
+    if (noSleep != nullptr) esp_pm_lock_delete(noSleep);
+    return;
+  }
+
+  pmActiveLock = active;
+  pmRenderLock = render;
+  pmNoSleepLock = noSleep;
+  // Boot continues at full speed; the first setPowerSaving(true) releases it.
+  setPmLockHeld(pmActiveLock, pmActiveHeld, true);
+  LOG_INF("PWR", "Auto light sleep on (DFS %d-%d MHz)", pmCfg.min_freq_mhz, pmCfg.max_freq_mhz);
+#endif
 }
+
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+void HalPowerManager::setPmLockHeld(void* const lock, bool& held, const bool want) {
+  if (lock == nullptr || held == want) {
+    return;
+  }
+  auto* const handle = static_cast<esp_pm_lock_handle_t>(lock);
+  if (want) {
+    esp_pm_lock_acquire(handle);
+  } else {
+    esp_pm_lock_release(handle);
+  }
+  held = want;
+}
+
+void HalPowerManager::updateNoLightSleepLock() {
+  setPmLockHeld(pmNoSleepLock, pmNoSleepHeld, pmWifiBlocked || pmUsbBlocked);
+}
+
+void HalPowerManager::noteUsbConnected(const bool connected) {
+  pmUsbBlocked = connected;
+  updateNoLightSleepLock();
+}
+#endif
 
 void HalPowerManager::setPowerSaving(bool enabled) {
   if (normalFreq <= 0) {
@@ -42,6 +118,32 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     enabled = false;
   }
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // PM mode: "power saving" means releasing the interactive CPU_FREQ_MAX lock
+  // and letting DFS drop to the floor with tickless light sleep between wakes.
+  // Render Locks hold their own counted lock, so no mode bookkeeping is
+  // consulted here — the PM subsystem arbitrates the concurrent requests.
+  if (pmActiveLock == nullptr) {
+    return;  // esp_pm unavailable; no manual DFS either (see begin())
+  }
+  // Sleep is also suppressed outright while WiFi is up. Capping the clock is
+  // not enough on this path: unlike the manual-DFS branch below, where "no
+  // power saving" simply meant staying at full speed, light sleep here would
+  // halt the whole chip and drop the association. Sampled from the same
+  // WiFi.getMode() read the branch above already does, on the same loop task
+  // that owns the USB half of this lock, so the two never race.
+  pmWifiBlocked = wifiMode != WIFI_MODE_NULL;
+  updateNoLightSleepLock();
+  if (enabled == pmActiveHeld) {  // the lock state is about to change
+    if (enabled) {
+      LOG_DBG("PWR", "Going to low-power mode (pm)");
+    } else {
+      LOG_DBG("PWR", "Restoring full speed (pm)");
+    }
+  }
+  setPmLockHeld(pmActiveLock, pmActiveHeld, !enabled);
+  isLowPower = enabled;
+#else
   // Note: We don't use mutex here to avoid too much overhead,
   // it's not very important if we read a slightly stale value for currentLockMode
   const LockMode mode = currentLockMode;
@@ -64,6 +166,7 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   }
 
   // Otherwise, no change needed
+#endif
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
@@ -138,6 +241,24 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   return _batteryCachedPercent / 10;
 }
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+HalPowerManager::Lock::Lock() {
+  // esp_pm locks are counted, so concurrent Locks compose naturally — the
+  // manual-DFS path's one-Lock-at-a-time limitation does not apply here. valid
+  // records whether this instance took a reference, so the dtor returns exactly
+  // the ones the ctor took.
+  valid = powerManager.pmRenderLock != nullptr;
+  if (valid) {
+    esp_pm_lock_acquire(static_cast<esp_pm_lock_handle_t>(powerManager.pmRenderLock));
+  }
+}
+
+HalPowerManager::Lock::~Lock() {
+  if (valid) {
+    esp_pm_lock_release(static_cast<esp_pm_lock_handle_t>(powerManager.pmRenderLock));
+  }
+}
+#else
 HalPowerManager::Lock::Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
   // Current limitation: only one lock at a time
@@ -162,3 +283,4 @@ HalPowerManager::Lock::~Lock() {
   }
   xSemaphoreGive(powerManager.modeMutex);
 }
+#endif
