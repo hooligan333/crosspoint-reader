@@ -502,12 +502,22 @@ void EpubReaderActivity::bgBuildTaskLoop() {
       vTaskDelay(1);
     } else {
       // Idle: block on a notification instead of polling, so tickless light
-      // sleep isn't held off by this task all session. renderBook() notifies
-      // after resolving a new render spec (covers build starts, page turns, and
-      // settings changes) and stopBgBuildTask() notifies for exit, so the long
-      // timeout is only a fallback; the short one covers transient lock/heap
+      // sleep isn't held off by this task all session. Every work arrival is
+      // notified from INSIDE the same RenderLock scope as the state change it
+      // announces: renderBook() after resolving a new render spec (build
+      // starts, page turns, settings changes, jumps — and with them the
+      // prebuild and pre-decode cursors, which key off exactly that state),
+      // loop()'s lazy partial-extension start, and stopBgBuildTask() for exit.
+      // The lock scope — not any give/store ordering — is the load-bearing
+      // invariant: a pass can't interleave between state and notify, because
+      // while the writer holds the lock the pass's TryAcquire fails (25 ms
+      // cadence), and once it releases, state and pending notify are both
+      // visible. What the long timeout still bounds is a retry of deferrable
+      // idle work (a heap-gated or aborted pre-decode), never anything the
+      // reader is waiting on, which is what makes it stretchable to the
+      // board's sleep window. The short one covers transient lock/heap
       // declines. Index 0 is this task's own slot — nothing else posts to it.
-      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(workPlausible ? 25 : 250));
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(workPlausible ? 25u : BACKGROUND_IDLE_PARKED_WAIT_MS));
     }
   }
   bgBuildExited.store(true, std::memory_order_release);
