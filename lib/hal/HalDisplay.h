@@ -61,6 +61,13 @@ class HalDisplay {
   // Power management
   void deepSleep();
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // Passthrough to EpdBus::setBusyWaitSliceHook (see its contract). Exposed
+  // through the HAL so main.cpp can force the SDK's level-polled refresh wait
+  // under automatic light sleep without reaching into SDK classes directly.
+  void setBusyWaitSliceHook(bool (*sliceHook)(int8_t busyPin, uint8_t busyLevel));
+#endif
+
   // Access to frame buffer
   uint8_t* getFrameBuffer() const;
 

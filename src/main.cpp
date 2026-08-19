@@ -145,6 +145,19 @@ enum class BootResume : uint8_t {
   SplashlessWake,  // wake from deep sleep with the splash suppressed by the SD flag
 };
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+// Installed on the SDK's EpdBus to force its LEVEL-POLLED refresh wait. With
+// automatic light sleep on, the ISR completion path can miss the BUSY edge
+// taken while the chip sleeps (edge detectors are clock-gated in light sleep)
+// and stall the wait toward its 30 s timeout; the polled path re-reads the pin
+// level after every idle step and is immune either way — waitRefreshComplete()
+// documents exactly this fallback and selects it on the hook's mere presence.
+// Returning false keeps the SDK's own delay() pacing for the idle step, which
+// is a single tick: below the tickless-idle threshold, so an active wait does
+// not sleep at all, and harmless if it ever did (the level is re-read).
+static bool lightSleepBusySlice(int8_t /*busyPin*/, uint8_t /*busyLevel*/) { return false; }
+#endif
+
 // Latched true once enterDeepSleep() commits to sleeping, before it tears down
 // the current activity. WiFi activities call silentRestart() in onExit() to
 // clear heap fragmentation on the way out, but deep sleep is a full chip reset
@@ -477,6 +490,17 @@ void setup() {
   // only SD state survives to the next boot.
   const bool wakeHoldVerified = wakeupReason != HalGPIO::WakeupReason::PowerButton || gpio.verifyPowerButtonWakeup();
 
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // Before the first refresh: the boot paint happens long before loop() runs,
+  // so the polled wait has to be selected here or that paint takes the ISR path.
+  // After the wake-verify bail above: a rejected spurious wake goes straight
+  // back to deep sleep and needs neither the hook nor the USB seed.
+  display.setBusyWaitSliceHook(&lightSleepBusySlice);
+  // Seed the USB suppression level. loop() only sees plug/unplug EDGES, and the
+  // first one is consumed by the gpio.update() calls inside setup().
+  powerManager.noteUsbConnected(gpio.isUsbConnected());
+#endif
+
   // X4 Pro and X4 Classic both map BTN_UP to GPIO0 — an ESP32-S3 boot strap — so
   // gate recovery on the non-strap Down key (GPIO7) to avoid a stuck-in-recovery loop.
   const auto recoveryButton = (BoardConfig::isX4Pro() || BoardConfig::isX4Classic()) ? MappedInputManager::Button::Down
@@ -681,6 +705,15 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+  // Track the USB host state for the sleep-suppression lock. Here rather than
+  // at the battery-icon repaint further down, which several of loop()'s early
+  // returns skip: this is a level the lock must not get wrong, and the edge is
+  // reported only for the one update() that saw the change.
+  if (gpio.wasUsbStateChanged()) {
+    powerManager.noteUsbConnected(gpio.isUsbConnected());
+  }
+#endif
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
