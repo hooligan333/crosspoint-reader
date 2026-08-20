@@ -1,6 +1,7 @@
 #include "Epub.h"
 
 #include <FsHelpers.h>
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -299,7 +300,7 @@ void Epub::parseCssFiles() const {
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
     // Check heap before parsing - CSS parsing allocates heavily
-    const uint32_t freeHeap = ESP.getFreeHeap();
+    const uint32_t freeHeap = gateFreeHeap();
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());

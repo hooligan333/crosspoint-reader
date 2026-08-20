@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -210,9 +211,9 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
 
 bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definition, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, std::vector<std::unique_ptr<Page>>& pagesOut) {
-  if (ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
-    LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", ESP.getFreeHeap(),
-            ESP.getMaxAllocHeap());
+  if (gateFreeHeap() < MIN_STYLED_FREE_HEAP || gateMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
+    LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", static_cast<unsigned>(gateFreeHeap()),
+            static_cast<unsigned>(gateMaxAllocHeap()));
     return false;
   }
 
@@ -257,13 +258,13 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
             limitReason = "page count";
           } else if (pageElements > MAX_STYLED_PAGE_ELEMENTS - retainedElements) {
             limitReason = "element count";
-          } else if (ESP.getFreeHeap() < MIN_STYLED_RETAIN_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_RETAIN_ALLOC) {
+          } else if (gateFreeHeap() < MIN_STYLED_RETAIN_HEAP || gateMaxAllocHeap() < MIN_STYLED_RETAIN_ALLOC) {
             limitReason = "free heap";
           }
           if (limitReason != nullptr) {
             LOG_ERR("DHTML", "Styled definition stopped on %s (pages=%u elements=%u free=%u contig=%u)", limitReason,
                     static_cast<unsigned>(pagesOut.size()), static_cast<unsigned>(retainedElements + pageElements),
-                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+                    static_cast<unsigned>(gateFreeHeap()), static_cast<unsigned>(gateMaxAllocHeap()));
             resourceLimitHit = true;
             pagesOut.clear();
             return;
