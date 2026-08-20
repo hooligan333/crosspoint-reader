@@ -600,22 +600,24 @@ bool EpubReaderActivity::htmlInflateAbortRequested(void* ctx) {
   return static_cast<EpubReaderActivity*>(ctx)->bgHtmlInflateAbort.load(std::memory_order_acquire);
 }
 
-void EpubReaderActivity::cancelBackgroundHtmlInflate() {
-  if (!bgHtmlInflateActive.load(std::memory_order_acquire)) return;
+EpubReaderActivity::HtmlInflateCancel EpubReaderActivity::cancelBackgroundHtmlInflate() {
+  if (!bgHtmlInflateActive.load(std::memory_order_acquire)) return HtmlInflateCancel::Idle;
   bgHtmlInflateAbort.store(true, std::memory_order_release);
   const uint32_t start = millis();
   while (bgHtmlInflateActive.load(std::memory_order_acquire)) {
     if (millis() - start >= HTML_INFLATE_CANCEL_TIMEOUT_MS) {
       // Deliberately leaves the abort flag raised (see the header note): the
-      // inflate we failed to join can then still not promote its temp file,
-      // which is the only way it could disturb the caller.
+      // inflate we failed to join can then still not promote its temp file.
+      // It DOES still hold an open write handle, which is why destructive
+      // callers must treat TimedOut as "decline".
       LOG_ERR("ERS", "Background HTML inflate (spine %d) did not stop within %ums", bgHtmlInflateSpine,
               (unsigned)HTML_INFLATE_CANCEL_TIMEOUT_MS);
-      return;
+      return HtmlInflateCancel::TimedOut;
     }
     delay(1);
   }
   LOG_DBG("ERS", "Background HTML inflate stopped in %ums", (unsigned)(millis() - start));
+  return HtmlInflateCancel::Cancelled;
 }
 
 // One HTML pre-inflate step, run on the background build task when there is
@@ -1486,9 +1488,15 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           section.reset();
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
           // The tree about to be deleted is where a background pre-inflate
-          // writes; stop it first so it cannot recreate files (or its html
-          // subdirectory) behind the removal.
-          cancelBackgroundHtmlInflate();
+          // writes. Stop it first — and if it will not stop (cancel timeout),
+          // DECLINE the deletion: removeDir would free the cluster chain under
+          // the inflate's open write handle (SdFat has no open-file table),
+          // cross-linking the filesystem. The user can simply retry.
+          if (cancelBackgroundHtmlInflate() == HtmlInflateCancel::TimedOut) {
+            LOG_ERR("ERS", "Cache clear declined: background inflate still running");
+            onGoHome();
+            return;
+          }
 #endif
           epub->clearCache();
           epub->setupCacheDir();

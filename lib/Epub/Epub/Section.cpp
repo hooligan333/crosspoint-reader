@@ -423,6 +423,12 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // inflation entirely. It's promoted by an atomic rename as soon as the inflate succeeds (below), so
   // even a window-only giant spine -- whose .bin never finalizes -- still caches its HTML, letting a
   // reopen skip the multi-second inflate. If htmlPath exists it is known-complete.
+  // Reap a stale background pre-inflate temp (power loss mid-inflate leaves
+  // one, and the decline memory means no later pre-inflate would clean it).
+  {
+    const std::string staleBgTmp = htmlBackgroundTmpPath(*epub, spineIndex);
+    if (Storage.exists(staleBgTmp.c_str())) Storage.remove(staleBgTmp.c_str());
+  }
   const bool reusedHtml = Storage.exists(htmlPath.c_str());
   bool htmlCached = reusedHtml;
   if (reusedHtml) {

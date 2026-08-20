@@ -284,7 +284,12 @@ class EpubReaderActivity final : public ReaderActivity {
   //    that can be a prebuild just adopted at a boundary;
   //  * the reader menu's DELETE_CACHE -- it removes the tree being written to;
   //  * stopBgBuildTask() -- so the join is not held for a whole inflate.
-  void cancelBackgroundHtmlInflate();
+  // Idle = nothing was running; Cancelled = stopped within the timeout;
+  // TimedOut = the inflate is STILL RUNNING (abort stays latched, so it cannot
+  // promote its temp — but it still holds an open write handle in the cache
+  // tree, so destructive callers must decline).
+  enum class HtmlInflateCancel : uint8_t { Idle, Cancelled, TimedOut };
+  HtmlInflateCancel cancelBackgroundHtmlInflate();
   static bool htmlInflateAbortRequested(void* ctx);
   std::atomic<bool> bgHtmlInflateActive{false};
   std::atomic<bool> bgHtmlInflateAbort{false};
@@ -303,15 +308,22 @@ class EpubReaderActivity final : public ReaderActivity {
   // allocation race marks its image failed for the whole session. Leave room
   // for both rather than win a race for the last block; pre-inflating is pure
   // opportunism and declining costs only today's behavior.
-  static constexpr size_t HTML_INFLATE_MIN_FREE_HEAP = 96 * 1024;
-  // The 32 KB inflate window is a single contiguous allocation.
-  static constexpr size_t HTML_INFLATE_MIN_MAX_ALLOC = 48 * 1024;
+  // ~59 KB for THIS inflate plus the same again for a concurrent render-path
+  // lazy image extract, with margin — 96 KB only covered one of the pair, and
+  // a render extract that loses the allocation race marks its image failed for
+  // the whole session.
+  static constexpr size_t HTML_INFLATE_MIN_FREE_HEAP = 128 * 1024;
+  // The 32 KB inflate window is a single contiguous allocation, and the
+  // render's own window must still fit after ours is carved out.
+  static constexpr size_t HTML_INFLATE_MIN_MAX_ALLOC = 80 * 1024;
   // Cap for the cancel wait. The abort is polled between output chunks and
-  // before the commit rename, so the longest uninterruptible span is a central
-  // directory lookup plus one 8 KB inflate+write -- tens of ms on a healthy
-  // card. Reaching the cap means something is wrong; the caller proceeds
-  // anyway (a render has no useful way to decline loading its chapter) and the
-  // still-raised abort flag is what keeps the runaway inflate from promoting.
+  // before the commit rename, but the span BEFORE the first output byte is not
+  // interruptible and is not small on many-spine books: a fresh ZipFile scans
+  // the central directory linearly under the storage mutex, so a 1000+-entry
+  // EPUB contending with foreground SD traffic can plausibly exceed this cap.
+  // A timeout is therefore an expected rare event, not a bug signal: callers
+  // proceed (destructive ones must DECLINE instead — see DELETE_CACHE) and the
+  // still-raised abort flag keeps the runaway inflate from promoting.
   static constexpr uint32_t HTML_INFLATE_CANCEL_TIMEOUT_MS = 3000;
 #endif
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
