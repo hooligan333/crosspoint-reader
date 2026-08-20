@@ -128,6 +128,44 @@ class Section {
   // giant spine) zip inflation. Lets the reader skip the indexing popup on a fast reopen/rebuild.
   bool hasHtmlCache() const;
 
+  // --- Chapter HTML cache -----------------------------------------------------
+  // The unzipped chapter HTML lives in the per-book cache dir keyed only on the spine index -- never on
+  // render settings -- which is why it survives the invalidation that wipes the layout (.bin) caches.
+  // These are static so a caller that holds no Section for the spine (the reader's background
+  // pre-inflate of the NEXT chapter) derives byte-for-byte the same paths this class does.
+  static std::string htmlCacheDir(const Epub& epub);
+  static std::string htmlCachePath(const Epub& epub, int spineIndex);
+  // Temp file the synchronous build path inflates into before promoting it.
+  static std::string htmlBuildTmpPath(const Epub& epub, int spineIndex);
+  // Temp file for a background pre-inflate. Deliberately DISTINCT from the build path's temp: the two
+  // writers must never share a destination file, so that even a cancel that fails to stop the
+  // background inflate in time (see the reader's interlock) can only cost duplicated work -- never a
+  // half-written file under the other writer's handle.
+  static std::string htmlBackgroundTmpPath(const Epub& epub, int spineIndex);
+
+  enum class HtmlInflate : uint8_t {
+    Promoted,  // complete bytes are at htmlCachePath(); the temp is gone (atomic rename)
+    TempOnly,  // complete bytes, but the rename failed: they are still at tmpHtmlPath
+    Failed,    // no usable output; the temp file has been removed
+    Aborted,   // abortFn asked to stop; the temp file has been removed
+  };
+  // Polled between output chunks and once more at the commit point (immediately before the rename), so
+  // a caller running this off the render lock can stop it within one chunk. Return true to abandon.
+  using HtmlInflateAbortFn = bool (*)(void* ctx);
+  // Stream one spine's HTML out of the EPUB zip into the html cache, via a temp file promoted by an
+  // atomic rename. Extracted from startBuild() so the reader's background pre-inflate runs the
+  // identical code path instead of a copy of it; with abortFn == nullptr (what the synchronous build
+  // passes) this is the original loop, retries and logs included.
+  //
+  // Thread-safety: everything it touches is either a parameter or immutable Epub state --
+  // Epub::readItemContentsToStream is const and builds its own ZipFile (its own HalFile handle) per
+  // call, and every file operation is serialized by HalStorage's mutex. It shares no handle with any
+  // other task. What it does NOT do is coordinate with a second writer of the same paths; that is the
+  // caller's interlock to provide.
+  static HtmlInflate inflateHtmlToCache(const Epub& epub, const std::string& localPath, int spineIndex,
+                                        const std::string& tmpHtmlPath, HtmlInflateAbortFn abortFn = nullptr,
+                                        void* abortCtx = nullptr);
+
   // Look up the page number for an anchor id from the section cache file.
   std::optional<uint16_t> getPageForAnchor(const std::string& anchor) const;
 
