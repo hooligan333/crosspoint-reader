@@ -138,6 +138,13 @@ void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.
 
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
 
+void HalDisplay::displayGrayBufferFactory(bool turnOffScreen) {
+  // nullptr lut: the driver picks its own factory table (lut_factory_quality).
+  einkDisplay.displayGrayBuffer(turnOffScreen, nullptr, /*factoryMode=*/true);
+}
+
+bool HalDisplay::supportsFactoryGrayscale() const { return einkDisplay.supportsFactoryGrayscale(); }
+
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
                                        yStart, numRows);

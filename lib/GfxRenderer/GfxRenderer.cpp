@@ -480,6 +480,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
 
   if (bitmap != nullptr) {
+    // Hoisted out of the per-pixel loop: which plane encoding the marking rule
+    // below follows (see marksGrayscalePlane / kFactoryDarkness).
+    const bool factoryEncoding = renderer.usesGrayscaleFactoryEncoding();
     // For Normal:  outer loop advances screenY, inner loop advances screenX
     // For Rotated: outer loop advances screenX, inner loop advances screenY (in reverse)
     int outerBase, innerBase;
@@ -512,17 +515,13 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
           const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+          if (renderMode == GfxRenderer::BW) {
             // Black (also paints over the grays in BW mode)
-            renderer.drawPixel(screenX, screenY, pixelState);
-          } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-            // Light gray (also mark the MSB if it's going to be a dark gray too)
-            // Dedicated X3 gray LUTs now provide proper 4-level gray on both devices
-            // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
-            renderer.drawPixel(screenX, screenY, false);
-          } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-            // Dark gray
-            renderer.drawPixel(screenX, screenY, false);
+            if (bmpVal < 3) renderer.drawPixel(screenX, screenY, pixelState);
+          } else if (marksGrayscalePlane(renderMode, factoryEncoding, bmpVal)) {
+            // Grayscale plane: 0 = leave alone, 1 = this plane's bit is set.
+            // Which values mark which plane is the encoding's business.
+            renderer.markPlanePixel(screenX, screenY);
           }
         }
       }
@@ -543,6 +542,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           const uint8_t byte = bitmap[pixelPosition >> 3];
           const uint8_t bit_index = 7 - (pixelPosition & 7);
 
+          // 1-bit fonts have no gray levels, so ink goes through drawPixel in
+          // every mode: under the refinement encoding that clears the plane bit
+          // (code 00 = keep, correct — the B/W base already drew the glyph);
+          // under factory encoding drawPixel's polarity flips and the same call
+          // sets both plane bits (code 11 = black), which is what an absolute
+          // frame needs.
           if ((byte >> bit_index) & 1) {
             renderer.drawPixel(screenX, screenY, pixelState);
           }
@@ -583,7 +588,13 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   const uint32_t byteIndex = rowY * panelWidthBytes + (phyX / 8);
   const uint8_t bitPosition = 7 - (phyX % 8);  // MSB first
 
-  if (state) {
+  // Framebuffer ink convention: black clears the bit, white sets it. While a
+  // grayscale plane is rendered under the factory (absolute darkness) encoding
+  // that polarity inverts — a black pixel must SET the bit in both planes
+  // (code 11 = black) and a white one must leave it clear (code 00 = white).
+  // One XOR keeps every drawPixel-based primitive (lines, rects, arcs, icons,
+  // dithers, 1-bit glyphs) correct in both encodings.
+  if (state != planeInvert) {
     target[byteIndex] &= ~(1 << bitPosition);  // Clear bit
   } else {
     target[byteIndex] |= 1 << bitPosition;  // Set bit
@@ -1023,31 +1034,23 @@ void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const 
   const int32_t panelStride = static_cast<int32_t>(panelWidthBytes);
 
   if constexpr (C == Color::Black || C == Color::White) {
-    // Solid fill. Framebuffer: 0 = black, 1 = white.
-    const uint8_t fillByte = (C == Color::Black) ? 0x00u : 0xFFu;
+    // Solid fill. Framebuffer: 0 = black, 1 = white — but a grayscale plane
+    // rendered under the factory (absolute darkness) encoding inverts that, so
+    // a black fill SETS its bits (code 11) and a white fill clears them (00).
+    // Same flip drawPixel applies; without it the status bar's progress bar
+    // would be driven white on an image page's single-pass frame.
+    const uint8_t fillByte = ((C == Color::Black) != planeInvert) ? 0x00u : 0xFFu;
     for (int py = phyY0; py <= phyY1; ++py) {
       uint8_t* row = target + static_cast<int32_t>(py - originY) * panelStride;
       if (byteStart == byteEnd) {
         const uint8_t mask = headMask & tailMask;
-        if constexpr (C == Color::Black) {
-          row[byteStart] &= static_cast<uint8_t>(~mask);
-        } else {
-          row[byteStart] |= mask;
-        }
+        row[byteStart] = static_cast<uint8_t>((row[byteStart] & ~mask) | (mask & fillByte));
       } else {
-        if constexpr (C == Color::Black) {
-          row[byteStart] &= static_cast<uint8_t>(~headMask);
-          if (byteEnd > byteStart + 1) {
-            memset(row + byteStart + 1, fillByte, byteEnd - byteStart - 1);
-          }
-          row[byteEnd] &= static_cast<uint8_t>(~tailMask);
-        } else {
-          row[byteStart] |= headMask;
-          if (byteEnd > byteStart + 1) {
-            memset(row + byteStart + 1, fillByte, byteEnd - byteStart - 1);
-          }
-          row[byteEnd] |= tailMask;
+        row[byteStart] = static_cast<uint8_t>((row[byteStart] & ~headMask) | (headMask & fillByte));
+        if (byteEnd > byteStart + 1) {
+          memset(row + byteStart + 1, fillByte, byteEnd - byteStart - 1);
         }
+        row[byteEnd] = static_cast<uint8_t>((row[byteEnd] & ~tailMask) | (tailMask & fillByte));
       }
     }
   } else {
@@ -1122,7 +1125,10 @@ void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const 
 
     for (int py = phyY0; py <= phyY1; ++py) {
       const uint8_t blackMask = blackMasks[py & 1];
-      const uint8_t whiteMask = static_cast<uint8_t>(~blackMask);
+      // Bits to write for the "not black" pixels of the pattern: 1 in the
+      // framebuffer's white, but 0 under the inverted factory plane polarity
+      // (where a set bit means ink). Matches drawPixelDither's per-pixel form.
+      const uint8_t whiteMask = planeInvert ? blackMask : static_cast<uint8_t>(~blackMask);
 
       // Dither writes BOTH inks (the slow path called drawPixel for every
       // pixel — setting or clearing — so we must do the same). Inside the
@@ -1390,6 +1396,9 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     return;
   }
 
+  // Hoisted out of the per-pixel loop; see marksGrayscalePlane / kFactoryDarkness.
+  const bool factoryEncoding = usesGrayscaleFactoryEncoding();
+
   for (int bmpY = 0; bmpY < (bitmap.getHeight() - cropPixY); bmpY++) {
     // The BMP's (0, 0) is the bottom-left corner (if the height is positive, top-left if negative).
     // Screen's (0, 0) is the top-left corner.
@@ -1433,12 +1442,10 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
-      if (renderMode == BW && val < 3) {
-        drawPixel(screenX, screenY);
-      } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
-        drawPixel(screenX, screenY, false);
-      } else if (renderMode == GRAYSCALE_LSB && val == 1) {
-        drawPixel(screenX, screenY, false);
+      if (renderMode == BW) {
+        if (val < 3) drawPixel(screenX, screenY);
+      } else if (marksGrayscalePlane(renderMode, factoryEncoding, val)) {
+        markPlanePixel(screenX, screenY);
       }
     }
   }
@@ -2221,6 +2228,10 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
 void GfxRenderer::displayGrayBuffer() const { display.displayGrayBuffer(fadingFix); }
+
+void GfxRenderer::displayGrayBufferFactory() const { display.displayGrayBufferFactory(fadingFix); }
+
+bool GfxRenderer::supportsFactoryGrayscale() const { return display.supportsFactoryGrayscale(); }
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
   // Guard the uint16_t casts below: a negative would wrap to a huge length.

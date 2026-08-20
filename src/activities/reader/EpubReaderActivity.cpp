@@ -2242,6 +2242,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // flash on every AA page.
   const bool combinedGrayscaleBase = tiledGrayscale && !pageHasImages && renderer.combinesGrayscaleBase();
   const bool overlapRefresh = tiledGrayscale && renderer.supportsAsyncRefresh() && !pageHasImages;
+#ifdef CROSSPOINT_IMG_FACTORY_GRAY
+  // Single-activation absolute 4-gray for image pages. The panel's OEM factory
+  // waveform paints a finished 4-level frame from ANY prior screen state, so
+  // both the B/W base activation and the slow refinement activation (whose
+  // wash / inverse-hold / snap phases read as several visible passes) collapse
+  // into one. Gated on the driver capability so UC8279-X4 device batches keep
+  // today's path; on night mode being off (the SDK's grayscale entry points
+  // no-op while inverted, but the intent is explicit here); and on there being
+  // no manual refresh gesture — that one keeps the old path for its HALF clean.
+  const bool factoryGrayPage = pageHasImages && tiledGrayscale && renderer.supportsFactoryGrayscale() &&
+                               SETTINGS.screenInverted == 0 && !manualRefreshPending;
+#endif
   auto renderGrayscalePass = [&]() {
     if (needsTextGrayscale) {
       page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
@@ -2261,6 +2273,78 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderStatusBar();
   const auto tBwRender = millis();
 
+  // Tiled grayscale band machinery, shared by the refinement path below and the
+  // factory single-pass path: render one plane band-by-band into `bandScratch`,
+  // streaming each finished band straight to controller RAM. `pass` draws the
+  // frame and is re-run per band, clipped by the strip target.
+  constexpr int STRIP_ROWS = 80;
+  const int gh = renderer.getDisplayHeight();
+  const int gwBytes = renderer.getDisplayWidthBytes();
+  const auto renderPlaneStrips = [&](const bool lsbPlane, uint8_t* bandScratch, auto&& pass) {
+    renderer.setRenderMode(lsbPlane ? GfxRenderer::GRAYSCALE_LSB : GfxRenderer::GRAYSCALE_MSB);
+    for (int y = 0; y < gh; y += STRIP_ROWS) {
+      const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+      renderer.beginStripTarget(bandScratch, y, rows);
+      renderer.clearScreen(0x00);
+      pass();
+      renderer.endStripTarget();
+      renderer.writeGrayscalePlaneStrip(lsbPlane, bandScratch, y, rows);
+    }
+  };
+
+#ifdef CROSSPOINT_IMG_FACTORY_GRAY
+  if (factoryGrayPage) {
+    auto factoryScratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+    if (!factoryScratch) {
+      // Nothing has reached the panel yet on this path (the B/W base is
+      // deliberately never activated), so bailing silently would leave the user
+      // staring at the OLD page. Display the intact B/W framebuffer instead and
+      // skip the grays.
+      LOG_ERR("ERS", "OOM: factory gray strip scratch (%d bytes); B/W only this page", gwBytes * STRIP_ROWS);
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      pagesUntilFullRefresh = 1;
+      return;
+    }
+    // Under the absolute encoding an unmarked pixel is DRIVEN white, so each
+    // plane pass has to carry the whole frame — page content and status bar —
+    // not just the pixels a refinement pass would touch. The B/W render above
+    // still stands in the framebuffer: cleanupGrayscaleWithFrameBuffer() needs
+    // it to re-seed the RED-RAM differential baseline.
+    const auto renderFullFrame = [&]() {
+      page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+      renderStatusBar();
+    };
+
+    renderer.setGrayscaleFactoryEncoding(true);
+    renderPlaneStrips(true, factoryScratch.get(), renderFullFrame);
+    const auto tGrayLsb = millis();
+    renderPlaneStrips(false, factoryScratch.get(), renderFullFrame);
+    const auto tGrayMsb = millis();
+
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.setGrayscaleFactoryEncoding(false);
+    // One activation, absolute waveform. It self-powers the panel down when it
+    // finishes, exactly as the 0xCC refinement activation already does.
+    renderer.displayGrayBufferFactory();
+    const auto tGrayDisplay = millis();
+
+    // RED RAM still holds the MSB plane; re-seed it from the B/W framebuffer so
+    // the next differential page turn diffs against a valid baseline.
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    const auto tEnd = millis();
+    // Same bookkeeping image pages get today: the panel now carries 4-gray
+    // content a differential update cannot fully erase.
+    pagesUntilFullRefresh = 1;
+
+    LOG_DBG("ERS",
+            "Page render (factory gray): prewarm=%lums bw_render=%lums gray_lsb=%lums gray_msb=%lums "
+            "gray_display=%lums cleanup=%lums total=%lums",
+            tPrewarm - t0, tBwRender - tPrewarm, tGrayLsb - tBwRender, tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb,
+            tEnd - tGrayDisplay, tEnd - t0);
+    return;
+  }
+#endif
+
   if (pageHasImages) {
     // Image pages use one base refresh before the grayscale pass. FAST leaves
     // the panel receptive to the gray waveform; pending cleanup still honors
@@ -2279,9 +2363,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tDisplay = millis();
 
   if (tiledGrayscale) {
-    constexpr int STRIP_ROWS = 80;
-    const int gh = renderer.getDisplayHeight();
-    const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
 
     auto renderPlaneToBuffer = [&](const bool lsbPlane, uint8_t* buf) {
@@ -2348,26 +2429,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.cleanupGrayscaleWithFrameBuffer();
         }
       } else {
-        renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-        for (int y = 0; y < gh; y += STRIP_ROWS) {
-          const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
-          renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
-          renderGrayscalePass();
-          renderer.endStripTarget();
-          renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
-        }
+        renderPlaneStrips(true, scratch.get(), renderGrayscalePass);
         const auto tGrayLsb = millis();
 
-        renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-        for (int y = 0; y < gh; y += STRIP_ROWS) {
-          const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
-          renderer.beginStripTarget(scratch.get(), y, rows);
-          renderer.clearScreen(0x00);
-          renderGrayscalePass();
-          renderer.endStripTarget();
-          renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
-        }
+        renderPlaneStrips(false, scratch.get(), renderGrayscalePass);
         const auto tGrayMsb = millis();
 
         renderer.setRenderMode(GfxRenderer::BW);
