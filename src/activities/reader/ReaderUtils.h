@@ -159,8 +159,17 @@ inline bool isTouchMenuGesture(const GfxRenderer& renderer, const MappedInputMan
 // Async callers must not touch the framebuffer until
 // renderer.waitRefreshComplete() and must rebuild the differential baseline
 // before the next page turn (the tiled grayscale cleanup does).
-inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false,
+                                    bool forceClean = false) {
+  // Night mode: a clean refresh's ghost-clear phases drive every pixel through
+  // its complement — a full bright frame in the dark. Scheduled cleans are
+  // therefore demoted to FAST while inverted; ghosting clears on the user's
+  // explicit refresh gesture (forceClean), and leaving night mode already
+  // forces a ghost-clearing HALF via the display core's inversion-dirty path.
+  // The cadence bookkeeping below runs unchanged so the schedule stays aligned.
+  const bool cleanDue = pagesUntilFullRefresh <= 1;
+  const bool cleanAllowed = forceClean || SETTINGS.screenInverted == 0;
+  const auto mode = (cleanDue && cleanAllowed) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
   if (async) {
     renderer.displayBufferAsync(mode);
   } else {
@@ -178,12 +187,15 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // out as one waveform — displaying the base separately makes the gray pass
 // re-drive the whole text body (a visible flash). Other panels display
 // normally. Same refresh-cadence bookkeeping as displayWithRefreshCycle.
-inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh,
+                                        bool forceClean = false) {
   if (!renderer.combinesGrayscaleBase()) {
-    displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, forceClean);
     return;
   }
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  // Same night-mode demotion as displayWithRefreshCycle above.
+  const bool cleanAllowed = forceClean || SETTINGS.screenInverted == 0;
+  const auto mode = (pagesUntilFullRefresh <= 1 && cleanAllowed) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
   renderer.displayGrayscaleBase(mode);
   if (pagesUntilFullRefresh <= 1) {
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
