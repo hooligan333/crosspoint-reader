@@ -26,12 +26,14 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   // reflected user intent in the first place.
   bool lightOnChanged = false;
   bool draggingSlider = false;
+  bool inverted = false;
   int panelBottom = 0;
 
   static void panelScreen(UiScreen& screen, void* user);
   static void onBrightnessEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onWarmthEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onToggleEvent(const freeink::ui::ActionEvent& event, void* user);
+  static void onInvertEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onBrightnessStepEvent(const freeink::ui::ActionEvent& event, void* user);
   static void onWarmthStepEvent(const freeink::ui::ActionEvent& event, void* user);
 
@@ -42,6 +44,7 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   void adjustBrightness(int delta);
   void adjustWarmth(int delta);
   void toggleLight();
+  void toggleInversion();
   void close();
 
  public:

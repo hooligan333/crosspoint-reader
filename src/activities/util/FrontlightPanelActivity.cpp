@@ -22,6 +22,7 @@ constexpr fui::ActionId ACTION_WARMTH = 2;
 constexpr fui::ActionId ACTION_TOGGLE = 3;
 constexpr fui::ActionId ACTION_BRIGHTNESS_STEP = 4;
 constexpr fui::ActionId ACTION_WARMTH_STEP = 5;
+constexpr fui::ActionId ACTION_INVERT = 6;
 constexpr int BUTTON_BRIGHTNESS_STEP = 5;
 constexpr int FINE_STEP = 1;
 
@@ -49,12 +50,17 @@ void FrontlightPanelActivity::onEnter() {
     Frontlight.setBrightness(brightness);
   }
   lightOn = Frontlight.isOn();
+  // Night mode is a reader preference (ActivityManager applies it per render,
+  // reading surfaces only), so the setting is the source of truth — the display
+  // flag just reflects whatever screen rendered last.
+  inverted = SETTINGS.screenInverted != 0;
   lightOnChanged = false;
 
   resetUi();
   app.on(ACTION_BRIGHTNESS, &FrontlightPanelActivity::onBrightnessEvent, this);
   app.on(ACTION_WARMTH, &FrontlightPanelActivity::onWarmthEvent, this);
   app.on(ACTION_TOGGLE, &FrontlightPanelActivity::onToggleEvent, this);
+  app.on(ACTION_INVERT, &FrontlightPanelActivity::onInvertEvent, this);
   app.on(ACTION_BRIGHTNESS_STEP, &FrontlightPanelActivity::onBrightnessStepEvent, this);
   app.on(ACTION_WARMTH_STEP, &FrontlightPanelActivity::onWarmthStepEvent, this);
   app.setScreen(&FrontlightPanelActivity::panelScreen, this);
@@ -102,6 +108,10 @@ void FrontlightPanelActivity::onWarmthEvent(const fui::ActionEvent& event, void*
 
 void FrontlightPanelActivity::onToggleEvent(const fui::ActionEvent&, void* user) {
   static_cast<FrontlightPanelActivity*>(user)->toggleLight();
+}
+
+void FrontlightPanelActivity::onInvertEvent(const fui::ActionEvent&, void* user) {
+  static_cast<FrontlightPanelActivity*>(user)->toggleInversion();
 }
 
 void FrontlightPanelActivity::onBrightnessStepEvent(const fui::ActionEvent& event, void* user) {
@@ -174,6 +184,15 @@ void FrontlightPanelActivity::toggleLight() {
   lightOn = !lightOn;
   lightOnChanged = true;
   Frontlight.setOn(lightOn);
+  requestUpdate();
+}
+
+void FrontlightPanelActivity::toggleInversion() {
+  inverted = SETTINGS.screenInverted == 0;
+  SETTINGS.screenInverted = inverted ? 1 : 0;
+  SETTINGS.saveToFile();
+  // No direct display flip: the reader repaints inverted when this overlay
+  // closes (ActivityManager resolves polarity per render).
   requestUpdate();
 }
 
@@ -259,17 +278,24 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
   } else {
     snprintf(line, sizeof(line), "%s  %u%%", tr(STR_BRIGHTNESS), static_cast<unsigned>(brightness));
   }
+  // Filled glyphs signal the active state: solid sun = light on, solid moon = night mode.
   const fui::BitmapRef sunIcon = fui::bitmapFromIcon(lightOn ? icon_sun_filled_32 : icon_sun_32);
+  const fui::BitmapRef moonIcon = fui::bitmapFromIcon(inverted ? icon_moon_filled_32 : icon_moon_32);
   const int16_t iconWidth = static_cast<int16_t>(sunIcon.width);
   const int16_t iconHeight = static_cast<int16_t>(sunIcon.height);
   const int16_t controlWidth = static_cast<int16_t>(iconWidth + theme.spaceLg * 2);
   const fui::Rect sunHit{static_cast<int16_t>(headerRow.right() - controlWidth), headerRow.y, controlWidth, rowHeight};
+  const fui::Rect invertHit{static_cast<int16_t>(sunHit.x - controlWidth), headerRow.y, controlWidth, rowHeight};
   const fui::Rect sunRect{static_cast<int16_t>(sunHit.x + (controlWidth - iconWidth) / 2),
                           static_cast<int16_t>(headerRow.y + (rowHeight - iconHeight) / 2), iconWidth, iconHeight};
+  const fui::Rect moonRect{static_cast<int16_t>(invertHit.x + (controlWidth - iconWidth) / 2),
+                           static_cast<int16_t>(headerRow.y + (rowHeight - iconHeight) / 2), iconWidth, iconHeight};
   const fui::Rect labelRect{headerRow.x, static_cast<int16_t>(headerRow.y + (rowHeight - lineHeight) / 2),
-                            static_cast<int16_t>(headerRow.width - controlWidth - theme.spaceMd), lineHeight};
+                            static_cast<int16_t>(headerRow.width - controlWidth * 2 - theme.spaceMd), lineHeight};
   screen.target().text(labelRect, line, theme.bodyText);
+  screen.frame().hit(invertHit, ACTION_INVERT, 0, fui::InputTouch, inverted ? fui::StateSelected : fui::StateNormal);
   screen.frame().hit(sunHit, ACTION_TOGGLE);
+  screen.target().bitmap(moonRect, moonIcon, fui::BitmapMode::Center);
   screen.target().bitmap(sunRect, sunIcon, fui::BitmapMode::Center);
 
   addStepSlider(screen, screen.takeTop(theme.rowHeight, theme.spaceLg).inset(sideInset), dimStep > 0 ? 0 : brightness,
