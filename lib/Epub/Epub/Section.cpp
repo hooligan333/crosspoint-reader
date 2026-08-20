@@ -68,6 +68,38 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+
+// Print sink that forwards to the temp file but can refuse a chunk. ZipFile's streamer treats a short
+// write as a hard failure on this path (allowEarlyStop is false), so returning 0 stops the inflate at
+// an output-chunk boundary and leaves an incomplete temp behind -- which the retry loop then removes.
+// That is what bounds a cancel of a background pre-inflate to roughly one 8KB chunk. Only interposed
+// when an abort predicate is supplied; the synchronous build path still writes to the HalFile directly.
+class AbortableHtmlSink final : public Print {
+ public:
+  AbortableHtmlSink(HalFile& file, const Section::HtmlInflateAbortFn abortFn, void* const abortCtx)
+      : file_(file), abortFn_(abortFn), abortCtx_(abortCtx) {}
+  size_t write(const uint8_t* buffer, size_t size) override {
+    if (checkAbort()) return 0;
+    return file_.write(buffer, size);
+  }
+  size_t write(uint8_t b) override {
+    if (checkAbort()) return 0;
+    return file_.write(b);
+  }
+  // Sticky: once a chunk was refused the stream is abandoned, so the caller must be able to tell an
+  // abort from a genuine write failure after the streamer has returned.
+  bool aborted() const { return aborted_; }
+
+ private:
+  bool checkAbort() {
+    if (!aborted_ && abortFn_ && abortFn_(abortCtx_)) aborted_ = true;
+    return aborted_;
+  }
+  HalFile& file_;
+  Section::HtmlInflateAbortFn abortFn_;
+  void* abortCtx_;
+  bool aborted_ = false;
+};
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -243,6 +275,114 @@ bool Section::clearCache() const {
   return true;
 }
 
+std::string Section::htmlCacheDir(const Epub& epub) { return epub.getCachePath() + "/html"; }
+
+std::string Section::htmlCachePath(const Epub& epub, const int spineIndex) {
+  return htmlCacheDir(epub) + "/" + std::to_string(spineIndex) + ".html";
+}
+
+std::string Section::htmlBuildTmpPath(const Epub& epub, const int spineIndex) {
+  return htmlCacheDir(epub) + "/.tmp_" + std::to_string(spineIndex) + ".html";
+}
+
+std::string Section::htmlBackgroundTmpPath(const Epub& epub, const int spineIndex) {
+  return htmlCacheDir(epub) + "/.tmpbg_" + std::to_string(spineIndex) + ".html";
+}
+
+Section::HtmlInflate Section::inflateHtmlToCache(const Epub& epub, const std::string& localPath, const int spineIndex,
+                                                 const std::string& tmpHtmlPath, const HtmlInflateAbortFn abortFn,
+                                                 void* const abortCtx) {
+  const std::string htmlPath = htmlCachePath(epub, spineIndex);
+  Storage.mkdir(htmlCacheDir(epub).c_str());
+
+  // Retry logic for SD card timing issues
+  bool streamed = false;
+  bool aborted = false;
+  uint32_t fileSize = 0;
+  for (int attempt = 0; attempt < 3 && !streamed && !aborted; attempt++) {
+    if (attempt > 0) {
+      LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
+      delay(50);  // Brief delay before retry
+    }
+
+    // Remove any incomplete file from previous attempt before retrying
+    if (Storage.exists(tmpHtmlPath.c_str())) {
+      Storage.remove(tmpHtmlPath.c_str());
+    }
+
+    HalFile tmpHtml;
+    if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
+      continue;
+    }
+    // Larger chunks mean far fewer SD writes inflating the HTML; a 1KB chunk turned a 584KB
+    // single-spine novel into ~570 tiny writes (multi-second). 8KB keeps the transient buffers
+    // small while cutting the write count 8x -- and it is also the abort granularity for a
+    // cancellable (background) inflate.
+    AbortableHtmlSink sink(tmpHtml, abortFn, abortCtx);
+    streamed = abortFn ? epub.readItemContentsToStream(localPath, sink, 8192)
+                       : epub.readItemContentsToStream(localPath, tmpHtml, 8192);
+    fileSize = tmpHtml.size();
+    // Explicitly close() file before calling Storage.remove()
+    tmpHtml.close();
+    aborted = sink.aborted();
+
+    // If streaming failed, remove the incomplete file immediately
+    if (!streamed && Storage.exists(tmpHtmlPath.c_str())) {
+      Storage.remove(tmpHtmlPath.c_str());
+      LOG_DBG("SCT", "Removed incomplete temp file after failed attempt");
+    }
+  }
+
+  // An abort normally arrives as a short write, i.e. as !streamed, so the removal above has already
+  // taken the partial temp with it -- there is no state left for the caller to unwind. One extra
+  // poll for the case where the attempts failed at openFileForWrite and never reached the sink: a
+  // failure that coincides with an abort is reported as the abort, since the caller's response to
+  // that (retry later) is the safe one either way.
+  if (!streamed && abortFn && abortFn(abortCtx)) {
+    aborted = true;
+  }
+  if (aborted) {
+    LOG_DBG("SCT", "HTML inflate aborted: %s", tmpHtmlPath.c_str());
+    return HtmlInflate::Aborted;
+  }
+
+  if (!streamed) {
+    LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
+    return HtmlInflate::Failed;
+  }
+
+  LOG_DBG("SCT", "Streamed temp HTML to %s (%d bytes)", tmpHtmlPath.c_str(), fileSize);
+
+  // Commit point. The rename below publishes this file to every reader of the html cache, so poll the
+  // abort one last time first: a canceller that gave up waiting wants the promotion not to happen at
+  // all (it is about to inflate the same spine itself, and would then be parsing a file this rename
+  // swapped under its open handle).
+  if (abortFn && abortFn(abortCtx)) {
+    Storage.remove(tmpHtmlPath.c_str());
+    LOG_DBG("SCT", "HTML inflate aborted before promotion: %s", tmpHtmlPath.c_str());
+    return HtmlInflate::Aborted;
+  }
+
+  // Someone else promoted this spine while we were streaming. Their file holds the same zip entry
+  // decoded the same way, so ours adds nothing -- and renaming over theirs could swap the file out
+  // from under a parser that already has it open for read. Keep the temp and let the caller decide
+  // (the synchronous build parses it; a background pre-inflate drops it). Only reachable with a
+  // second, concurrent writer, i.e. never on the synchronous path alone.
+  if (Storage.exists(htmlPath.c_str())) {
+    LOG_DBG("SCT", "HTML cache already present; keeping temp %s", tmpHtmlPath.c_str());
+    return HtmlInflate::TempOnly;
+  }
+
+  // Promote to the persistent HTML cache immediately -- the inflate is complete and the bytes are
+  // valid regardless of whether the layout build finishes, so reopening (even a window-only spine
+  // that never finalizes its .bin) skips re-inflation. If the rename fails we just parse the temp.
+  if (Storage.rename(tmpHtmlPath.c_str(), htmlPath.c_str())) {
+    return HtmlInflate::Promoted;
+  }
+  LOG_DBG("SCT", "Failed to promote HTML cache; parsing from temp");
+  return HtmlInflate::TempOnly;
+}
+
 bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
   // One-shot build: start, then lay out the whole section in a single pass.
   if (!startBuild(spec, popupFn)) {
@@ -274,9 +414,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   }
 
   const auto localPath = epub->getSpineItem(spineIndex).href;
-  const auto htmlDir = epub->getCachePath() + "/html";
-  const auto htmlPath = htmlDir + "/" + std::to_string(spineIndex) + ".html";
-  const auto tmpHtmlPath = htmlDir + "/.tmp_" + std::to_string(spineIndex) + ".html";
+  const auto htmlPath = htmlCachePath(*epub, spineIndex);
+  const auto tmpHtmlPath = htmlBuildTmpPath(*epub, spineIndex);
 
   // Create cache directory if it doesn't exist
   {
@@ -295,56 +434,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   if (reusedHtml) {
     LOG_DBG("SCT", "Reusing cached HTML %s", htmlPath.c_str());
   } else {
-    Storage.mkdir(htmlDir.c_str());
-
-    // Retry logic for SD card timing issues
-    bool streamed = false;
-    uint32_t fileSize = 0;
-    for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
-      if (attempt > 0) {
-        LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
-        delay(50);  // Brief delay before retry
-      }
-
-      // Remove any incomplete file from previous attempt before retrying
-      if (Storage.exists(tmpHtmlPath.c_str())) {
-        Storage.remove(tmpHtmlPath.c_str());
-      }
-
-      HalFile tmpHtml;
-      if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
-        continue;
-      }
-      // Larger chunks mean far fewer SD writes inflating the HTML; a 1KB chunk turned a 584KB
-      // single-spine novel into ~570 tiny writes (multi-second). 8KB keeps the transient buffers
-      // small while cutting the write count 8x.
-      streamed = epub->readItemContentsToStream(localPath, tmpHtml, 8192);
-      fileSize = tmpHtml.size();
-      // Explicitly close() file before calling Storage.remove()
-      tmpHtml.close();
-
-      // If streaming failed, remove the incomplete file immediately
-      if (!streamed && Storage.exists(tmpHtmlPath.c_str())) {
-        Storage.remove(tmpHtmlPath.c_str());
-        LOG_DBG("SCT", "Removed incomplete temp file after failed attempt");
-      }
-    }
-
-    if (!streamed) {
-      LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
+    // Same inflate the reader's background pre-inflate of the next chapter runs (see
+    // inflateHtmlToCache); passing no abort predicate makes it the original synchronous loop.
+    const HtmlInflate inflated = inflateHtmlToCache(*epub, localPath, spineIndex, tmpHtmlPath);
+    if (inflated != HtmlInflate::Promoted && inflated != HtmlInflate::TempOnly) {
       return false;
     }
-
-    LOG_DBG("SCT", "Streamed temp HTML to %s (%d bytes)", tmpHtmlPath.c_str(), fileSize);
-
-    // Promote to the persistent HTML cache immediately -- the inflate is complete and the bytes are
-    // valid regardless of whether the layout build finishes, so reopening (even a window-only spine
-    // that never finalizes its .bin) skips re-inflation. If the rename fails we just parse the temp.
-    if (Storage.rename(tmpHtmlPath.c_str(), htmlPath.c_str())) {
-      htmlCached = true;
-    } else {
-      LOG_DBG("SCT", "Failed to promote HTML cache; parsing from temp");
-    }
+    htmlCached = (inflated == HtmlInflate::Promoted);
   }
 
   if (!Storage.openFileForWrite("SCT", binTmpPath(), file)) {
@@ -469,10 +565,7 @@ bool Section::buildSomeMore(const int maxPages) {
   }
 }
 
-bool Section::hasHtmlCache() const {
-  const std::string htmlPath = epub->getCachePath() + "/html/" + std::to_string(spineIndex) + ".html";
-  return Storage.exists(htmlPath.c_str());
-}
+bool Section::hasHtmlCache() const { return Storage.exists(htmlCachePath(*epub, spineIndex).c_str()); }
 
 std::optional<uint16_t> Section::findAnchorDuringBuild(const std::string& anchor) const {
   if (!build_ || !build_->parser) return std::nullopt;
