@@ -2301,7 +2301,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // staring at the OLD page. Display the intact B/W framebuffer instead and
       // skip the grays.
       LOG_ERR("ERS", "OOM: factory gray strip scratch (%d bytes); B/W only this page", gwBytes * STRIP_ROWS);
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      // HALF when a clean is due: the previous page was almost always itself a
+      // factory-gray image page (this path sets pagesUntilFullRefresh = 1), and
+      // a FAST differential cannot erase its 4-gray content — the fallback
+      // would land under heavy ghosting, defeating its purpose.
+      renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
       pagesUntilFullRefresh = 1;
       return;
     }
