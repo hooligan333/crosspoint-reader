@@ -1,6 +1,7 @@
 #include "JpegToBmpConverter.h"
 
 #include <HalDisplay.h>
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
 #include <Logging.h>
@@ -529,8 +530,10 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
                                                      bool boundOutputToTarget) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
+  const size_t decoderFreeHeap = gateFreeHeap();
+  if (decoderFreeHeap < MIN_FREE_HEAP) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", static_cast<unsigned>(decoderFreeHeap),
+            MIN_FREE_HEAP);
     return false;
   }
 

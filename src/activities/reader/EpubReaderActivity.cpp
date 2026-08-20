@@ -9,6 +9,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -313,8 +314,8 @@ void EpubReaderActivity::openReaderMenu() {
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
-  const size_t freeHeap = ESP.getFreeHeap();
-  const size_t maxBlock = ESP.getMaxAllocHeap();
+  const size_t freeHeap = gateFreeHeap();
+  const size_t maxBlock = gateMaxAllocHeap();
   buildHeapPaused = freeHeap < BACKGROUND_BUILD_MIN_FREE_HEAP || maxBlock < BACKGROUND_BUILD_MIN_MAX_ALLOC;
   return !buildHeapPaused;
 }
@@ -673,8 +674,7 @@ bool EpubReaderActivity::imageDecodeStep(bool& workPlausible) {
       imageDecodeBasePage = section->currentPage;
       imageDecodeDeclined = 0;
     }
-    if (ESP.getFreeHeap() < IMAGE_DECODE_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < IMAGE_DECODE_MIN_MAX_ALLOC)
-      return false;
+    if (gateFreeHeap() < IMAGE_DECODE_MIN_FREE_HEAP || gateMaxAllocHeap() < IMAGE_DECODE_MIN_MAX_ALLOC) return false;
 
     std::unique_ptr<Page> page;
     // The page this scan reads: either `page` above, or the resident cache entry
@@ -819,7 +819,7 @@ void EpubReaderActivity::loop() {
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
   if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
       lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
-      ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+      gateFreeHeap() > RENDER_MIN_FREE_HEAP && gateMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
     RenderLock lock;
     if (section && !section->isBuilding() &&
@@ -2245,8 +2245,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     constexpr size_t PLANE_BUF_HEADROOM = 60000;
     constexpr size_t PLANE_BUF_MAX_ALLOC_RESERVE = 16 * 1024;
     const auto planeBufFits = [planeBytes] {
-      return ESP.getFreeHeap() >= planeBytes + PLANE_BUF_HEADROOM &&
-             ESP.getMaxAllocHeap() >= planeBytes + PLANE_BUF_MAX_ALLOC_RESERVE;
+      return gateFreeHeap() >= planeBytes + PLANE_BUF_HEADROOM &&
+             gateMaxAllocHeap() >= planeBytes + PLANE_BUF_MAX_ALLOC_RESERVE;
     };
     auto lsbPlaneBuf = (overlapRefresh && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
     auto msbPlaneBuf = (lsbPlaneBuf && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;

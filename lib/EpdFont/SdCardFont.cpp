@@ -1,5 +1,6 @@
 #include "SdCardFont.h"
 
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
@@ -118,7 +119,7 @@ void SdCardFont::resetStyleMiniData(PerStyle& s) {
   // when the heap is tight: the arenas are rebuildable for one page's worth of
   // allocations, and this floor keeps retained fonts out of the way of section
   // builds and the render path's own floors.
-  if (ESP.getFreeHeap() < MINI_RETAIN_MIN_FREE_HEAP) {
+  if (gateFreeHeap() < MINI_RETAIN_MIN_FREE_HEAP) {
     freeStyleMiniData(s);
     return;
   }
@@ -803,7 +804,7 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
       }
       const uint32_t perGlyph = bitmapPerGlyph + sizeof(EpdGlyph);
       constexpr uint32_t PREWARM_HEAP_HEADROOM = 16 * 1024;
-      const uint32_t freeHeap = ESP.getFreeHeap();
+      const uint32_t freeHeap = gateFreeHeap();
       const uint32_t budgetBytes = freeHeap > PREWARM_HEAP_HEADROOM ? freeHeap - PREWARM_HEAP_HEADROOM : 0;
       const uint32_t budgetGlyphs = budgetBytes / (perGlyph > 0 ? perGlyph : 1);
       if (budgetGlyphs < cpBudget) {
@@ -965,7 +966,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // Over MAX_PAGE_GLYPHS the union is abandoned (request-only rebuild), which
   // bounds mini RAM to the same worst case as a single dense page.
   std::unique_ptr<uint32_t[]> unionCps;
-  if (s.miniGlyphCount > 0 && s.miniIntervalCount > 0 && ESP.getFreeHeap() < MINI_RETAIN_MIN_FREE_HEAP) {
+  if (s.miniGlyphCount > 0 && s.miniIntervalCount > 0 && gateFreeHeap() < MINI_RETAIN_MIN_FREE_HEAP) {
     // Heap-tight (e.g. a chapter list stacked over an open book). Size-aware:
     // a small union (a UI screen's worth of titles, a few KB) is exactly what
     // stops per-string eviction from re-reading the SD on every repaint, so
@@ -978,7 +979,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         (s.miniBitmapUsed > 0 && s.miniGlyphCount > 0) ? s.miniBitmapUsed / s.miniGlyphCount : 64;
     const uint32_t estArenaBytes = unionMaxCount * (static_cast<uint32_t>(sizeof(EpdGlyph)) + avgBitmapBytes);
     constexpr uint32_t UNION_PRESSURE_HEADROOM = 12 * 1024;
-    if (estArenaBytes + UNION_PRESSURE_HEADROOM > ESP.getFreeHeap()) {
+    if (estArenaBytes + UNION_PRESSURE_HEADROOM > gateFreeHeap()) {
       freeStyleMiniData(s);
     }
   }
