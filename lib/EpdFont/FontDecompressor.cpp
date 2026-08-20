@@ -57,6 +57,15 @@ const uint8_t* FontDecompressor::getResidentGroup(const EpdFontData* fontData, u
     residentGroupCapacity = newCap;
   }
 
+  // Yield to the book: however far under budget the cache is, never take PSRAM
+  // that would leave less than the floor free — the image cache, book.bin
+  // mirror, and decode staging all degrade when PSRAM runs dry, and a font
+  // cache miss only costs a per-page inflate.
+  constexpr uint32_t RESIDENT_MIN_FREE_PSRAM = 1536u * 1024u;
+  if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < group.uncompressedSize + RESIDENT_MIN_FREE_PSRAM) {
+    return nullptr;
+  }
+
   // Group payloads live in PSRAM only. Deliberately no internal-heap fallback:
   // a session-lifetime cache must never capture internal RAM the render path
   // needs — when PSRAM is absent or exhausted, returning nullptr sends the
