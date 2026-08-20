@@ -23,6 +23,7 @@ target_include_directories(ChapterHtmlSlimParserTest PRIVATE
   ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
   ${REPO_ROOT}/lib/Memory
+  ${REPO_ROOT}/lib/hal
   ${REPO_ROOT}/lib/Serialization
   ${REPO_ROOT}/lib/MiniBidi
   ${REPO_ROOT}/lib/FsHelpers

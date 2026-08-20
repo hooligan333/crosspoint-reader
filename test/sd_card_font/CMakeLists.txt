@@ -9,6 +9,7 @@ target_include_directories(SdCardFontTest PRIVATE
   ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
   ${REPO_ROOT}/lib/Memory
+  ${REPO_ROOT}/lib/hal
 )
 target_link_libraries(SdCardFontTest PRIVATE crosspoint_test_common GTest::gtest_main)
 target_compile_options(SdCardFontTest PRIVATE -fno-exceptions)
