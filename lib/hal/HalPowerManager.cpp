@@ -28,6 +28,26 @@ HalPowerManager powerManager;  // Singleton instance
 static constexpr gpio_num_t XTEINK_C3_GPIO13 = GPIO_NUM_13;
 
 #if defined(CROSSPOINT_AUTO_LIGHT_SLEEP) && defined(CROSSPOINT_PM_STATS)
+#if !CONFIG_PM_LIGHT_SLEEP_CALLBACKS
+// The app-side sdkconfig view in this build system does not always reflect the
+// custom kernel config (the kernel IS built with CONFIG_PM_LIGHT_SLEEP_CALLBACKS,
+// see the env's custom_sdkconfig), so esp_pm.h hides these prototypes from app
+// code. Declare the contract locally, layout-matched to IDF 5.5's esp_pm.h; if
+// the config view ever heals, the guard yields to the real header.
+extern "C" {
+typedef esp_err_t (*esp_pm_light_sleep_cb_t)(int64_t sleep_time_us, void* arg);
+typedef struct {
+  esp_pm_light_sleep_cb_t enter_cb;
+  esp_pm_light_sleep_cb_t exit_cb;
+  void* enter_cb_user_arg;
+  void* exit_cb_user_arg;
+  uint32_t enter_cb_prior;
+  uint32_t exit_cb_prior;
+} esp_pm_sleep_cbs_register_config_t;
+esp_err_t esp_pm_light_sleep_register_cbs(esp_pm_sleep_cbs_register_config_t* cbs_conf);
+}
+#endif
+
 namespace {
 // Light-sleep residency counters, replacing the CONFIG_PM_PROFILING mode table
 // (kernels built with that option do not boot through the vendor boot chain --
