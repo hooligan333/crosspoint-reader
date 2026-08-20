@@ -341,7 +341,16 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
-  // smooth the battery %.
+  // smooth the battery %. Same poll throttle as the gauge branch above: the
+  // ADC read + EMA step otherwise runs on EVERY call, and callers that redraw
+  // the status bar several times per frame (the reader's per-band grayscale
+  // plane passes) would re-sample mid-frame — a percent flip between bands
+  // tears the bar across a band seam.
+  const unsigned long now = millis();
+  if (_batteryCachedPercent != 0 && _batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) {
+    return _batteryCachedPercent / 10;
+  }
+  _batteryLastPollMs = now;
   if (_batteryCachedPercent == 0) {
     _batteryCachedPercent = 10 * battery.readPercentage();
   } else {
