@@ -322,11 +322,15 @@ void TxtReaderActivity::renderPage(GfxRenderer& renderer) {
   renderLines();
   renderStatusBar();
 
+  // Consume the manual-refresh flag so an explicit gesture stays a real clean
+  // even while night mode demotes the scheduled ones.
+  const bool manualRefreshPending = forcedRefreshPending;
+  forcedRefreshPending = false;
   if (SETTINGS.textAntiAliasing) {
-    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh, manualRefreshPending);
     ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
   } else {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
   }
 }
 

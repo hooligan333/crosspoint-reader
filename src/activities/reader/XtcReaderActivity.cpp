@@ -282,7 +282,11 @@ void XtcReaderActivity::renderPage() {
     renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Bottom);
   }
 
-  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  // Consume the manual-refresh flag so an explicit gesture stays a real clean
+  // even while night mode demotes the scheduled ones.
+  const bool manualRefreshPending = forcedRefreshPending;
+  forcedRefreshPending = false;
+  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
 }
