@@ -45,6 +45,15 @@ class GfxRenderer {
   RenderMode renderMode;
   Orientation orientation;
   bool fadingFix;
+  // Grayscale plane encoding state (see the kFactoryDarkness block at the
+  // bottom of this header). `factoryEncoding` selects the absolute darkness
+  // encoding; `planeInvert` is the derived hot-path flag. While it is set,
+  // drawPixel()'s ink convention flips, so black UI primitives (status bar
+  // fills, separator lines, icons, 1-bit glyphs) SET both plane bits
+  // (code 11 = black) and white ones clear them (code 00 = white).
+  bool factoryEncoding = false;
+  bool planeInvert = false;
+  void updatePlanePolarity() { planeInvert = factoryEncoding && renderMode != BW; }
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -247,6 +256,13 @@ class GfxRenderer {
 
   // Drawing
   void drawPixel(int x, int y, bool state = true) const;
+  // Emit one grayscale plane bit at (x, y): always SETS the bit, whatever the
+  // current plane polarity. Plane buffers start cleared to 0 and a 1 means
+  // "this plane contributes its bit to the pixel's LUT row index", whereas
+  // drawPixel()'s `state` follows the framebuffer ink convention (true = black)
+  // and flips under factory encoding — so plane emission must not route through
+  // it. Passing `state == planeInvert` is exactly drawPixel's set-bit case.
+  void markPlanePixel(int x, int y) const { drawPixel(x, y, planeInvert); }
   void drawLine(int x1, int y1, int x2, int y2, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, int lineWidth, bool state) const;
   void drawArc(int maxRadius, int cx, int cy, int xDir, int yDir, int lineWidth, bool state) const;
@@ -314,8 +330,22 @@ class GfxRenderer {
   int getTextHeight(int fontId) const;
 
   // Grayscale functions
-  void setRenderMode(const RenderMode mode) { this->renderMode = mode; }
+  void setRenderMode(const RenderMode mode) {
+    this->renderMode = mode;
+    updatePlanePolarity();
+  }
   RenderMode getRenderMode() const { return renderMode; }
+  // Switch the grayscale planes between the two encodings documented at the
+  // bottom of this header. Off (the default, every existing caller) = the
+  // refinement encoding, whose 00 code is a "keep" no-op over an already
+  // displayed B/W base. On = the absolute factory darkness encoding, where an
+  // unmarked pixel is driven WHITE, so the plane passes must carry the WHOLE
+  // frame. Clear it again before returning to normal drawing.
+  void setGrayscaleFactoryEncoding(const bool enabled) {
+    factoryEncoding = enabled;
+    updatePlanePolarity();
+  }
+  bool usesGrayscaleFactoryEncoding() const { return factoryEncoding; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
   // panel; the no-arg overload settles the full frame. Call after the BW base
@@ -329,6 +359,13 @@ class GfxRenderer {
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  // Single-activation absolute 4-level grayscale (the panel's OEM "factory"
+  // waveform): paints a finished 4-gray frame from ANY prior screen state, so
+  // no B/W base activation is needed first. Requires the planes to have been
+  // rendered with setGrayscaleFactoryEncoding(true). supportsFactoryGrayscale()
+  // gates it (SSD1677 only today).
+  void displayGrayBufferFactory() const;
+  bool supportsFactoryGrayscale() const;
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+
@@ -401,3 +438,50 @@ class GfxRenderer {
   bool copyBufferToRegion(int logicalX, int logicalY, int logicalW, int logicalH, const uint8_t* buf,
                           size_t bufSize) const;
 };
+
+// --- Grayscale plane encodings ----------------------------------------------
+//
+// Two encodings share the LSB/MSB plane pair, and they are NOT interchangeable:
+//
+//  * refinement (default): the panel already shows the B/W base frame and the
+//    gray LUT's 00 row is a no-op "keep". Only the two mid-grays are marked;
+//    black and white pixels stay unmarked and survive from that base.
+//  * factory: one absolute activation paints the whole frame from any prior
+//    screen state. The 2-bit plane code is a DARKNESS level — 00 drives WHITE,
+//    11 drives BLACK — so an unmarked pixel is driven white and EVERY pixel
+//    that must survive has to be rendered into the planes.
+//
+// Plane -> LUT row indexing, read out of the driver rather than assumed:
+// Ssd1677Driver::writeGrayscalePlaneStrip()/copyGrayscaleLsb() put the LSB
+// plane in the controller's B/W RAM (CMD_WRITE_RAM_BW, 0x24) and the MSB plane
+// in its RED RAM (CMD_WRITE_RAM_RED, 0x26). The SSD16xx family selects the LUT
+// row with (old << 1) | new, i.e. (RED << 1) | BW, so the MSB plane carries
+// darkness bit 1 and the LSB plane darkness bit 0. Cross-checked against the
+// refinement LUT's own waveforms (Ssd1677Luts.h lut_grayscale): the existing
+// code marks light gray as MSB=1/LSB=0, which under this indexing is row 10 —
+// 9 VSL pulses, i.e. the strongest push toward white off the all-black base —
+// and dark gray as row 11 with 6, monotone in darkness. The opposite indexing
+// would put light gray on row 01, whose 7 VSH1 pulses drive TOWARD black and
+// could never lighten a black base. Same ordering holds in lut_factory_quality,
+// whose four rows end with progressively more positive (toward-black) drive as
+// the code counts up: 00 white, 01 light gray, 10 dark gray, 11 black.
+//
+// kFactoryDarkness maps the renderer's pixel value (0 = black, 1 = dark gray,
+// 2 = light gray, 3 = white — the post-swap scale every emission site uses) to
+// that darkness code. IF ON-DEVICE TESTING SHOWS THE TWO MID-GRAYS SWAPPED,
+// change this one line to {3, 1, 2, 0}.
+inline constexpr uint8_t kFactoryDarkness[4] = {3, 2, 1, 0};
+
+// Single decision point for every grayscale emission site (glyph paths, the
+// bitmap path, DirectPixelWriter): should `pixelValue` be marked in the plane
+// currently being rendered? Returns false in BW mode.
+constexpr bool marksGrayscalePlane(const GfxRenderer::RenderMode mode, const bool factoryEncoding,
+                                   const uint8_t pixelValue) {
+  if (mode == GfxRenderer::GRAYSCALE_MSB) {
+    return factoryEncoding ? (kFactoryDarkness[pixelValue] & 0x2) != 0 : (pixelValue == 1 || pixelValue == 2);
+  }
+  if (mode == GfxRenderer::GRAYSCALE_LSB) {
+    return factoryEncoding ? (kFactoryDarkness[pixelValue] & 0x1) != 0 : (pixelValue == 1);
+  }
+  return false;
+}
