@@ -2272,10 +2272,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tBwRender = millis();
 
   if (absoluteImageGrayscale) {
-    const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+    // Same night-mode demotion as the other base paths below: a clean refresh
+    // is a full bright frame in the dark. An explicit refresh gesture still
+    // gets the real clean.
+    const auto baseMode = (manualRefreshPending || (cleanImageBasePending && SETTINGS.screenInverted == 0))
+                              ? HalDisplay::HALF_REFRESH
+                              : HalDisplay::FAST_REFRESH;
     if (!renderer.displayGrayscaleBase(HalDisplay::GrayscaleMode::Absolute, baseMode)) {
       LOG_ERR("ERS", "Could not start absolute image page; displaying B/W");
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
       return;
     }
     LOG_DBG("ERS", "UC8279 image page: absolute quality waveform");
@@ -2284,27 +2289,35 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // Image pages use one base refresh before the grayscale pass. FAST leaves
     // the panel receptive to the gray waveform; pending cleanup still honors
     // the scheduled/manual HALF refresh.
-    renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    renderer.displayBuffer((manualRefreshPending || (cleanImageBasePending && SETTINGS.screenInverted == 0))
+                               ? HalDisplay::HALF_REFRESH
+                               : HalDisplay::FAST_REFRESH);
     pagesUntilFullRefresh = 1;
   } else if (combinedGrayscaleBase) {
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
-    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh, manualRefreshPending);
   } else if (needsAnyGrayscale) {
     if (pagesUntilFullRefresh <= 1) {
       // A cleanup refresh settles X3 correctly only when its grayscale
       // preconditioning waveform runs before the gray planes are written.
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      // Night mode demotes the scheduled clean to FAST the same way
+      // ReaderUtils::displayWithRefreshCycle does; an explicit refresh gesture
+      // still gets the real clean. The preconditioning pass runs either way —
+      // the gray planes need it whichever base waveform preceded them, and the
+      // cadence bookkeeping below is unchanged so the schedule stays aligned.
+      const bool cleanAllowed = manualRefreshPending || SETTINGS.screenInverted == 0;
+      renderer.displayBuffer(cleanAllowed ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
       renderer.preconditionGrayscale();
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else if (overlapRefresh) {
-      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/true);
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/true, manualRefreshPending);
     } else {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
       pagesUntilFullRefresh--;
     }
   } else {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
   }
   const auto tDisplay = millis();
 
