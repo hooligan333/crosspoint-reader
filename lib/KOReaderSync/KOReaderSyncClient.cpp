@@ -1,6 +1,7 @@
 #include "KOReaderSyncClient.h"
 
 #include <ArduinoJson.h>
+#include <HalHeapGauge.h>
 #include <Logging.h>
 #include <SecureHttpClient.h>
 #include <base64.h>
@@ -59,8 +60,8 @@ void applyAuthHeaders(freeink::SecureHttpClient& http) {
 
 // True when free heap is too low to risk a TLS handshake.
 bool insufficientHeap() {
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  const uint32_t freeHeap = gateFreeHeap();
+  const uint32_t maxAllocHeap = gateMaxAllocHeap();
   if (freeHeap < MIN_FREE_FOR_TLS || maxAllocHeap < MIN_BLOCK_FOR_TLS) {
     LOG_ERR("KOSync", "Insufficient heap for TLS handshake: %u bytes free (need %u), %u max alloc (need %u)", freeHeap,
             MIN_FREE_FOR_TLS, maxAllocHeap, MIN_BLOCK_FOR_TLS);

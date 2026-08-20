@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalHeapGauge.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
@@ -494,7 +495,7 @@ bool loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, u
   }
   for (size_t i = 0; i < chunkCount; i++) {
     const size_t want = remaining < PXC_CHUNK_SIZE ? remaining : PXC_CHUNK_SIZE;
-    if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE || ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
+    if (gateFreeHeap() < remaining + PXC_HEAP_RESERVE || gateMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
       releasePxcSlot();
       return false;
     }

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
+#include <HalHeapGauge.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -190,9 +191,9 @@ bool writeNormalizedXhtml(const std::string& html, HalFile& file) {
 
 bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definition, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, std::vector<std::unique_ptr<Page>>& pagesOut) {
-  if (ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
-    LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", ESP.getFreeHeap(),
-            ESP.getMaxAllocHeap());
+  if (gateFreeHeap() < MIN_STYLED_FREE_HEAP || gateMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
+    LOG_ERR("DHTML", "Low heap for styled definition (%u free, %u max block)", static_cast<unsigned>(gateFreeHeap()),
+            static_cast<unsigned>(gateMaxAllocHeap()));
     return false;
   }
 
@@ -228,7 +229,7 @@ bool buildDictionaryHtmlPages(GfxRenderer& renderer, const std::string& definiti
           if (resourceLimitHit) return;
           const size_t pageElements = page->elements.size();
           if (pagesOut.size() >= MAX_STYLED_PAGES || pageElements > MAX_STYLED_PAGE_ELEMENTS - retainedElements ||
-              ESP.getFreeHeap() < MIN_STYLED_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
+              gateFreeHeap() < MIN_STYLED_FREE_HEAP || gateMaxAllocHeap() < MIN_STYLED_MAX_ALLOC) {
             resourceLimitHit = true;
             pagesOut.clear();
             return;
