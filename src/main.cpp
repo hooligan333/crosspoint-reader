@@ -166,6 +166,24 @@ enum class BootResume : uint8_t {
 // PM_SLP_IRAM_OPT), so an active wait does not sleep at all, and it would be
 // harmless if it ever did (the level is re-read).
 static bool lightSleepBusySlice(int8_t /*busyPin*/, uint8_t /*busyLevel*/) { return false; }
+
+#ifdef CROSSPOINT_PM_STATS
+// Residency line for CMD:PMSTATS, from the app-level sleep-exit counters (the
+// kernel's CONFIG_PM_PROFILING table is unavailable: kernels built with it do
+// not boot through the vendor boot chain). Residency is slept-time over uptime;
+// millis() is esp_timer-backed and keeps counting across light sleep.
+static void printLightSleepStats() {
+  uint32_t entries = 0;
+  uint32_t sleptMs = 0;
+  powerManager.getLightSleepStats(entries, sleptMs);
+  const uint32_t uptimeMs = static_cast<uint32_t>(millis());
+  const uint32_t avgMs = entries > 0 ? sleptMs / entries : 0;
+  const uint32_t residencyPct =
+      uptimeMs > 0 ? static_cast<uint32_t>((static_cast<uint64_t>(sleptMs) * 100u) / uptimeMs) : 0;
+  logSerial.printf("LSSTATS entries=%lu slept_ms=%lu avg_ms=%lu residency=%lu%%\n", (unsigned long)entries,
+                   (unsigned long)sleptMs, (unsigned long)avgMs, (unsigned long)residencyPct);
+}
+#endif
 #endif
 
 // Latched true once enterDeepSleep() commits to sleeping, before it tears down
@@ -779,6 +797,9 @@ void loop() {
         logSerial.printf("PMSTATS uptime_ms=%lu\n", millis());
         esp_pm_dump_locks(stdout);
         fflush(stdout);
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+        printLightSleepStats();
+#endif
       }
 #endif
     }
@@ -794,6 +815,9 @@ void loop() {
       logSerial.printf("PMSTATS uptime_ms=%lu\n", millis());
       esp_pm_dump_locks(stdout);
       fflush(stdout);
+#ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
+      printLightSleepStats();
+#endif
     }
   }
 #endif
