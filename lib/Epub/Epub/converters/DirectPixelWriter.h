@@ -17,6 +17,10 @@
 struct DirectPixelWriter {
   uint8_t* fb;
   GfxRenderer::RenderMode mode;
+  // Which grayscale plane encoding the marking rule follows: the default
+  // refinement one (00 = keep over the displayed B/W base) or the absolute
+  // factory darkness one (00 = white). See GfxRenderer.h's kFactoryDarkness.
+  bool factoryEncoding;
   uint16_t displayWidthBytes;  // Runtime framebuffer stride (X4: 100, X3: 99)
   // Active write target: for tiled grayscale, fb is the band scratch, originY is
   // the band's top physical row, and clipRows is the band height. Off-band
@@ -40,6 +44,7 @@ struct DirectPixelWriter {
     originY = renderer.getWriteOriginY();
     clipRows = renderer.getWriteRows();
     mode = renderer.getRenderMode();
+    factoryEncoding = renderer.usesGrayscaleFactoryEncoding();
     displayWidthBytes = renderer.getDisplayWidthBytes();
 
     const int phyW = renderer.getDisplayWidth();
@@ -154,11 +159,11 @@ struct DirectPixelWriter {
         state = pixelValue < 3;
         break;
       case GfxRenderer::GRAYSCALE_MSB:
-        draw = (pixelValue == 1 || pixelValue == 2);
-        state = false;
-        break;
       case GfxRenderer::GRAYSCALE_LSB:
-        draw = (pixelValue == 1);
+        // state=false sets the plane bit; unmarked values are skipped, leaving
+        // the band scratch's cleared 0 in place. True for both encodings — only
+        // WHICH values mark differs, and that lives in marksGrayscalePlane().
+        draw = marksGrayscalePlane(mode, factoryEncoding, pixelValue);
         state = false;
         break;
       default:

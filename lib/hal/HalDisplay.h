@@ -99,6 +99,14 @@ class HalDisplay {
 
   void displayGrayBuffer(bool turnOffScreen = false);
 
+  // Absolute 4-level grayscale in ONE panel activation, using the controller's
+  // OEM "factory" waveform: it paints a finished 4-gray frame from any prior
+  // screen state, so no B/W base activation has to precede it. The planes must
+  // have been written with the absolute (darkness-code) encoding, not the
+  // refinement one. supportsFactoryGrayscale() gates the path.
+  void displayGrayBufferFactory(bool turnOffScreen = false);
+  bool supportsFactoryGrayscale() const;
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.
