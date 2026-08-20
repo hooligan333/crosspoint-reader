@@ -311,12 +311,10 @@ void handlePowerToggleLight() {
       // A Night Light dim step is exempt: it is a deliberate (and visible)
       // sub-1% dark-room level that lives outside percent mode, so
       // brightness() reads 0 while the panel is set exactly where the user
-      // wants it — and setBrightness() below would clear the step. The
-      // exemption holds only while the feature is enabled: disabling Night
-      // Light in Settings doesn't reconcile the HAL's step until the light
-      // panel is next opened, and a stale step must not dodge the floor.
+      // wants it — and setBrightness() below would clear the step. (The ladder
+      // is always enabled on this fork, so an active step is always deliberate.)
       if ((target & CrossPointSettings::TOGGLE_LIGHT_FRONTLIGHT) != 0 && Frontlight.brightness() == 0 &&
-          (Frontlight.dimStep() == 0 || SETTINGS.frontlightNightLight == 0)) {
+          Frontlight.dimStep() == 0) {
         if (SETTINGS.frontlightBrightness == 0) SETTINGS.frontlightBrightness = TOGGLE_LIGHT_DEFAULT_BRIGHTNESS;
         Frontlight.setBrightness(SETTINGS.frontlightBrightness);
       }
@@ -554,10 +552,9 @@ void setup() {
   // light off unless Restore Light on Wake is enabled; silent maintenance
   // reboots preserve the live state so they do not unexpectedly go dark.
   const bool restoreLightOn = SETTINGS.frontlightOn != 0 && (SETTINGS.frontlightRestoreOnWake != 0 || isSilentReboot);
-  // A persisted Night Light step only survives while the feature is enabled;
-  // toggling the setting off returns the light to plain percent brightness.
-  const uint8_t restoreDimStep =
-      SETTINGS.frontlightNightLight != 0 && Frontlight.supportsNightLight() ? SETTINGS.frontlightDimStep : 0;
+  // Fork policy: the Night Light ladder is always enabled where supported, so a
+  // persisted step is always restored.
+  const uint8_t restoreDimStep = Frontlight.supportsNightLight() ? SETTINGS.frontlightDimStep : 0;
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn, restoreDimStep);
 
   switch (wakeupReason) {

@@ -244,8 +244,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
 #if FREEINK_CAP_FRONTLIGHT
         SettingInfo::Toggle(StrId::STR_RESTORE_LIGHT_ON_WAKE, &CrossPointSettings::frontlightRestoreOnWake,
                             "frontlightRestoreOnWake", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Toggle(StrId::STR_NIGHT_LIGHT, &CrossPointSettings::frontlightNightLight, "frontlightNightLight",
-                            StrId::STR_CAT_DISPLAY),
 #endif
 
         // --- Reader ---

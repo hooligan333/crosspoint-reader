@@ -42,7 +42,7 @@ void FrontlightPanelActivity::onEnter() {
 
   brightness = Frontlight.brightness();
   warmth = Frontlight.warmth();
-  dimStep = SETTINGS.frontlightNightLight != 0 && Frontlight.supportsNightLight() ? Frontlight.dimStep() : 0;
+  dimStep = Frontlight.supportsNightLight() ? Frontlight.dimStep() : 0;
   // Night Light was toggled off while a dim step was live: return the
   // hardware to percent mode so the panel and the light agree again.
   // cppcheck-suppress knownConditionTrueFalse
@@ -126,7 +126,9 @@ void FrontlightPanelActivity::adjustBrightness(const int delta) {
   // Night Light: below the 1% floor the control walks a fixed sub-1% ladder
   // one step per press (regardless of the button's percent step size), and
   // the dimmest step is the floor — off stays on the sun toggle.
-  const bool nightLight = SETTINGS.frontlightNightLight != 0 && Frontlight.supportsNightLight();
+  // Fork policy: the ladder is always available where the hardware supports it
+  // (no settings toggle; the upstream-shaped opt-in was dropped on this fork).
+  const bool nightLight = Frontlight.supportsNightLight();
   // cppcheck-suppress knownConditionTrueFalse
   if (nightLight && (dimStep > 0 || (delta < 0 && brightness <= 1))) {
     int nextStep = dimStep;

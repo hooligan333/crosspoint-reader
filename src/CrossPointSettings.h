@@ -333,6 +333,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t frontlightRestoreOnWake = 1;
   // Night Light: extend the frontlight panel below its 1% floor with sub-1%
   // dim steps (0.8/0.6/0.4/0.2/0.1%) for dark-room reading.
+  // Unused on this fork (the ladder is always enabled where supported); kept so
+  // a settings.json written by an upstream-shaped build round-trips cleanly.
   uint8_t frontlightNightLight = 0;
   // Active sub-1% step, 0 = none (normal percent brightness applies). Persisted
   // like brightness so restore-on-wake comes back at the same dim level.
