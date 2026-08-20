@@ -445,6 +445,13 @@ void EpubReaderActivity::stopBgBuildTask() {
   // what keeps that global flag from ever touching a render-task decode.
   ImageBlock::cancelBackgroundDecode();
 #endif
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+  // Same reason and the same ordering constraint as the pre-decode cancel above:
+  // a pre-inflate in flight would otherwise hold the join for its whole
+  // remaining runtime. Raised only after the stop flag is published, so a task
+  // sitting between the two cannot start fresh work that neither flag stops.
+  cancelBackgroundHtmlInflate();
+#endif
   while (!bgBuildExited.load(std::memory_order_acquire)) {
     delay(1);
   }
@@ -487,6 +494,15 @@ void EpubReaderActivity::bgBuildTaskLoop() {
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
     if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
       didWork = prebuildStep();
+    }
+    // Below the cached prebuild (that one is what actually makes a boundary turn
+    // instant, and it is tens of ms under the lock), above the image pre-decode:
+    // this is one-shot per spine and has a deadline -- the boundary turn -- while
+    // the pre-decode re-arms every time the reader moves and would otherwise
+    // starve it indefinitely on an image-dense chapter. Costing the pre-decode
+    // at most one inflate of delay is the cheaper side of that trade.
+    if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
+      didWork = htmlInflateStep(workPlausible);
     }
 #endif
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
@@ -578,6 +594,126 @@ bool EpubReaderActivity::prebuildStep() {
   prebuiltSection = std::move(candidate);
   LOG_DBG("ERS", "Prebuilt next section %d (%s)", buildSpine, prebuiltSection->isPartial() ? "partial" : "ready");
   return true;
+}
+
+bool EpubReaderActivity::htmlInflateAbortRequested(void* ctx) {
+  return static_cast<EpubReaderActivity*>(ctx)->bgHtmlInflateAbort.load(std::memory_order_acquire);
+}
+
+void EpubReaderActivity::cancelBackgroundHtmlInflate() {
+  if (!bgHtmlInflateActive.load(std::memory_order_acquire)) return;
+  bgHtmlInflateAbort.store(true, std::memory_order_release);
+  const uint32_t start = millis();
+  while (bgHtmlInflateActive.load(std::memory_order_acquire)) {
+    if (millis() - start >= HTML_INFLATE_CANCEL_TIMEOUT_MS) {
+      // Deliberately leaves the abort flag raised (see the header note): the
+      // inflate we failed to join can then still not promote its temp file,
+      // which is the only way it could disturb the caller.
+      LOG_ERR("ERS", "Background HTML inflate (spine %d) did not stop within %ums", bgHtmlInflateSpine,
+              (unsigned)HTML_INFLATE_CANCEL_TIMEOUT_MS);
+      return;
+    }
+    delay(1);
+  }
+  LOG_DBG("ERS", "Background HTML inflate stopped in %ums", (unsigned)(millis() - start));
+}
+
+// One HTML pre-inflate step, run on the background build task when there is
+// nothing left to build and no cached prebuild to adopt. See the design note in
+// the header for the two-phase split and the interlock's invariants.
+//
+// Not gated on lastRenderSpecValid, unlike prebuildStep: the html cache is keyed
+// only on the book, never on render settings, so no spec has to match for the
+// bytes to stay usable -- which is also why nothing here can be invalidated by a
+// settings change while it runs.
+bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
+  std::shared_ptr<Epub> epubRef;
+  std::string localPath;
+  std::string tmpPath;
+  int target = -1;
+
+  {
+    RenderLock lock{RenderLock::TryAcquire{}};
+    if (!lock.locked()) {
+      workPlausible = true;
+      return false;
+    }
+    // Never while a build is running: this is strictly lower priority than the
+    // chapter the reader is waiting on, and a build's own parse pump inflates
+    // images out of the same zip. A partial section is the same case one step
+    // ahead -- loop() starts its extension build as soon as the reader nears
+    // the watermark, and that build would immediately cancel this.
+    if (!epub || !section || section->isBuilding() || section->isPartial()) return false;
+    // Same near-the-end arming window as the cached prebuild: three pages of
+    // reading is minutes, an inflate is seconds.
+    if (section->pageCount == 0 ||
+        section->currentPage + PREBUILD_NEAR_END_PAGES < static_cast<int>(section->pageCount))
+      return false;
+
+    target = currentSpineIndex + 1;
+    if (target >= epub->getSpineItemsCount()) return false;
+    if (htmlInflateDeclinedSpine == target) return false;
+    // A parked prebuild means the next spine already has a layout cache, which
+    // it could only have got from an inflate that ran to completion.
+    if (prebuiltSection && prebuiltSpineIndex == target) return false;
+    if (gateFreeHeap() < HTML_INFLATE_MIN_FREE_HEAP || gateMaxAllocHeap() < HTML_INFLATE_MIN_MAX_ALLOC) return false;
+
+    if (Storage.exists(Section::htmlCachePath(*epub, target).c_str())) {
+      htmlInflateDeclinedSpine = target;  // already inflated by an earlier visit
+      return false;
+    }
+    // Reads the shared book.bin metadata handle, so it belongs in this phase;
+    // the unlocked phase only ever sees the resulting value.
+    localPath = epub->getSpineItem(target).href;
+    if (localPath.empty()) {
+      htmlInflateDeclinedSpine = target;
+      return false;
+    }
+    tmpPath = Section::htmlBackgroundTmpPath(*epub, target);
+
+    // A shared_ptr copy for the same reason the pre-decode takes one:
+    // launchKOReaderSync() drops the Epub under the RenderLock WITHOUT joining
+    // this task, to free RAM for the TLS handshake.
+    epubRef = epub;
+    bgHtmlInflateSpine = target;
+    bgHtmlInflateAbort.store(false, std::memory_order_relaxed);
+    bgHtmlInflateActive.store(true, std::memory_order_release);
+  }
+
+  // ---- No RenderLock held from here ----------------------------------------
+  const unsigned long t0 = millis();
+  const Section::HtmlInflate result = Section::inflateHtmlToCache(*epubRef, localPath, target, tmpPath,
+                                                                  &EpubReaderActivity::htmlInflateAbortRequested, this);
+  // Publish the stop before anything else: a canceller is spinning on this.
+  bgHtmlInflateActive.store(false, std::memory_order_release);
+
+  // htmlInflateDeclinedSpine is written from here, off the lock, which is safe
+  // because only this task ever touches it (see the header note).
+  switch (result) {
+    case Section::HtmlInflate::Promoted:
+      htmlInflateDeclinedSpine = target;
+      LOG_DBG("ERS", "Pre-inflated HTML for spine %d in %lums", target, millis() - t0);
+      return true;
+    case Section::HtmlInflate::TempOnly:
+      // The bytes never became the shared cache, and only the synchronous build
+      // parses its own temp -- this one is dead weight on the card.
+      Storage.remove(tmpPath.c_str());
+      htmlInflateDeclinedSpine = target;
+      return false;
+    case Section::HtmlInflate::Aborted:
+      // A render or build took the zip over, or the reader is leaving. Not a
+      // property of the spine, so leave the decline memory unarmed and let a
+      // later idle pass start over (the inflate is not resumable -- a zip entry
+      // has no restart point -- so this discards the partial work by design).
+      LOG_DBG("ERS", "Pre-inflate of spine %d aborted", target);
+      return false;
+    case Section::HtmlInflate::Failed:
+      // Storage or a corrupt entry: a property of this spine, so stop offering
+      // it. The boundary turn still inflates it synchronously, exactly as today.
+      htmlInflateDeclinedSpine = target;
+      return false;
+  }
+  return false;
 }
 #endif  // CROSSPOINT_NEXT_SECTION_PREBUILD
 
@@ -837,6 +973,14 @@ void EpubReaderActivity::loop() {
       // reason to pay it for a start that a render just made moot. On a timeout
       // the overlap stays open exactly as it does at the render site.
       ImageBlock::cancelBackgroundDecode();
+#endif
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+      // And for the same file-level reason, one spine over: the section this is
+      // about to extend can be a prebuild adopted at a chapter boundary, i.e.
+      // exactly the spine a pre-inflate started for while the reader was still
+      // in the previous chapter. startBuild() would then be inflating the same
+      // zip entry into the same html cache from the other core.
+      cancelBackgroundHtmlInflate();
 #endif
       const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
       if (!section->startBuild(buildSpec)) {
@@ -1340,6 +1484,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           uint16_t backupPage = section->currentPage;
           uint16_t backupPageCount = section->pageCount;
           section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+          // The tree about to be deleted is where a background pre-inflate
+          // writes; stop it first so it cannot recreate files (or its html
+          // subdirectory) behind the removal.
+          cancelBackgroundHtmlInflate();
+#endif
           epub->clearCache();
           epub->setupCacheDir();
           if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
@@ -1683,6 +1833,30 @@ void EpubReaderActivity::renderBook() {
     // there is no useful way for a render to decline loading its chapter -- but
     // that cap is a liveness backstop, not an expected path.
     ImageBlock::cancelBackgroundDecode();
+#endif
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+    // The chapter being loaded here is, at a forward boundary turn, the very
+    // spine a background pre-inflate may still be streaming. Two things then
+    // collide: startBuild() would inflate the same zip entry (each writer has
+    // its own temp path, so the loser can at worst waste its work -- but the
+    // promotion rename must not land under the parser's open handle), and the
+    // FrameBufferLoan taken further down lends the framebuffer's bytes to
+    // whichever inflater claims them first, then takes them back and draws over
+    // them. Stopping the pre-inflate here settles both, and this is already the
+    // slow path (a chapter load), not a page turn.
+    //
+    // This is the only render that has to cancel, and the argument is worth
+    // stating because the trailing partial-extension loop in this function also
+    // starts builds, with a section already installed: a pre-inflate only ever
+    // runs while the CURRENT section is complete and NON-partial (see
+    // htmlInflateStep), and isPartial() is fixed when a Section loads its file,
+    // so that loop's isPartial() guard cannot pass while one is in flight.
+    // Adopting a prebuilt PARTIAL section at a boundary can create the pairing,
+    // and that is exactly what loop()'s deferred extension start cancels for.
+    // Keeping cancels off the ordinary page-turn path matters: those are the
+    // turns that happen while a pre-inflate is running, and a cancelled inflate
+    // has to start over from zero.
+    cancelBackgroundHtmlInflate();
 #endif
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 #ifdef CROSSPOINT_PAGE_CACHE
