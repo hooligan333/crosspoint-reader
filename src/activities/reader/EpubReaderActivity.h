@@ -223,6 +223,96 @@ class EpubReaderActivity final : public ReaderActivity {
   bool prebuildStep();
   // Start prebuilding when the reader is within this many pages of chapter end.
   static constexpr int PREBUILD_NEAR_END_PAGES = 3;
+
+  // --- Background HTML pre-inflate of the next spine ---------------------------
+  // The prebuild above can only ADOPT an existing layout cache; a next chapter
+  // that has never been visited has none, and the boundary turn then pays the
+  // whole cold cost: inflating the chapter HTML out of the zip (multi-second on
+  // a large spine), parsing CSS, laying out page one. The first of those three
+  // is the only one that is safely movable off the critical path -- it produces
+  // a file, not reader state, and Section::startBuild already has a fast path
+  // for finding that file present (`reusedHtml`). So when the reader is near
+  // the end of a chapter and the next spine's HTML is NOT cached, inflate it
+  // here, on the background task's idle path; the eventual boundary turn then
+  // pays only CSS + first-page layout.
+  //
+  // Two phases, copied from the image pre-decode below because the hazard is
+  // the same shape:
+  //   UNDER the (try-acquired) RenderLock -- decide the target and capture
+  //   everything needed AS VALUES (spine index, its zip-local href, its temp
+  //   path, a shared_ptr copy of the Epub), then publish bgHtmlInflateActive
+  //   BEFORE releasing the lock, so no render can start without seeing it.
+  //   WITHOUT the lock -- the zip stream, the temp write and the atomic rename.
+  //   Nothing there touches `section`, `epub` (the member), or the renderer.
+  //
+  // A PARALLEL interlock, not the image pre-decode's: that one lives in
+  // ImageBlock and only exists under CROSSPOINT_BG_IMAGE_DECODE, which this
+  // feature does not (and must not) require, and its cancel-side abort flag is
+  // ImageToFramebufferDecoder's, consumed inside the JPEG/PNG row callbacks.
+  // The two are never in flight at once anyway -- one background task, one work
+  // item per idle pass -- so a second flag pair costs nothing and keeps the two
+  // cancels independently readable. Invariants:
+  //  * bgHtmlInflateActive is raised only in the locked phase and cleared only
+  //    by the inflate itself, wherever it ends.
+  //  * bgHtmlInflateAbort is raised by a canceller and lowered ONLY by the next
+  //    inflate's locked phase. That is the deliberate difference from
+  //    ImageBlock::cancelBackgroundDecode, which must lower it on the way out
+  //    because that flag is shared with render-path decodes: this one is
+  //    private to this single background activity, so leaving it raised after a
+  //    cancel that timed out is both safe and useful -- the runaway inflate
+  //    still refuses to promote its temp file at the commit point.
+  //  * bgHtmlInflateSpine is plain, not atomic: written in the locked phase and
+  //    read only by cancellers, all of which hold the RenderLock (see the
+  //    call-site list on cancelBackgroundHtmlInflate below).
+  //  * the inflate must never be running while a FrameBufferLoan is: the
+  //    inflater claims the lent framebuffer bytes for its 43 KB of state
+  //    (buildscratch::claim), and the loan takes them back and draws over them
+  //    with no synchronization. Both loans live inside renderBook()'s
+  //    chapter-load branch, behind that branch's cancel, and the locked phase
+  //    cannot start an inflate while a render holds the lock.
+  // Returns true when an inflate completed and was promoted.
+  bool htmlInflateStep(bool& workPlausible);
+  // Stop an in-flight background inflate and wait (bounded) for it to
+  // acknowledge. Every caller holds the RenderLock, which is what keeps a
+  // cancel from racing the locked phase that starts one. The complete set of
+  // call sites, each because the foreground is about to touch something the
+  // inflate is holding:
+  //  * renderBook()'s chapter-load branch -- it inflates this spine's HTML and
+  //    lends the framebuffer to whichever inflater claims it (see the note
+  //    there for why no other render needs one);
+  //  * loop()'s deferred partial-extension start -- same inflate, for a spine
+  //    that can be a prebuild just adopted at a boundary;
+  //  * the reader menu's DELETE_CACHE -- it removes the tree being written to;
+  //  * stopBgBuildTask() -- so the join is not held for a whole inflate.
+  void cancelBackgroundHtmlInflate();
+  static bool htmlInflateAbortRequested(void* ctx);
+  std::atomic<bool> bgHtmlInflateActive{false};
+  std::atomic<bool> bgHtmlInflateAbort{false};
+  int bgHtmlInflateSpine = -1;
+  // Spine whose pre-inflate is settled (promoted, already cached, or failed) so
+  // idle passes stop re-probing SD for it -- the counterpart of
+  // prebuildDeclinedSpine. Touched ONLY by the background task, which is why it
+  // is not cleared from the reader's spine-change sites the way that one is: it
+  // is always compared against currentSpineIndex + 1, so moving to another
+  // chapter re-arms it by itself.
+  int htmlInflateDeclinedSpine = -1;
+  // Free-heap floor for starting one. A streaming inflate costs ~11 KB of tinfl
+  // state plus a 32 KB window plus 2x8 KB of zip buffers, and the render task
+  // can be lazily extracting an image (its own inflate, same size) on the other
+  // core while this one runs -- and a render-path extract that loses an
+  // allocation race marks its image failed for the whole session. Leave room
+  // for both rather than win a race for the last block; pre-inflating is pure
+  // opportunism and declining costs only today's behavior.
+  static constexpr size_t HTML_INFLATE_MIN_FREE_HEAP = 96 * 1024;
+  // The 32 KB inflate window is a single contiguous allocation.
+  static constexpr size_t HTML_INFLATE_MIN_MAX_ALLOC = 48 * 1024;
+  // Cap for the cancel wait. The abort is polled between output chunks and
+  // before the commit rename, so the longest uninterruptible span is a central
+  // directory lookup plus one 8 KB inflate+write -- tens of ms on a healthy
+  // card. Reaching the cap means something is wrong; the caller proceeds
+  // anyway (a render has no useful way to decline loading its chapter) and the
+  // still-raised abort flag is what keeps the runaway inflate from promoting.
+  static constexpr uint32_t HTML_INFLATE_CANCEL_TIMEOUT_MS = 3000;
 #endif
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
   // Pre-decode the images on upcoming pages from the background build task's
