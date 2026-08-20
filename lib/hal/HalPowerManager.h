@@ -83,6 +83,11 @@ class HalPowerManager {
   // unconditionally so the lock can never go stale between mode changes.
   // loopTask-only, like every other writer of the pm* flags.
   void noteWifiEnabled(bool enabled);
+#ifdef CROSSPOINT_PM_STATS
+  // Light-sleep residency counters (entries + total slept ms since boot),
+  // maintained by the idle-task sleep-exit callback. See HalPowerManager.cpp.
+  void getLightSleepStats(uint32_t& entries, uint32_t& sleptMs) const;
+#endif
 #endif
 
   // Get battery percentage (range 0-100)

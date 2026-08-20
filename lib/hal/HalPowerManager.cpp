@@ -7,6 +7,7 @@
 #include <esp_sleep.h>
 #include <soc/soc_caps.h>
 
+#include <atomic>
 #include <cassert>
 
 #ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
@@ -25,6 +26,38 @@ HalPowerManager powerManager;  // Singleton instance
 // Xteink boards. Other boards use it for unrelated signals, including the
 // X4 Pro display chip select.
 static constexpr gpio_num_t XTEINK_C3_GPIO13 = GPIO_NUM_13;
+
+#if defined(CROSSPOINT_AUTO_LIGHT_SLEEP) && defined(CROSSPOINT_PM_STATS)
+namespace {
+// Light-sleep residency counters, replacing the CONFIG_PM_PROFILING mode table
+// (kernels built with that option do not boot through the vendor boot chain --
+// see the program notes). Written from the IDLE task's sleep-exit callback,
+// read from loopTask's CMD:PMSTATS dump: 32-bit relaxed atomics keep the
+// callback lock-free, honoring its no-blocking contract. lsUsRemainder is
+// callback-only state (light sleep is a chip-wide single event, so the exit
+// callback never runs concurrently with itself). Totals wrap after ~49 days
+// of accumulated sleep -- fine for a measurement build.
+std::atomic<uint32_t> lsEntryCount{0};
+std::atomic<uint32_t> lsSleptMs{0};
+uint32_t lsUsRemainder = 0;
+
+esp_err_t lightSleepExitCb(int64_t sleepTimeUs, void*) {
+  if (sleepTimeUs > 0) {
+    lsUsRemainder += static_cast<uint32_t>(sleepTimeUs % 1000);
+    const uint32_t ms = static_cast<uint32_t>(sleepTimeUs / 1000) + lsUsRemainder / 1000;
+    lsUsRemainder %= 1000;
+    lsSleptMs.fetch_add(ms, std::memory_order_relaxed);
+  }
+  lsEntryCount.fetch_add(1, std::memory_order_relaxed);
+  return ESP_OK;
+}
+}  // namespace
+
+void HalPowerManager::getLightSleepStats(uint32_t& entries, uint32_t& sleptMs) const {
+  entries = lsEntryCount.load(std::memory_order_relaxed);
+  sleptMs = lsSleptMs.load(std::memory_order_relaxed);
+}
+#endif
 
 void HalPowerManager::begin() {
   if (BoardConfig::ACTIVE.batteryAdc >= 0) {
@@ -84,6 +117,15 @@ void HalPowerManager::begin() {
   // Boot continues at full speed; the first setPowerSaving(true) releases it.
   setPmLockHeld(pmActiveLock, pmActiveHeld, true);
   LOG_INF("PWR", "Auto light sleep on (DFS %d-%d MHz)", pmCfg.min_freq_mhz, pmCfg.max_freq_mhz);
+#ifdef CROSSPOINT_PM_STATS
+  // Registration copies the config (idle-task callbacks, exit only). Failure
+  // costs the counters, never the feature.
+  esp_pm_sleep_cbs_register_config_t lsCbs = {};
+  lsCbs.exit_cb = lightSleepExitCb;
+  if (esp_pm_light_sleep_register_cbs(&lsCbs) != ESP_OK) {
+    LOG_ERR("PWR", "Light-sleep stats callback registration failed; LSSTATS stays at zero");
+  }
+#endif
 #endif
 }
 
