@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <HalMemory.h>
+#include <HalHeapGauge.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Utf8.h>
@@ -578,7 +579,7 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out, 
   const size_t requiredBytes = (append ? originalSize : 0) + size;
   // String growth may double capacity; a reserved append needs no new buffer.
   const size_t allocationBytes = requiredBytes > out.capacity() ? std::max(requiredBytes, 2 * out.capacity()) + 1 : 0;
-  if (ESP.getMaxAllocHeap() < allocationBytes + DEFINITION_HEAP_HEADROOM_BYTES) {
+  if (gateMaxAllocHeap() < allocationBytes + DEFINITION_HEAP_HEADROOM_BYTES) {
     LOG_ERR("DICT", "Low heap for %lu byte definition", static_cast<unsigned long>(requiredBytes));
     return fail(LookupResult::LowMemory);
   }
