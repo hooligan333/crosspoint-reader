@@ -652,13 +652,30 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(emitWidth);
+    atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(emitWidth);
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(emitWidth);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(emitWidth);
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(emitWidth);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(emitWidth);
     }
+  }
+  // The ditherer ctors allocate their error rows nothrow (emitWidth is unbounded on
+  // the full-screen path where crop mode leaves it source-derived); a failed object
+  // or row allocation fails the conversion like every other OOM here, not abort().
+  const bool dithererOom = (oneBit && (!atkinson1BitDitherer || !atkinson1BitDitherer->valid())) ||
+                           (atkinsonDitherer && !atkinsonDitherer->valid()) || (fsDitherer && !fsDitherer->valid()) ||
+                           (!oneBit && !USE_8BIT_OUTPUT && USE_ATKINSON && !atkinsonDitherer) ||
+                           (!oneBit && !USE_8BIT_OUTPUT && !USE_ATKINSON && USE_FLOYD_STEINBERG && !fsDitherer);
+  if (dithererOom) {
+    LOG_ERR("PNG", "OOM: ditherer (%d px)", emitWidth);
+    delete atkinsonDitherer;
+    delete fsDitherer;
+    delete atkinson1BitDitherer;
+    free(rowBuffer);
+    free(ctx.currentRow);
+    free(ctx.previousRow);
+    return false;
   }
 
   // Scaling accumulators
