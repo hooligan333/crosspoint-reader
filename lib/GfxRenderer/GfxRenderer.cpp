@@ -1708,6 +1708,14 @@ void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
 
 bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
 
+#ifdef FREEINK_UC8179_OVERLAP_BASE
+bool GfxRenderer::asyncRefreshKeepsOwnFrame() const {
+  // Same fadingFix exclusion as supportsAsyncRefresh(): displayBufferAsync()
+  // routes those callers to the blocking path for the turn-off-screen hook.
+  return !fadingFix && display.asyncRefreshKeepsOwnFrame();
+}
+#endif
+
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {
   if (dst == nullptr || w <= 0 || h <= 0) return 0;
 
@@ -2232,6 +2240,12 @@ void GfxRenderer::preconditionGrayscale(int x, int y, int w, int h) const {
 }
 
 void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuffers(frameBuffer); }
+
+#ifdef CROSSPOINT_UC8179_OVERLAP
+void GfxRenderer::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) const {
+  display.copyGrayscaleLsbBuffers(lsbBuffer);
+}
+#endif
 
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
