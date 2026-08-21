@@ -103,6 +103,10 @@ void HalDisplay::deepSleep() { einkDisplay.deepSleep(); }
 
 void HalDisplay::controllerIdle() { einkDisplay.controllerIdle(); }
 
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+void HalDisplay::beginDisplayWork() { einkDisplay.beginDisplayWork(); }
+#endif
+
 #ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
 void HalDisplay::setBusyWaitSliceHook(bool (*sliceHook)(int8_t busyPin, uint8_t busyLevel)) {
   einkDisplay.setBusyWaitSliceHook(sliceHook);
