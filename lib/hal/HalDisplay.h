@@ -50,6 +50,15 @@ class HalDisplay {
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);
   // false where it falls back to a blocking refresh.
   bool supportsAsyncRefresh() const;
+#ifdef FREEINK_UC8179_OVERLAP_BASE
+  // True when a pending async refresh carries its own copy of the frame, so the
+  // framebuffer may be rewritten before waitRefreshComplete() instead of being
+  // held intact — the whole-buffer grayscale path then reuses it as plane
+  // scratch while the B/W base waveform runs. Implies supportsAsyncRefresh().
+  // Runtime capability (one image, several panel drivers). See
+  // PanelDriver::asyncRefreshKeepsOwnFrame().
+  bool asyncRefreshKeepsOwnFrame() const;
+#endif
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
 
   // Output polarity. The framebuffer remains in normal polarity; inversion is
