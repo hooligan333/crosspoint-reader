@@ -61,6 +61,21 @@ class HalDisplay {
   // Power management
   void deepSleep();
 
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+  // Panel analog rails (booster / VGH / VGL / VSH / VSL / VCOM). On the UC8179
+  // they latch ON at the first refresh and stay on for the whole reading
+  // session, because nothing on this device ever passes turnOff.
+  //
+  // controllerIdle(): park them once display work is quiescent. Idempotent and
+  // free (no SPI) when they are already down. Call only from the main loop with
+  // the render lock held — it talks to the panel.
+  // beginDisplayWork(): command them back up the moment an input that will
+  // render is accepted, so the ~127 ms ramp overlaps CPU-side composition
+  // instead of stalling the refresh. Returns immediately when already powered.
+  void controllerIdle();
+  void beginDisplayWork();
+#endif
+
 #ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
   // Passthrough to EpdBus::setBusyWaitSliceHook (see its contract). Exposed
   // through the HAL so main.cpp can force the SDK's level-polled refresh wait

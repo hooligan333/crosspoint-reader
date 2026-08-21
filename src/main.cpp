@@ -798,8 +798,9 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
+  const bool userInputThisFrame =
+      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  if (userInputThisFrame || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -959,6 +960,26 @@ void loop() {
     activityManager.requestUpdate();
   }
 
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+  // Panel rail prewarm, on the one frame that carries a fresh input event and
+  // immediately before it is dispatched to the activity below. Central on
+  // purpose: every activity renders through activityManager.loop(), so no
+  // activity has to remember to ask, and the ramp is started before any of them
+  // begins composing. The driver commands PON and returns without waiting, so
+  // the measured 127 ms rail ramp overlaps the render task's CPU-side page
+  // composition rather than landing in front of the waveform.
+  //
+  // TryAcquire, never a blocking lock: it must not park the loop task behind an
+  // in-flight render (that would stop input polling for a whole refresh), and
+  // the SPI byte it writes must not interleave with a render task mid plane
+  // stream. Failing to acquire is the case where a refresh is already running,
+  // which means the rails are up or that refresh is bringing them up itself.
+  if (userInputThisFrame) {
+    RenderLock prewarmLock{RenderLock::TryAcquire{}};
+    if (prewarmLock.locked()) display.beginDisplayWork();
+  }
+#endif
+
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
@@ -979,6 +1000,22 @@ void loop() {
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+      // Park the panel's analog rails on the same 3 s inactivity threshold the
+      // CPU power saving already uses, and for the same reason: the reader
+      // otherwise sits on a page with the booster, VGH/VGL, VSH/VSL and VCOM
+      // latched on for the whole session. Deliberately not per-refresh — PON
+      // costs 127 ms here, so rapid page turns must never pay it; only a page
+      // the user is actually reading is worth powering down for. The call is
+      // free (no SPI) once the rails are already down, and it re-arms itself
+      // for any refresh that brings them back up without user input.
+      //
+      // Before setPowerSaving(), so POF is clocked at the normal CPU frequency.
+      {
+        RenderLock idleLock{RenderLock::TryAcquire{}};
+        if (idleLock.locked()) display.controllerIdle();
+      }
+#endif
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
 #ifdef CROSSPOINT_TOUCH_INT_WAKE
