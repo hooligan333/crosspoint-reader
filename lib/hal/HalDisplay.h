@@ -130,6 +130,16 @@ class HalDisplay {
   // their ordinary refresh cadence. See PanelDriver::fastAfterGrayscaleSafe().
   bool fastAfterGrayscaleSafe() const;
 
+#ifdef FREEINK_UC8179_DOUBLE_GRAY_PRE
+  // One-shot hint for the NEXT base refresh: spend extra panel time equalizing
+  // black depth across the frame, so the page being replaced cannot ghost
+  // through the new page's grays. Call immediately before the base display of a
+  // page with large gray areas (an image page); text pages leave it unset and
+  // keep the cheaper single-pass transition. Panels without such a pass ignore
+  // it. See PanelDriver::requestDeepGrayEqualize().
+  void requestDeepGrayEqualize();
+#endif
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.
