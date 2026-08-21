@@ -2491,6 +2491,17 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // (1491 ms measured on UC8179, vs 559 ms for FAST and 296 ms for the
       // grayscale pass itself). Run the ordinary page cadence instead, so the
       // periodic ghost-clear still lands on SETTINGS.getRefreshFrequency().
+#ifdef FREEINK_UC8179_DOUBLE_GRAY_PRE
+      // That gray-exit transition drives a was-white->black pixel for 25
+      // saturating frames but gives a was-black->black pixel only the 4-frame
+      // corrective, so black lands at two depths — and the AA gray drive is
+      // ~2 frames off black. On a text page the difference hides in the glyphs;
+      // on an image page it reads as the OUTGOING page's text ghosting through
+      // the incoming photo's grays. Ask the driver to equalize black depth as
+      // part of this transition. One-shot and armed here only, so text pages
+      // never pay its second activation (~666 ms).
+      renderer.requestDeepGrayEqualize();
+#endif
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
     } else
 #endif

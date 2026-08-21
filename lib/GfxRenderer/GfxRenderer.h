@@ -371,6 +371,13 @@ class GfxRenderer {
   // clean refresh on the page following image content can then keep the normal
   // page cadence instead. See PanelDriver::fastAfterGrayscaleSafe().
   bool fastAfterGrayscaleSafe() const;
+#ifdef FREEINK_UC8179_DOUBLE_GRAY_PRE
+  // One-shot hint for the NEXT base refresh: equalize black depth across the
+  // frame so the outgoing page cannot ghost through the incoming page's grays.
+  // Costs a second panel activation, so readers arm it only for image pages.
+  // See PanelDriver::requestDeepGrayEqualize().
+  void requestDeepGrayEqualize() const;
+#endif
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+
