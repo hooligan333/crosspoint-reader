@@ -69,9 +69,10 @@ class HalDisplay {
   // controllerIdle(): park them once display work is quiescent. Idempotent and
   // free (no SPI) when they are already down. Call only from the main loop with
   // the render lock held — it talks to the panel.
-  // beginDisplayWork(): command them back up the moment an input that will
-  // render is accepted, so the ~127 ms ramp overlaps CPU-side composition
-  // instead of stalling the refresh. Returns immediately when already powered.
+  // beginDisplayWork(): command them back up the moment a render is queued, so
+  // the ~127 ms ramp overlaps CPU-side composition instead of stalling the
+  // refresh. Returns immediately when already powered. Called from
+  // ActivityManager, which owns that edge for every render on the device.
   void controllerIdle();
   void beginDisplayWork();
 #endif
