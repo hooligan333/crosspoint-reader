@@ -161,6 +161,10 @@ bool HalDisplay::fastAfterGrayscaleSafe(const GrayscaleMode mode) const {
   return einkDisplay.fastAfterGrayscaleSafe(mode);
 }
 
+#ifdef FREEINK_UC8179_DOUBLE_GRAY_PRE
+void HalDisplay::requestDeepGrayEqualize() { einkDisplay.requestDeepGrayEqualize(); }
+#endif
+
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
                                        yStart, numRows);
