@@ -2241,6 +2241,8 @@ void GfxRenderer::displayGrayBufferFactory() const { display.displayGrayBufferFa
 
 bool GfxRenderer::supportsFactoryGrayscale() const { return display.supportsFactoryGrayscale(); }
 
+bool GfxRenderer::fastAfterGrayscaleSafe() const { return display.fastAfterGrayscaleSafe(); }
+
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
   // Guard the uint16_t casts below: a negative would wrap to a huge length.
   assert(yStart >= 0 && numRows > 0 && yStart <= static_cast<int>(panelHeight) - numRows);

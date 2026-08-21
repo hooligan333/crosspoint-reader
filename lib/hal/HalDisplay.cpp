@@ -145,6 +145,8 @@ void HalDisplay::displayGrayBufferFactory(bool turnOffScreen) {
 
 bool HalDisplay::supportsFactoryGrayscale() const { return einkDisplay.supportsFactoryGrayscale(); }
 
+bool HalDisplay::fastAfterGrayscaleSafe() const { return einkDisplay.fastAfterGrayscaleSafe(); }
+
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
                                        yStart, numRows);

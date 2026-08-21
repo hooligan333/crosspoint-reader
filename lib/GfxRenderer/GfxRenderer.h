@@ -366,6 +366,11 @@ class GfxRenderer {
   // gates it (SSD1677 only today).
   void displayGrayBufferFactory() const;
   bool supportsFactoryGrayscale() const;
+  // True when a FAST_REFRESH right after a grayscale page fully re-drives the
+  // gray charge that pass left behind (UC8179 only today). Readers that force a
+  // clean refresh on the page following image content can then keep the normal
+  // page cadence instead. See PanelDriver::fastAfterGrayscaleSafe().
+  bool fastAfterGrayscaleSafe() const;
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

@@ -2369,13 +2369,28 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
 
   if (pageHasImages) {
-    // Image pages use one base refresh before the grayscale pass. FAST leaves
-    // the panel receptive to the gray waveform; pending cleanup still honors
-    // the scheduled/manual HALF refresh.
-    renderer.displayBuffer((manualRefreshPending || (cleanImageBasePending && SETTINGS.screenInverted == 0))
-                               ? HalDisplay::HALF_REFRESH
-                               : HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh = 1;
+#ifdef CROSSPOINT_IMG_NO_FORCED_CLEAN
+    if (renderer.fastAfterGrayscaleSafe()) {
+      // This panel's driver substitutes a gray-exit transition for the plain
+      // differential update whenever a FAST paint follows a grayscale pass, so
+      // the page after an image does not need a clean base to erase the gray
+      // charge — it is re-driven per pixel by that transition. Forcing one
+      // anyway made every turn in an image-dense book pay the OTP GC waveform
+      // (1491 ms measured on UC8179, vs 559 ms for FAST and 296 ms for the
+      // grayscale pass itself). Run the ordinary page cadence instead, so the
+      // periodic ghost-clear still lands on SETTINGS.getRefreshFrequency().
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
+    } else
+#endif
+    {
+      // Image pages use one base refresh before the grayscale pass. FAST leaves
+      // the panel receptive to the gray waveform; pending cleanup still honors
+      // the scheduled/manual HALF refresh.
+      renderer.displayBuffer((manualRefreshPending || (cleanImageBasePending && SETTINGS.screenInverted == 0))
+                                 ? HalDisplay::HALF_REFRESH
+                                 : HalDisplay::FAST_REFRESH);
+      pagesUntilFullRefresh = 1;
+    }
   } else if (combinedGrayscaleBase) {
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
