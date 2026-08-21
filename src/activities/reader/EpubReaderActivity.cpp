@@ -2476,9 +2476,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // RUNTIME capability — this one image also drives SSD1677 and UC8279-X4
   // batches — and it is false in night mode and with the sunlight fading fix,
   // both of which therefore collapse back to the serial path.
+#if defined(CROSSPOINT_UC8179_OVERLAP) && !defined(FREEINK_UC8179_OVERLAP_BASE)
+#error "CROSSPOINT_UC8179_OVERLAP requires FREEINK_UC8179_OVERLAP_BASE (SDK half of the overlap feature)"
+#endif
   const PsramPlane overlapPlane(
       needsAnyGrayscale && !tiledGrayscale && renderer.asyncRefreshKeepsOwnFrame() ? renderer.getBufferSize() : 0);
   const bool overlapBaseTransition = static_cast<bool>(overlapPlane);
+  // Set only by the branches that actually pass async=true below; the scratch
+  // being allocated is not the same fact as a waveform being in flight, and
+  // the wait/upload epilogue must key on the latter.
+  bool baseStartedAsync = false;
 #endif
 
 #ifdef CROSSPOINT_IMG_FACTORY_GRAY
@@ -2566,6 +2573,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // renders, then finish (including the second activation), then uploads.
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapBaseTransition,
                                            manualRefreshPending);
+      baseStartedAsync = overlapBaseTransition;
 #else
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
 #endif
@@ -2590,6 +2598,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // band-buffer overlap, overlapBaseTransition the whole-buffer one.
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh || overlapBaseTransition,
                                          manualRefreshPending);
+    baseStartedAsync = overlapBaseTransition;
 #else
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh, manualRefreshPending);
 #endif
@@ -2692,7 +2701,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // The base transition is still running on the panel and owns controller
         // RAM until it is waited out; nothing below this early return will do
         // it, and the driver's post-waveform baseline restore lives there.
-        if (overlapBaseTransition) renderer.waitRefreshComplete();
+        if (baseStartedAsync) renderer.waitRefreshComplete();
 #endif
         return;
       }
@@ -2702,7 +2711,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
       renderGrayscalePass();
 #ifdef CROSSPOINT_UC8179_OVERLAP
-      if (overlapBaseTransition) {
+      if (baseStartedAsync) {
         // Controller RAM belongs to the running base waveform, so this plane
         // cannot be uploaded yet — park it in PSRAM and hand the framebuffer
         // straight back to the MSB pass below.
@@ -2718,12 +2727,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
       renderGrayscalePass();
 #ifdef CROSSPOINT_UC8179_OVERLAP
-      if (overlapBaseTransition) {
+      const auto tMsbRendered = millis();
+      unsigned long overlapWaitMs = 0;
+      if (baseStartedAsync) {
         // Both planes are composed; ride out whatever is left of the base
         // waveform and upload them back to back. LSB has to go first: the
         // driver folds it into its retained B/W base to rebuild stock's
         // absolute plane0, which the MSB upload then XORs against.
         renderer.waitRefreshComplete();
+        overlapWaitMs = millis() - tMsbRendered;
         renderer.copyGrayscaleLsbBuffers(overlapPlane.get());
       }
 #endif
@@ -2737,11 +2749,19 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       const auto tBwRestore = millis();
 
       const auto tEnd = millis();
+#ifdef CROSSPOINT_UC8179_OVERLAP
+      LOG_DBG("ERS",
+              "Page render: prewarm=%lums bw_render=%lums display=%lums bw_store=%lums "
+              "gray_lsb=%lums gray_msb=%lums wait=%lums gray_display=%lums bw_restore=%lums total=%lums",
+              tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
+              tGrayMsb - tGrayLsb, overlapWaitMs, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
+#else
       LOG_DBG("ERS",
               "Page render: prewarm=%lums bw_render=%lums display=%lums bw_store=%lums "
               "gray_lsb=%lums gray_msb=%lums gray_display=%lums bw_restore=%lums total=%lums",
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
               tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
+#endif
     } else {
       const auto tEnd = millis();
       LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
