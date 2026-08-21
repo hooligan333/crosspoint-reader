@@ -66,6 +66,17 @@ class ActivityManager {
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
 
+  // Renders asked for but not yet finished. One increment per request that will
+  // reach the render task, one decrement per request the render task has served
+  // — see requestUpdate() for the pairing argument and renderTaskLoop() for the
+  // collapse. Read by the main loop's idle tail through hasPendingRender().
+  std::atomic<uint32_t> pendingRenders{0};
+
+  // Increment-then-notify, in that order: the render task may run, render and
+  // decrement before this task is scheduled again, and a count added afterwards
+  // would never come back down.
+  void notifyRenderTask();
+
 #ifdef FREEINK_UC8179_RAIL_POWEROFF
   // Start the panel's analog rail ramp for a render that is about to be queued.
   // Called from every path that notifies the render task, so a render reached
@@ -119,10 +130,15 @@ class ActivityManager {
   // Otherwise, it will be deferred until the end of the current loop iteration.
   void requestUpdate(bool immediate = false);
 
-  // True while a deferred requestUpdate() is queued and has not yet been handed
-  // to the render task. Read by the main loop's idle tail, which must not park
-  // panel hardware on top of a render that is already on its way.
-  bool hasRequestedUpdate() const { return requestedUpdate.load(std::memory_order_relaxed); }
+  // True while ANY requested render is still outstanding — queued for the next
+  // loop pass, handed to the render task but not yet picked up, or in flight.
+  // Read by the main loop's idle tail, which must not park panel hardware on
+  // top of a render that is already on its way. Strictly stronger than the
+  // deferred-flag check it replaces: that flag went false the instant the
+  // notify was posted, leaving the render task's whole start-up window — notify
+  // posted, task not yet scheduled, RenderLock not yet taken — looking exactly
+  // like an idle device to a try-acquire.
+  bool hasPendingRender() const { return pendingRenders.load(std::memory_order_acquire) != 0; }
 
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.

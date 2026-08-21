@@ -50,7 +50,12 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 
 void ActivityManager::renderTaskLoop() {
   while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // ulTaskNotifyTake(pdTRUE) drains the whole counting notification in one
+    // go, so N requests that piled up while the previous render was running are
+    // answered by this single pass. Release exactly those N — and only once the
+    // render below has finished, so hasPendingRender() never reads zero while
+    // the panel is still being driven.
+    const uint32_t servedRequests = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
@@ -62,6 +67,7 @@ void ActivityManager::renderTaskLoop() {
       display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
     }
+    pendingRenders.fetch_sub(servedRequests, std::memory_order_release);
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
     taskENTER_CRITICAL(&activityManagerSpinlock);
@@ -173,6 +179,11 @@ void ActivityManager::loop() {
     // Increment counter so multiple rapid calls won't be lost
     if (renderTaskHandle) {
       xTaskNotify(renderTaskHandle, 1, eIncrement);
+    } else {
+      // The raise already took a pendingRenders count and this dispatch is the
+      // only thing that could ever have redeemed it. Give it back, or the idle
+      // tail would see a render owed for the rest of the session.
+      pendingRenders.fetch_sub(1, std::memory_order_release);
     }
   }
 }
@@ -346,18 +357,39 @@ void ActivityManager::prewarmDisplayRails() {
 }
 #endif
 
+void ActivityManager::notifyRenderTask() {
+  if (!renderTaskHandle) {
+    return;
+  }
+  pendingRenders.fetch_add(1, std::memory_order_release);
+  xTaskNotify(renderTaskHandle, 1, eIncrement);
+}
+
+// pendingRenders pairing. Every increment is matched by exactly one
+// xTaskNotify() to the render task, and the render task releases exactly the
+// number of notifications each ulTaskNotifyTake() drained — so the counter is
+// "requests raised minus requests served" at all times, and cannot drift in
+// either direction:
+//   * immediate / requestUpdateAndWait: increment and notify together, inside
+//     notifyRenderTask(), or neither if there is no render task to notify.
+//   * deferred: the count tracks the RAISE of requestedUpdate, not the call,
+//     because loop() collapses however many requests arrive during one pass
+//     into a single notify. Only the false->true transition may add to it, and
+//     the matching clear either notifies or hands the count straight back.
+// It can never read zero early either: the increment precedes its notify, and
+// the release happens after the render it paid for has completed.
 void ActivityManager::requestUpdate(bool immediate) {
 #ifdef FREEINK_UC8179_RAIL_POWEROFF
   prewarmDisplayRails();
 #endif
   if (immediate) {
-    if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
-    }
+    notifyRenderTask();
   } else {
     // Deferring the update until current loop is finished
     // This is to avoid multiple updates being requested in the same loop
-    requestedUpdate = true;
+    if (!requestedUpdate.exchange(true)) {
+      pendingRenders.fetch_add(1, std::memory_order_release);
+    }
   }
 }
 void ActivityManager::requestUpdateAndWait() {
@@ -394,7 +426,7 @@ void ActivityManager::requestUpdateAndWait() {
   // Cannot call while holding RenderLock or it will cause a deadlock
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
-  xTaskNotify(renderTaskHandle, 1, eIncrement);
+  notifyRenderTask();
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 

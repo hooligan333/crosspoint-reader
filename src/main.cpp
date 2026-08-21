@@ -1024,16 +1024,19 @@ void loop() {
       //
       // Two conditions, both required. The non-blocking acquire keeps the POF
       // out of an in-flight render (and keeps the loop task from parking behind
-      // one). The queued-render check covers the gap the lock cannot see: a
-      // requestUpdate() from another task — web server, OTA, WiFi callback — is
-      // only dispatched to the render task on the NEXT loop pass, so between the
-      // two the mutex is free while a render is already owed. Re-read under the
-      // lock, so a request arriving after the check loses its prewarm at worst
-      // (its own acquire fails while this one is held), never lands a POF inside
-      // a waveform.
+      // one). The outstanding-render count covers every gap the lock cannot
+      // see, and there are two of them: a requestUpdate() from another task —
+      // web server, OTA, WiFi callback — is only dispatched to the render task
+      // on the NEXT loop pass, and a dispatched render still has to be
+      // scheduled before it takes the RenderLock. In both windows the mutex is
+      // free while a render is owed, which is precisely when a POF lands
+      // underneath the prewarm PON that render is about to rely on. Read under
+      // the lock, so a request arriving after the check loses its prewarm at
+      // worst (its own acquire fails while this one is held), never lands a POF
+      // inside a waveform.
       {
         RenderLock idleLock{RenderLock::TryAcquire{}};
-        if (idleLock.locked() && !activityManager.hasRequestedUpdate()) display.controllerIdle();
+        if (idleLock.locked() && !activityManager.hasPendingRender()) display.controllerIdle();
       }
 #endif
       // If we've been inactive for a while, increase the delay to save power
