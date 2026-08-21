@@ -2271,6 +2271,10 @@ void GfxRenderer::setRenderMode(RenderMode mode) {
   renderMode = mode;
 }
 
+bool GfxRenderer::fastAfterGrayscaleSafe(const HalDisplay::GrayscaleMode mode) const {
+  return display.fastAfterGrayscaleSafe(mode);
+}
+
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
   // Guard the uint16_t casts below: a negative would wrap to a huge length.
   assert(yStart >= 0 && numRows > 0 && yStart <= static_cast<int>(panelHeight) - numRows);

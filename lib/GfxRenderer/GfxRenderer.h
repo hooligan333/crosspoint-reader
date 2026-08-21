@@ -351,6 +351,12 @@ class GfxRenderer {
   void displayGrayBuffer() const;
   // Active input encoding, used when drawing monochrome overlays into planes.
   bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
+  // True when a FAST_REFRESH issued right after a grayscale pass in `mode`
+  // fully re-drives the gray charge that pass left behind (UC8179's Overlay and
+  // Absolute paths only today). Readers that would force a clean refresh on the
+  // page following image content can then keep the normal page cadence instead.
+  // Pass the mode the pass actually ran in. See PanelDriver::fastAfterGrayscaleSafe().
+  bool fastAfterGrayscaleSafe(HalDisplay::GrayscaleMode mode = HalDisplay::GrayscaleMode::Overlay) const;
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

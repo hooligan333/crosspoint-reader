@@ -114,6 +114,15 @@ class HalDisplay {
 
   void displayGrayBuffer(bool turnOffScreen = false);
 
+  // True when a FAST_REFRESH issued right after a grayscale pass in `mode` fully
+  // re-drives the gray charge that pass left on the panel (UC8179 substitutes the
+  // OEM gray-exit transition for the plain differential update, for Overlay and
+  // Absolute but NOT Direct). Callers that would otherwise force a clean refresh
+  // on the page after grayscale content can keep their ordinary refresh cadence.
+  // Pass the mode the grayscale pass actually used and query it BEFORE the next
+  // paint. See PanelDriver::fastAfterGrayscaleSafe().
+  bool fastAfterGrayscaleSafe(GrayscaleMode mode = GrayscaleMode::Overlay) const;
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.
