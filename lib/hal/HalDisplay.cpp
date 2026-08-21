@@ -77,6 +77,10 @@ void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
+#ifdef FREEINK_UC8179_OVERLAP_BASE
+bool HalDisplay::asyncRefreshKeepsOwnFrame() const { return einkDisplay.asyncRefreshKeepsOwnFrame(); }
+#endif
+
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);

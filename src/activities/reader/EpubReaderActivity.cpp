@@ -13,6 +13,9 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#ifdef CROSSPOINT_UC8179_OVERLAP
+#include <esp_heap_caps.h>
+#endif
 #include <esp_system.h>
 
 #include <algorithm>
@@ -139,6 +142,30 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
     APP_STATE.saveToFile();
   }
 }
+
+#ifdef CROSSPOINT_UC8179_OVERLAP
+// One panel-sized grayscale plane, held in PSRAM for the length of a page
+// render. The whole-buffer (non-tiled) AA path has exactly one framebuffer to
+// render planes into, so overlapping BOTH plane renders with the base waveform
+// needs somewhere to park the first finished plane until the panel is ready to
+// take it. PSRAM keeps those 48 KB clear of the internal heap the page render
+// is itself competing for; a failed allocation just leaves the page on the
+// serial path.
+class PsramPlane {
+ public:
+  explicit PsramPlane(size_t bytes)
+      : ptr(bytes != 0 ? static_cast<uint8_t*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))
+                       : nullptr) {}
+  ~PsramPlane() { free(ptr); }  // heap_caps_malloc'd memory is free()-compatible
+  PsramPlane(const PsramPlane&) = delete;
+  PsramPlane& operator=(const PsramPlane&) = delete;
+  uint8_t* get() const { return ptr; }
+  explicit operator bool() const { return ptr != nullptr; }
+
+ private:
+  uint8_t* ptr;
+};
+#endif
 
 }  // namespace
 
@@ -2292,6 +2319,37 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     }
   };
 
+#ifdef CROSSPOINT_UC8179_OVERLAP
+  // Overlap the whole-buffer (non-tiled) AA plane renders with the B/W base
+  // waveform. That path is fully serial today: the base transition runs to
+  // completion with the CPU idle (666 ms measured on UC8179 for stock's
+  // XTF_PRE_BW_MID, 1492 ms when the page's turn on the clean cadence comes up),
+  // then the CPU renders both AA planes with the panel idle, then the 296 ms
+  // gray activation. Starting the base asynchronously lets both plane renders
+  // hide inside its waveform, so the page turn costs whichever of the two is
+  // longer instead of their sum.
+  //
+  // Safe because the panel refreshes from CONTROLLER RAM: both planes were
+  // streamed before the activation started, so rewriting the host framebuffer
+  // while the waveform runs cannot disturb it. The driver keeps its own PSRAM
+  // snapshot of the base frame for the post-waveform work that used to read the
+  // framebuffer.
+  //
+  // Tiled panels have their own overlap (overlapRefresh above) and render
+  // planes into separate band buffers, so this is exclusive with it.
+  //
+  // asyncRefreshKeepsOwnFrame() is the load-bearing gate, not
+  // supportsAsyncRefresh(): every deferring driver here can start a waveform and
+  // return, but most of them re-read the framebuffer in their post-waveform
+  // baseline restore, which reusing it as plane scratch would poison. It is a
+  // RUNTIME capability — this one image also drives SSD1677 and UC8279-X4
+  // batches — and it is false in night mode and with the sunlight fading fix,
+  // both of which therefore collapse back to the serial path.
+  const PsramPlane overlapPlane(
+      needsAnyGrayscale && !tiledGrayscale && renderer.asyncRefreshKeepsOwnFrame() ? renderer.getBufferSize() : 0);
+  const bool overlapBaseTransition = static_cast<bool>(overlapPlane);
+#endif
+
 #ifdef CROSSPOINT_IMG_FACTORY_GRAY
   if (factoryGrayPage) {
     auto factoryScratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
@@ -2371,7 +2429,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // never pay its second activation (~666 ms).
       renderer.requestDeepGrayEqualize();
 #endif
+#ifdef CROSSPOINT_UC8179_OVERLAP
+      // The equalize pass rides inside the transition's own finish half, so it
+      // stays blocking and image pages keep today's ordering: base start ‖ plane
+      // renders, then finish (including the second activation), then uploads.
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapBaseTransition,
+                                           manualRefreshPending);
+#else
       ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, /*async=*/false, manualRefreshPending);
+#endif
     } else
 #endif
     {
@@ -2388,7 +2454,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // base + grays as one waveform.
     ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh, manualRefreshPending);
   } else {
+#ifdef CROSSPOINT_UC8179_OVERLAP
+    // Exactly one of the two can be set: overlapRefresh is the tiled panels'
+    // band-buffer overlap, overlapBaseTransition the whole-buffer one.
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh || overlapBaseTransition,
+                                         manualRefreshPending);
+#else
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh, manualRefreshPending);
+#endif
   }
   const auto tDisplay = millis();
 
@@ -2484,6 +2557,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     if (needsAnyGrayscale) {
       if (!renderer.storeBwBuffer()) {
         LOG_ERR("ERS", "Failed to store BW buffer for grayscale render; skipping grayscale this page");
+#ifdef CROSSPOINT_UC8179_OVERLAP
+        // The base transition is still running on the panel and owns controller
+        // RAM until it is waited out; nothing below this early return will do
+        // it, and the driver's post-waveform baseline restore lives there.
+        if (overlapBaseTransition) renderer.waitRefreshComplete();
+#endif
         return;
       }
       const auto tBwStore = millis();
@@ -2491,12 +2570,32 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
       renderGrayscalePass();
-      renderer.copyGrayscaleLsbBuffers();
+#ifdef CROSSPOINT_UC8179_OVERLAP
+      if (overlapBaseTransition) {
+        // Controller RAM belongs to the running base waveform, so this plane
+        // cannot be uploaded yet — park it in PSRAM and hand the framebuffer
+        // straight back to the MSB pass below.
+        memcpy(overlapPlane.get(), renderer.getFrameBuffer(), renderer.getBufferSize());
+      } else
+#endif
+      {
+        renderer.copyGrayscaleLsbBuffers();
+      }
       const auto tGrayLsb = millis();
 
       renderer.clearScreen(0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
       renderGrayscalePass();
+#ifdef CROSSPOINT_UC8179_OVERLAP
+      if (overlapBaseTransition) {
+        // Both planes are composed; ride out whatever is left of the base
+        // waveform and upload them back to back. LSB has to go first: the
+        // driver folds it into its retained B/W base to rebuild stock's
+        // absolute plane0, which the MSB upload then XORs against.
+        renderer.waitRefreshComplete();
+        renderer.copyGrayscaleLsbBuffers(overlapPlane.get());
+      }
+#endif
       renderer.copyGrayscaleMsbBuffers();
       const auto tGrayMsb = millis();
 

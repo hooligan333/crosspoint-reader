@@ -207,6 +207,13 @@ class GfxRenderer {
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
+#ifdef FREEINK_UC8179_OVERLAP_BASE
+  // True when a pending async refresh carries its own copy of the frame, so the
+  // framebuffer may be REWRITTEN before waitRefreshComplete() rather than held
+  // intact — which is what lets the whole-buffer grayscale path reuse it as
+  // plane scratch during the base waveform. Implies supportsAsyncRefresh().
+  bool asyncRefreshKeepsOwnFrame() const;
+#endif
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -341,6 +348,13 @@ class GfxRenderer {
   // `fallback`).
   void displayGrayscaleBase(HalDisplay::RefreshMode fallback = HalDisplay::HALF_REFRESH) const;
   void copyGrayscaleLsbBuffers() const;
+#ifdef CROSSPOINT_UC8179_OVERLAP
+  // Upload the LSB plane from a caller-supplied buffer instead of the
+  // framebuffer. The whole-buffer AA path renders both planes while the base
+  // waveform is still running, so one of them has to be parked outside the
+  // framebuffer until the panel is ready to take it.
+  void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) const;
+#endif
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
   // Single-activation absolute 4-level grayscale (the panel's OEM "factory"
