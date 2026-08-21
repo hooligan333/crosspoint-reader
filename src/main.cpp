@@ -824,9 +824,8 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  const bool userInputThisFrame =
-      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
-  if (userInputThisFrame || activityManager.preventAutoSleep()) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
+      activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -986,26 +985,6 @@ void loop() {
     activityManager.requestUpdate();
   }
 
-#ifdef FREEINK_UC8179_RAIL_POWEROFF
-  // Panel rail prewarm, on the one frame that carries a fresh input event and
-  // immediately before it is dispatched to the activity below. Central on
-  // purpose: every activity renders through activityManager.loop(), so no
-  // activity has to remember to ask, and the ramp is started before any of them
-  // begins composing. The driver commands PON and returns without waiting, so
-  // the measured 127 ms rail ramp overlaps the render task's CPU-side page
-  // composition rather than landing in front of the waveform.
-  //
-  // TryAcquire, never a blocking lock: it must not park the loop task behind an
-  // in-flight render (that would stop input polling for a whole refresh), and
-  // the SPI byte it writes must not interleave with a render task mid plane
-  // stream. Failing to acquire is the case where a refresh is already running,
-  // which means the rails are up or that refresh is bringing them up itself.
-  if (userInputThisFrame) {
-    RenderLock prewarmLock{RenderLock::TryAcquire{}};
-    if (prewarmLock.locked()) display.beginDisplayWork();
-  }
-#endif
-
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
@@ -1034,12 +1013,27 @@ void loop() {
       // costs 127 ms here, so rapid page turns must never pay it; only a page
       // the user is actually reading is worth powering down for. The call is
       // free (no SPI) once the rails are already down, and it re-arms itself
-      // for any refresh that brings them back up without user input.
+      // for any refresh that brings them back up without user input. (The
+      // matching prewarm is not here: it belongs on the render-queue edge, so it
+      // lives in ActivityManager::requestUpdate()/requestUpdateAndWait().)
       //
-      // Before setPowerSaving(), so POF is clocked at the normal CPU frequency.
+      // Before setPowerSaving(), which only matters for the one idle pass that
+      // actually issues the POF: that first pass still runs at the normal CPU
+      // frequency. Every later pass finds the rails already down and returns
+      // without touching SPI, so the reduced clock it runs at costs nothing.
+      //
+      // Two conditions, both required. The non-blocking acquire keeps the POF
+      // out of an in-flight render (and keeps the loop task from parking behind
+      // one). The queued-render check covers the gap the lock cannot see: a
+      // requestUpdate() from another task — web server, OTA, WiFi callback — is
+      // only dispatched to the render task on the NEXT loop pass, so between the
+      // two the mutex is free while a render is already owed. Re-read under the
+      // lock, so a request arriving after the check loses its prewarm at worst
+      // (its own acquire fails while this one is held), never lands a POF inside
+      // a waveform.
       {
         RenderLock idleLock{RenderLock::TryAcquire{}};
-        if (idleLock.locked()) display.controllerIdle();
+        if (idleLock.locked() && !activityManager.hasRequestedUpdate()) display.controllerIdle();
       }
 #endif
       // If we've been inactive for a while, increase the delay to save power
