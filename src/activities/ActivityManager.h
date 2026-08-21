@@ -66,6 +66,15 @@ class ActivityManager {
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
 
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+  // Start the panel's analog rail ramp for a render that is about to be queued.
+  // Called from every path that notifies the render task, so a render reached
+  // from a timer, a background-build completion or a USB event prewarms exactly
+  // like one reached from a button. Cheap and non-blocking; see the definition
+  // for the bus-safety argument.
+  void prewarmDisplayRails();
+#endif
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
@@ -111,6 +120,11 @@ class ActivityManager {
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.
   void requestUpdate(bool immediate = false);
+
+  // True while a deferred requestUpdate() is queued and has not yet been handed
+  // to the render task. Read by the main loop's idle tail, which must not park
+  // panel hardware on top of a render that is already on its way.
+  bool hasRequestedUpdate() const { return requestedUpdate.load(std::memory_order_relaxed); }
 
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.

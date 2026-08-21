@@ -356,7 +356,43 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
   return {};
 }
 
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+// Panel rail prewarm, fired the moment a render is REQUESTED — before the
+// notify, on whichever task is doing the queuing. That is the only edge that
+// covers every render: the user-input edge it replaces missed the automatic page
+// turn, the background-build completion redraw, the bookmark/dictionary message
+// expiry and the USB plug/unplug battery repaint, each of which then paid the
+// full measured 127 ms PON in front of its waveform. Queuing time is also the
+// earliest useful moment — the ~127 ms ramp now overlaps the render task's whole
+// CPU-side composition instead of only the tail of it.
+//
+// The driver commands PON and returns without waiting, so this is a single SPI
+// byte. That byte must not interleave with the render task streaming a plane, so
+// it only goes out when the calling task can prove no render is in flight:
+//   * this task already holds the rendering mutex — the render task therefore
+//     cannot be inside render(). This case is real, not theoretical: the reader
+//     consumes its background-build completion under a blocking RenderLock and
+//     calls requestUpdate() from inside it, and a plain try-acquire would fail
+//     there (the mutex is not recursive) and silently drop the prewarm.
+//   * otherwise, a non-blocking acquire succeeds. Never a blocking one: the loop
+//     task must not park behind an in-flight render, which would stop input
+//     polling for a whole refresh.
+// Failing to acquire means another task holds the lock, i.e. a refresh is
+// running — so the rails are already up, or that refresh is bringing them up.
+void ActivityManager::prewarmDisplayRails() {
+  if (xSemaphoreGetMutexHolder(renderingMutex) == xTaskGetCurrentTaskHandle()) {
+    display.beginDisplayWork();
+    return;
+  }
+  RenderLock prewarmLock{RenderLock::TryAcquire{}};
+  if (prewarmLock.locked()) display.beginDisplayWork();
+}
+#endif
+
 void ActivityManager::requestUpdate(bool immediate) {
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+  prewarmDisplayRails();
+#endif
   if (immediate) {
     if (renderTaskHandle) {
       xTaskNotify(renderTaskHandle, 1, eIncrement);
@@ -371,6 +407,14 @@ void ActivityManager::requestUpdateAndWait() {
   if (!renderTaskHandle) {
     return;
   }
+
+#ifdef FREEINK_UC8179_RAIL_POWEROFF
+  // Before the critical section below (it takes a semaphore) and before the
+  // notify, same as requestUpdate(). The caller of this one provably does not
+  // hold the rendering mutex — that is asserted a few lines down — so the
+  // prewarm always goes through the try-acquire arm.
+  prewarmDisplayRails();
+#endif
 
   // Atomic section to perform checks
   taskENTER_CRITICAL(&activityManagerSpinlock);
