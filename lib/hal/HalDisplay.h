@@ -107,6 +107,13 @@ class HalDisplay {
   void displayGrayBufferFactory(bool turnOffScreen = false);
   bool supportsFactoryGrayscale() const;
 
+  // True when a FAST_REFRESH issued right after a grayscale page fully re-drives
+  // the gray charge that pass left on the panel (UC8179 substitutes the OEM
+  // gray-exit transition for the plain differential update). Callers that would
+  // otherwise force a clean refresh on the page after grayscale content can keep
+  // their ordinary refresh cadence. See PanelDriver::fastAfterGrayscaleSafe().
+  bool fastAfterGrayscaleSafe() const;
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.
