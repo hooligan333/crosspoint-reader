@@ -17,7 +17,17 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
+enum class HomeMenuItem {
+  NONE,
+  FILE_BROWSER,
+  LIBRARY,
+  OPDS_BROWSER,
+  FILE_TRANSFER,
+#ifdef CROSSPOINT_RSS_SYNC
+  RSS_SYNC,
+#endif
+  SETTINGS_MENU
+};
 
 /**
  * ActivityManager
@@ -109,6 +119,9 @@ class ActivityManager {
   void goToLibrary();
   void goToBrowser();
   void goToPlugins(bool showOpds);
+#ifdef CROSSPOINT_RSS_SYNC
+  void goToRssSync();
+#endif
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
