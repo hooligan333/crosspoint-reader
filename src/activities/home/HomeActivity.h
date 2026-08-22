@@ -57,6 +57,10 @@ class HomeActivity final : public Activity {
     // File Transfer also opens the OPDS browser, so it returns there without its slot.
     if (item == HomeMenuItem::FILE_TRANSFER || item == HomeMenuItem::OPDS_BROWSER) return i;
     ++i;
+#ifdef CROSSPOINT_RSS_SYNC
+    if (item == HomeMenuItem::RSS_SYNC) return i;
+    ++i;
+#endif
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -68,6 +72,9 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::LIBRARY;
     if (slot != HomeMenuItem::NONE && idx == i++) return slot;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
+#ifdef CROSSPOINT_RSS_SYNC
+    if (idx == i++) return HomeMenuItem::RSS_SYNC;
+#endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -76,6 +83,9 @@ class HomeActivity final : public Activity {
   void onLibraryOpen();
   void onSettingsOpen();
   void onFileTransferOpen();
+#ifdef CROSSPOINT_RSS_SYNC
+  void onRssSyncOpen();
+#endif
   void onOpdsBrowserOpen();
   void onPluginsOpen();
 

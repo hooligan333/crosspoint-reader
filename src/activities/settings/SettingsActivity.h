@@ -37,6 +37,9 @@ enum class SettingAction {
   ControlsSide,
   ControlsTouch,
   About,
+#ifdef CROSSPOINT_RSS_SYNC
+  RssSettings,
+#endif
 };
 
 struct SettingInfo {
