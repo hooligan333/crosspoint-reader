@@ -18,6 +18,9 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
+#ifdef CROSSPOINT_RSS_SYNC
+#include "network/RssSyncActivity.h"
+#endif
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
@@ -245,6 +248,10 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+#ifdef CROSSPOINT_RSS_SYNC
+void ActivityManager::goToRssSync() { replaceActivity(std::make_unique<RssSyncActivity>(renderer, mappedInput)); }
+#endif
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
@@ -289,6 +296,10 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
+#ifdef CROSSPOINT_RSS_SYNC
+    } else if (activityName == "RssSync") {
+      initialMenuItem = HomeMenuItem::RSS_SYNC;
+#endif
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }

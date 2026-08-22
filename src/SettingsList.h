@@ -374,6 +374,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
                           {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
                           "opdsFilenameFormat"),
+#ifdef CROSSPOINT_RSS_SYNC
+        // RSS feed URL + destination folder: persisted + web-exposed, but
+        // category-less like the OPDS pair above, because RssSettingsActivity
+        // (Settings > System > Configure RSS Feed) owns the on-device editing.
+        SettingInfo::String(StrId::STR_RSS_FEED_URL, &SETTINGS.rssFeedUrl[0], sizeof(SETTINGS.rssFeedUrl),
+                            "rssFeedUrl"),
+        SettingInfo::String(StrId::STR_RSS_DEST_FOLDER, &SETTINGS.rssDestFolder[0], sizeof(SETTINGS.rssDestFolder),
+                            "rssDestFolder"),
+#endif
 
         // Frontlight quick-panel state: persisted and web-exposed, but hidden
         // from the on-device Settings screen because the swipe panel owns it.
