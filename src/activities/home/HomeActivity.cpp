@@ -26,7 +26,11 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
+#ifdef CROSSPOINT_RSS_SYNC
+  int count = 5;  // File Browser, Library, File transfer, Sync RSS Feed, Settings
+#else
   int count = 4;  // File Browser, Library, File transfer, Settings
+#endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -328,6 +332,11 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
+#ifdef CROSSPOINT_RSS_SYNC
+      case HomeMenuItem::RSS_SYNC:
+        onRssSyncOpen();
+        break;
+#endif
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -514,9 +523,18 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
+#ifdef CROSSPOINT_RSS_SYNC
+  // "Sync RSS Feed" sits between File Transfer and Settings. Wifi is the only
+  // network-flavoured glyph the UIIcon set ships (see BaseTheme.h) that the
+  // home menu doesn't already spend on another row.
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
+                                        tr(STR_RSS_SYNC), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Wifi, Settings};
+#else
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
+#endif
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -564,5 +582,9 @@ void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
+
+#ifdef CROSSPOINT_RSS_SYNC
+void HomeActivity::onRssSyncOpen() { activityManager.goToRssSync(); }
+#endif
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }

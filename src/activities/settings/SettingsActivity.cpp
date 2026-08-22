@@ -26,6 +26,9 @@
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
 #include "OtaUpdateActivity.h"
+#ifdef CROSSPOINT_RSS_SYNC
+#include "RssSettingsActivity.h"
+#endif
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
@@ -104,6 +107,9 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+#ifdef CROSSPOINT_RSS_SYNC
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_RSS_CONFIGURE, SettingAction::RssSettings));
+#endif
   // OTA fetches this board's own release asset (see OtaUpdater); boards whose
   // asset isn't published yet just report no update available.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
@@ -442,6 +448,15 @@ void SettingsActivity::toggleCurrentSetting() {
           LOG_ERR("SETTINGS", "OOM: AboutActivity");
         }
         break;
+#ifdef CROSSPOINT_RSS_SYNC
+      case SettingAction::RssSettings:
+        if (auto activity = makeUniqueNoThrow<RssSettingsActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), resultHandler);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: RssSettingsActivity");
+        }
+        break;
+#endif
       case SettingAction::None:
         // Do nothing
         break;
