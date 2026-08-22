@@ -12,24 +12,9 @@
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#include "util/RssFolder.h"
 
 namespace fui = freeink::ui;
-
-namespace {
-// Same normalization the OPDS download folder uses: trim, single leading '/',
-// no trailing '/'. An emptied field falls back to the "/RSS" default rather
-// than to SD root — a mirror that deletes files must never point at the card
-// root by accident.
-std::string normalizeFolder(std::string v) {
-  while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
-  while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
-  if (v.empty()) return "/RSS";
-  if (v.front() != '/') v.insert(v.begin(), '/');
-  while (v.size() > 1 && v.back() == '/') v.pop_back();
-  if (v == "/") return "/RSS";
-  return v;
-}
-}  // namespace
 
 RssSettingsActivity::RssSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiListActivity("RssSettings", renderer, mappedInput) {
@@ -74,7 +59,7 @@ void RssSettingsActivity::onFieldEntered(const ActivityResult& result) {
   const size_t size = isUrl ? sizeof(SETTINGS.rssFeedUrl) : sizeof(SETTINGS.rssDestFolder);
   // A bare scheme left over from the prefill means "not set".
   const std::string value =
-      isUrl ? (text == "http://" || text == "https://" ? std::string() : text) : normalizeFolder(text);
+      isUrl ? (text == "http://" || text == "https://" ? std::string() : text) : normalizeRssFolder(text);
 
   strncpy(field, value.c_str(), size - 1);
   field[size - 1] = '\0';

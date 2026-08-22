@@ -56,6 +56,10 @@ RssParser::RssParser() {
     LOG_ERR("RSS", "Couldn't allocate memory for parser");
     return;
   }
+  // Reserve the cap up front (same discipline as OpdsParser.cpp:26): growing to
+  // MAX_ITEMS otherwise costs seven reallocate-copy-free rounds, each one
+  // moving the whole item vector, on a heap that has TLS buffers live.
+  items.reserve(MAX_ITEMS);
   XML_SetUserData(parser, this);
   XML_SetElementHandler(parser, startElement, endElement);
   XML_SetCharacterDataHandler(parser, characterData);
