@@ -11,6 +11,12 @@
  */
 class HttpDownloader {
  public:
+  // Called after every body chunk is written. `total` is 0 when the response
+  // carries no Content-Length (chunked): the transfer is indeterminate, not
+  // finished and not idle, so callers must not divide by it — and must not
+  // assume the callback only fires when a percentage exists. Several callers
+  // pump input from here, which is the only thing keeping Cancel alive while
+  // the activity loop is blocked.
   using ProgressCallback = std::function<void(size_t downloaded, size_t total)>;
   // Called with each body chunk as it arrives; return false to abort. Lets a
   // streaming parser consume the response without buffering the whole body.

@@ -47,7 +47,7 @@ class RssSyncActivity final : public UiListActivity {
   struct Row {
     std::string title;
     std::string url;
-    std::string filename;  // leaf name inside destFolder, collision-suffixed
+    std::string filename;  // leaf name inside destFolder, unique across the feed
     char date[12] = {};    // "12 Aug", from the item's pubDate
     bool checked = true;   // the list opens fully checked, by design
     bool present = false;  // file already in destFolder at list-entry time
@@ -88,12 +88,17 @@ class RssSyncActivity final : public UiListActivity {
   // flag, which would abort mid-file and leave nothing to show for it.
   bool cancelRequested = false;
   bool goHomeRequested = false;
+  // Latched only when the run actually stopped short, so a cancel that lands
+  // during the last item (which still completes) reads as a finished sync.
+  // Retitles the summary and is what puts a "Remaining" line on it.
+  bool cancelled = false;
 
   // SUMMARY counters.
   int downloadedCount = 0;
   int deletedCount = 0;
   int skippedCount = 0;
   int failedCount = 0;
+  int remainingCount = 0;  // actions a cancel skipped; 0 on a full run
 
   // --- UiListActivity contract ---
   int listCount() const override;
@@ -101,23 +106,32 @@ class RssSyncActivity final : public UiListActivity {
   void activateIndex(int index) override;
   bool handleCustomInput() override;
   void onBackButton() override;
+  const char* headerTitle() const override;
 
   // --- flow ---
   void onWifiSelectionComplete(bool connected);
   void startFetch();
   bool fetchFeed();
-  void buildRows(std::vector<RssItem>&& items);
+  // False when the feed cannot be mirrored (duplicate filenames); the error
+  // state is already set.
+  bool buildRows(std::vector<RssItem>&& items);
   void recountAndRelabel();
   void rebuildRowItems();
   void runSync();
   bool downloadRow(const Row& row);
   bool deleteRow(const Row& row);
-  void failWith(const char* message);
+  void failWith(std::string message);
   std::string pathFor(const Row& row) const;
-  bool nameTaken(const std::string& filename) const;
-  // Drop the radio before leaving to somewhere other than home: onExit's
-  // silentRestart() (the defrag path OPDS/Fonts use) always reboots into the
-  // home screen, which would discard a file-browser destination.
+  const Row* rowWithFilename(const std::string& filename) const;
+  // Drop the radio before leaving to somewhere other than home. onExit() only
+  // runs on the NEXT ActivityManager dispatch pass — after the destination
+  // activity has been constructed — so without this the radio stays up across
+  // the handoff. On non-touch hardware it matters twice over: there
+  // silentRestart() really does reboot into home, discarding the file-browser
+  // destination. (On this feature's touch hardware silentRestart() takes
+  // finishWifiSessionWithoutRestart() and stops the stack in place instead,
+  // precisely so the externally powered touch/frontlight rails keep their
+  // state — see main.cpp:198.)
   void shutdownWifi();
 
   void buildListScreen(UiScreen& screen);
