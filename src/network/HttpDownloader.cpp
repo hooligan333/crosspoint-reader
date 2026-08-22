@@ -75,7 +75,11 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
           if (sink.total == 0 && http.hasContentLength()) sink.total = http.getContentLength();
           if (!sink.write(data, len)) return false;
           sink.downloaded += len;
-          if (sink.progress && sink.total > 0) sink.progress(sink.downloaded, sink.total);
+          // Unconditional: total == 0 (no Content-Length) means indeterminate,
+          // not "no progress". Callers pump input from this callback, so
+          // skipping it on a chunked response makes Cancel dead for the whole
+          // transfer.
+          if (sink.progress) sink.progress(sink.downloaded, sink.total);
           return true;
         },
         [&sink]() { return sink.cancelFlag && *sink.cancelFlag; });
@@ -176,7 +180,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   }
 
   // fetch_headers returns 0 for a chunked response (no Content-Length); leave
-  // total at 0 so progress stays silent and the size check is skipped.
+  // total at 0, which progress callbacks read as indeterminate.
   sink.total = contentLength > 0 ? static_cast<size_t>(contentLength) : 0;
 
   auto buf = makeUniqueNoThrow<char[]>(READ_CHUNK);
@@ -203,7 +207,9 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
       return HttpDownloader::FILE_ERROR;
     }
     sink.downloaded += read;
-    if (sink.progress && sink.total > 0) sink.progress(sink.downloaded, sink.total);
+    // Unconditional; see the wolfSSL path above for why total == 0 must still
+    // reach the caller.
+    if (sink.progress) sink.progress(sink.downloaded, sink.total);
   }
 
   const bool complete = esp_http_client_is_complete_data_received(client);
