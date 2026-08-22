@@ -24,6 +24,7 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/BookCacheUtils.h"
+#include "util/RssFolder.h"
 #include "util/UrlUtils.h"
 
 namespace fui = freeink::ui;
@@ -70,7 +71,10 @@ RssSyncActivity::RssSyncActivity(GfxRenderer& renderer, MappedInputManager& mapp
 
 void RssSyncActivity::onEnter() {
   UiListActivity::onEnter();
-  destFolder = SETTINGS.rssDestFolder[0] ? SETTINGS.rssDestFolder : "/RSS";
+  // Normalised HERE, not just in the settings editor: the web settings API and
+  // a hand-edited settings.json write rssDestFolder verbatim, and this screen
+  // deletes files under whatever it is handed.
+  destFolder = normalizeRssFolder(SETTINGS.rssDestFolder);
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -105,11 +109,11 @@ void RssSyncActivity::onWifiSelectionComplete(const bool connected) {
   startFetch();
 }
 
-void RssSyncActivity::failWith(const char* message) {
+void RssSyncActivity::failWith(std::string message) {
   {
     RenderLock lock(*this);
     state = State::ERROR;
-    errorMessage = message;
+    errorMessage = std::move(message);
   }
   requestUpdate();
 }
@@ -170,11 +174,10 @@ bool RssSyncActivity::fetchFeed() {
     failWith(tr(STR_RSS_NO_ITEMS));
     return false;
   }
-  buildRows(std::move(items));
-  return true;
+  return buildRows(std::move(items));
 }
 
-void RssSyncActivity::buildRows(std::vector<RssItem>&& items) {
+bool RssSyncActivity::buildRows(std::vector<RssItem>&& items) {
   rows.clear();
   rows.reserve(items.size());
 
@@ -190,15 +193,26 @@ void RssSyncActivity::buildRows(std::vector<RssItem>&& items) {
     std::string().swap(item.guid);
     std::string().swap(item.pubDate);
 
-    const std::string base = filenameFromUrl(row.url);
-    row.filename = base;
-    // Two items whose URLs end in the same leaf would otherwise mirror onto one
-    // file: the later one gets a numeric suffix before the extension.
-    for (int suffix = 2; nameTaken(row.filename); suffix++) {
-      char sfx[8];
-      snprintf(sfx, sizeof(sfx), "-%d", suffix);
-      row.filename = base;
-      row.filename.insert(base.rfind('.'), sfx);
+    row.filename = filenameFromUrl(row.url);
+    // Two items deriving the same leaf name cannot both be mirrored, and a
+    // positional tie-break (a "-2" suffix) would be worse than refusing:
+    // suffixes are assigned in feed order, so the same file changes identity
+    // as soon as the feed rotates, and unticking a row would then delete a
+    // DIFFERENT item's book. The server contract is one unique, stable leaf
+    // filename per item, so a clash is a feed bug — refuse the whole sync and
+    // name the offending pair rather than act on a guess.
+    if (const Row* clash = rowWithFilename(row.filename)) {
+      LOG_ERR("RSS", "Duplicate filename '%s': '%s' / '%s'", row.filename.c_str(), clash->title.c_str(),
+              row.title.c_str());
+      // The ERROR screen draws one unwrapped centred line, so the format caps
+      // each title (titles are otherwise up to 120 bytes) at what fits the
+      // panel; the full pair is in the log line above.
+      char message[96];
+      snprintf(message, sizeof(message), tr(STR_RSS_DUPLICATE_FILENAME_FORMAT), clash->title.c_str(),
+               row.title.c_str());
+      std::vector<Row>().swap(rows);  // nothing will use the partial list
+      failWith(message);
+      return false;
     }
 
     // Presence is resolved once, here, and read from the row thereafter.
@@ -208,16 +222,17 @@ void RssSyncActivity::buildRows(std::vector<RssItem>&& items) {
   std::vector<RssItem>().swap(items);
 
   recountAndRelabel();
+  return true;
 }
 
 std::string RssSyncActivity::pathFor(const Row& row) const { return destFolder + "/" + row.filename; }
 
-// True when an earlier row in this feed already claimed the leaf name.
-bool RssSyncActivity::nameTaken(const std::string& filename) const {
+// The earlier row in this feed that already claimed the leaf name, or nullptr.
+const RssSyncActivity::Row* RssSyncActivity::rowWithFilename(const std::string& filename) const {
   for (const auto& row : rows) {
-    if (row.filename == filename) return true;
+    if (row.filename == filename) return &row;
   }
-  return false;
+  return nullptr;
 }
 
 // --- List state ---
@@ -344,11 +359,12 @@ void RssSyncActivity::runSync() {
   {
     RenderLock lock(*this);
     state = State::SYNCING;
-    downloadedCount = deletedCount = skippedCount = failedCount = 0;
+    downloadedCount = deletedCount = skippedCount = failedCount = remainingCount = 0;
     actionIndex = 0;
     actionTotal = newCount + removeCount;
     cancelRequested = false;
     goHomeRequested = false;
+    cancelled = false;
     fileProgress = fileTotal = 0;
     activeTitle.clear();
   }
@@ -364,8 +380,13 @@ void RssSyncActivity::runSync() {
 
   for (auto& row : rows) {
     // Cancel is honoured BETWEEN items, so the item in flight always finishes
-    // cleanly (a half-written epub is worse than a slower exit).
-    if (cancelRequested) break;
+    // cleanly (a half-written epub is worse than a slower exit). Latched here
+    // rather than off cancelRequested: a cancel during the LAST item leaves
+    // nothing undone, and that run did complete.
+    if (cancelRequested) {
+      cancelled = true;
+      break;
+    }
 
     if (row.checked && row.present) {
       skippedCount++;
@@ -399,6 +420,9 @@ void RssSyncActivity::runSync() {
 
   {
     RenderLock lock(*this);
+    // Every row that needs work bumps actionIndex before it runs, so what is
+    // left of actionTotal is exactly what a cancel never started.
+    remainingCount = actionTotal - actionIndex;
     state = State::SUMMARY;
     nav.reset(ROW_BROWSE);
   }
@@ -408,11 +432,15 @@ void RssSyncActivity::runSync() {
 bool RssSyncActivity::downloadRow(const Row& row) {
   const std::string tmpPath = destFolder + TMP_LEAF;
   const std::string destPath = pathFor(row);
+  // Enclosure URLs come off the wire raw: a space or other unsafe character in
+  // one makes esp_http_client reject the request outright. Same treatment every
+  // other caller gives a URL it did not build itself.
+  const std::string url = UrlUtils::encodeUnsafeUrlChars(row.url);
 
   int lastRenderedPercent = -1;
   unsigned long lastProgressUpdateMs = 0;
   const auto result = HttpDownloader::downloadToFile(
-      row.url, tmpPath, [this, &lastRenderedPercent, &lastProgressUpdateMs](const size_t done, const size_t total) {
+      url, tmpPath, [this, &lastRenderedPercent, &lastProgressUpdateMs](const size_t done, const size_t total) {
         fileProgress = done;
         fileTotal = total;
         // The activity loop is blocked for the whole transfer; pump input here
@@ -425,6 +453,9 @@ bool RssSyncActivity::downloadRow(const Row& row) {
           cancelRequested = true;
           goHomeRequested = true;
         }
+        // total == 0 is a response without Content-Length: there is no percent
+        // to step, so the repaint falls back to the time-based branch below and
+        // render() draws the indeterminate (bytes received) presentation.
         const int percent = total > 0 ? static_cast<int>(static_cast<uint64_t>(done) * 100 / total) : 0;
         const unsigned long now = millis();
         if (percent >= 100 || lastRenderedPercent < 0 || percent >= lastRenderedPercent + PROGRESS_STEP_PERCENT ||
@@ -482,12 +513,14 @@ void RssSyncActivity::buildSummaryScreen(UiScreen& screen) {
   centered.align = fui::TextAlign::Center;
   const int16_t lh = screen.target().lineHeight(centered.font);
 
-  // Only the counters that actually happened get a line.
-  const StrId formats[4] = {StrId::STR_RSS_DOWNLOADED_FORMAT, StrId::STR_RSS_DELETED_FORMAT,
-                            StrId::STR_RSS_SKIPPED_FORMAT, StrId::STR_RSS_FAILED_FORMAT};
-  const int counts[4] = {downloadedCount, deletedCount, skippedCount, failedCount};
+  // Only the counters that actually happened get a line. "Remaining" is the
+  // work a cancel skipped, so it is zero (and hidden) on a full run.
+  const StrId formats[5] = {StrId::STR_RSS_DOWNLOADED_FORMAT, StrId::STR_RSS_DELETED_FORMAT,
+                            StrId::STR_RSS_SKIPPED_FORMAT, StrId::STR_RSS_FAILED_FORMAT,
+                            StrId::STR_RSS_REMAINING_FORMAT};
+  const int counts[5] = {downloadedCount, deletedCount, skippedCount, failedCount, remainingCount};
   char line[48];
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 5; i++) {
     if (counts[i] == 0) continue;
     snprintf(line, sizeof(line), I18N.get(formats[i]), counts[i]);
     screen.target().text(screen.takeTop(lh, theme.spaceSm), line, centered);
@@ -518,14 +551,19 @@ void RssSyncActivity::buildScreen(UiScreen& screen) {
   state == State::SUMMARY ? buildSummaryScreen(screen) : buildListScreen(screen);
 }
 
+// SUMMARY must not claim a run finished when the user stopped it.
+const char* RssSyncActivity::headerTitle() const {
+  if (state != State::SUMMARY) return I18N.get(StrId::STR_RSS_SYNC);
+  return I18N.get(cancelled ? StrId::STR_RSS_SUMMARY_CANCELLED : StrId::STR_RSS_SUMMARY);
+}
+
 void RssSyncActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                 I18N.get(state == State::SUMMARY ? StrId::STR_RSS_SUMMARY : StrId::STR_RSS_SYNC));
+  drawChrome();
 
   const auto lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const auto centerY = (pageHeight - lineHeight) / 2;
@@ -535,6 +573,17 @@ void RssSyncActivity::render(RenderLock&&) {
     case State::LIST:
     case State::SUMMARY:
       renderUi();
+      // Mirrors UiListActivity::render's rebuild loop (UiListActivity.cpp:160):
+      // list() reports the real layout back to ListNav, and a selection past
+      // the drawn rows advances the viewport and asks for another build.
+      // Without this pass, scrolling over a page boundary paints the stale
+      // viewport — it reads as a dropped keypress. Bounded: top strictly
+      // advances toward the selection each pass.
+      for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
+        renderer.clearScreen();
+        drawChrome();
+        renderUi();
+      }
       labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       break;
     case State::SYNCING: {
@@ -542,10 +591,20 @@ void RssSyncActivity::render(RenderLock&&) {
       snprintf(header, sizeof(header), tr(STR_RSS_ITEM_PROGRESS_FORMAT), actionIndex, actionTotal);
       renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight * 2, header);
       renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight, activeTitle.c_str());
-      GUI.drawProgressBar(renderer,
-                          Rect{metrics.contentSidePadding, centerY + metrics.verticalSpacing,
-                               pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
-                          fileProgress, fileTotal);
+      if (fileTotal > 0) {
+        GUI.drawProgressBar(renderer,
+                            Rect{metrics.contentSidePadding, centerY + metrics.verticalSpacing,
+                                 pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
+                            fileProgress, fileTotal);
+      } else if (fileProgress > 0) {
+        // A response without Content-Length has no percentage to show, and
+        // drawProgressBar draws nothing at all for total == 0 — a bar frozen
+        // empty for the whole transfer. Report the bytes that have arrived
+        // instead. fileProgress stays 0 for a delete, which draws neither.
+        char received[32];
+        snprintf(received, sizeof(received), tr(STR_RSS_RECEIVED_KB_FORMAT), static_cast<int>(fileProgress / 1024));
+        renderer.drawCenteredText(UI_10_FONT_ID, centerY + metrics.verticalSpacing, received);
+      }
       labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
       break;
     }
