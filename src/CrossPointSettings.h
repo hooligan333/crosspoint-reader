@@ -285,6 +285,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // 2=Title). See OpdsFilenameFormat. Persisted via a category-less SettingInfo::Enum,
   // edited from the OPDS server list; hidden from the on-device Settings screen.
   uint8_t opdsFilenameFormat = 0;
+#ifdef CROSSPOINT_RSS_SYNC
+  // RSS feed sync. Persisted exactly like opdsDownloadFolder above:
+  // category-less SettingInfo::String entries in SettingsList.h, so they round
+  // trip through settings.json and the web API but stay out of the on-device
+  // Settings list (RssSettingsActivity owns the editing UI).
+  char rssFeedUrl[128] = "";
+  char rssDestFolder[64] = "/RSS";
+#endif
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
