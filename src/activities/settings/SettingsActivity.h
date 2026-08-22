@@ -32,6 +32,9 @@ enum class SettingAction {
   KeyboardLayouts,
   HomeButton,
   About,
+#ifdef CROSSPOINT_RSS_SYNC
+  RssSettings,
+#endif
 };
 
 struct SettingInfo {
