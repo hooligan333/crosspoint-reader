@@ -10,6 +10,12 @@
 
 #include "../../../../src/fontIds.h"
 
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+// The fixed part of BlockStyle::BorderRules (count/width/height/ownWidth), written and
+// read verbatim ahead of the in-use positions.
+static constexpr size_t BORDER_HEADER_BYTES = offsetof(BlockStyle::BorderRules, x);
+#endif
+
 size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const uint16_t textBytes) {
   // Layout documented in TextBlock.h: 16-bit arrays first, then 8-bit arrays, then text.
   size_t size = static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(int16_t) + sizeof(uint8_t));
@@ -339,6 +345,16 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.isRtl);
   serialization::writePod(file, blockStyle.directionDefined);
 
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // Left-border rules: the 4-byte header verbatim, then only the positions in use, so a
+  // line with no rules costs 4 bytes rather than the whole fixed-size table.
+  const size_t borderBytes = BORDER_HEADER_BYTES + sizeof(int16_t) * blockStyle.borders.count;
+  if (file.write(reinterpret_cast<const uint8_t*>(&blockStyle.borders), borderBytes) != borderBytes) {
+    LOG_ERR("TXB", "Serialization failed: border rules");
+    return false;
+  }
+#endif
+
   return true;
 }
 
@@ -436,6 +452,23 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.textIndentDefined);
   serialization::readPod(file, blockStyle.isRtl);
   serialization::readPod(file, blockStyle.directionDefined);
+
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  if (file.read(reinterpret_cast<uint8_t*>(&blockStyle.borders), BORDER_HEADER_BYTES) != BORDER_HEADER_BYTES) {
+    LOG_ERR("TXB", "Deserialization failed: border header");
+    return nullptr;
+  }
+  const uint8_t ruleCount = blockStyle.borders.count;
+  if (ruleCount > BlockStyle::MAX_BORDER_RULES) {
+    LOG_ERR("TXB", "Deserialization failed: border rule count %u", ruleCount);
+    return nullptr;
+  }
+  const size_t ruleBytes = sizeof(int16_t) * ruleCount;
+  if (ruleBytes > 0 && file.read(reinterpret_cast<uint8_t*>(blockStyle.borders.x), ruleBytes) != ruleBytes) {
+    LOG_ERR("TXB", "Deserialization failed: border rules");
+    return nullptr;
+  }
+#endif
 
   return block;
 }

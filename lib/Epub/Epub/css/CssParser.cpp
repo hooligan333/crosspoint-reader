@@ -142,11 +142,20 @@ constexpr std::array STYLE_LENGTH_FIELDS = {
     &CssStyle::textIndent,   &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
     &CssStyle::marginRight,  &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
     &CssStyle::paddingRight, &CssStyle::imageHeight, &CssStyle::imageWidth,
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    // Appended, never inserted: the wire layout is positional and the cache
+    // version (CssParser::CSS_CACHE_VERSION) is bumped inside the same flag.
+    &CssStyle::borderLeftWidth,
+#endif
 };
 constexpr size_t STYLE_LENGTH_FIELD_COUNT = STYLE_LENGTH_FIELDS.size();
 constexpr size_t STYLE_WIRE_BYTES =
     5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 2 + sizeof(uint32_t);
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 19) - 1;  // bit 18 = borderLeft
+#else
 constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 18) - 1;
+#endif
 
 void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   size_t offset = 0;
@@ -186,6 +195,9 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   if (style.defined.display) definedBits |= 1 << 15;
   if (style.defined.direction) definedBits |= 1 << 16;
   if (style.defined.verticalAlign) definedBits |= 1 << 17;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  if (style.defined.borderLeft) definedBits |= 1 << 18;
+#endif
   memcpy(out + offset, &definedBits, sizeof(definedBits));
 }
 
@@ -250,6 +262,9 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   style.defined.display = (definedBits & 1 << 15) != 0;
   style.defined.direction = (definedBits & 1 << 16) != 0;
   style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  style.defined.borderLeft = (definedBits & 1 << 18) != 0;
+#endif
   return true;
 }
 
@@ -610,6 +625,25 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.imageWidth = len;
       style.defined.imageWidth = 1;
     }
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  } else if (iequalsAscii(name, "border-left") || iequalsAscii(name, "border-left-width")) {
+    // Shorthand `<width> || <style> || <color>`, in any order — only the width survives.
+    // Style and colour have nowhere to go on a 1-bit panel: every border is drawn as a
+    // solid dark rule. The first token that parses as a length wins, and a value that
+    // names no length at all (`none`, `hidden`, and also the rare style-only `solid`,
+    // which CSS would resolve to the `medium` initial width) means no border. Keeping
+    // the two property names on one branch is deliberate: `border-left-width` takes a
+    // bare length, which this same scan already handles.
+    std::string_view tokens[4];
+    const size_t tokenCount = collectEdgeValueTokens(value, tokens);
+    CssLength width;
+    bool haveWidth = false;
+    for (size_t i = 0; i < tokenCount && !haveWidth; ++i) {
+      haveWidth = tryInterpretLength(tokens[i], width);
+    }
+    style.borderLeftWidth = haveWidth ? width : CssLength{};
+    style.defined.borderLeft = 1;
+#endif
   } else if (iequalsAscii(name, "display")) {
     style.display = iequalsAscii(value, "none") ? CssDisplay::None : CssDisplay::Block;
     style.defined.display = 1;

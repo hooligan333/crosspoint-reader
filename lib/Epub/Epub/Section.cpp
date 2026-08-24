@@ -46,7 +46,18 @@ namespace {
 // v42: Closing a block strips inherited vertical margins and padding.
 // v43: Paragraph base direction excludes direction changes from inline elements.
 // v44: Persist internal-link rectangles with each page for touch navigation.
+// v45: every line's serialized block style carries its left-border rule table
+//      (CROSSPOINT_CSS_CLASS_RULES). Kept inside the flag so a build without it is
+//      byte-identical to the pre-feature firmware and keeps reading v44 caches; the
+//      flagged build rebuilds section caches once on first flash. 45, not a reuse of
+//      an earlier number: upstream took 42/43/44 (#3221, #3198, #3296) and a
+//      border-rule cache must not be read as one of those (or vice versa) across a
+//      reflash.
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+constexpr uint8_t SECTION_FILE_VERSION = 45;
+#else
 constexpr uint8_t SECTION_FILE_VERSION = 44;
+#endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
