@@ -40,7 +40,15 @@ namespace {
 // v39: Image top margin is clamped so a full-viewport-height image cannot
 //      overflow the page bottom; older caches can hold placements that panels
 //      with no bottom inset refuse to draw.
+// v41: every line's serialized block style carries its left-border rule table
+//      (CROSSPOINT_CSS_CLASS_RULES). Kept inside the flag so a build without it is
+//      byte-identical to the pre-feature firmware and keeps reading v40 caches; the
+//      flagged build rebuilds section caches once on first flash.
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+constexpr uint8_t SECTION_FILE_VERSION = 41;
+#else
 constexpr uint8_t SECTION_FILE_VERSION = 40;
+#endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

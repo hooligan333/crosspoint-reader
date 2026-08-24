@@ -33,7 +33,12 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // v9: CssStyle carries border-left width.
+  static constexpr uint8_t CSS_CACHE_VERSION = 9;
+#else
   static constexpr uint8_t CSS_CACHE_VERSION = 8;
+#endif
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

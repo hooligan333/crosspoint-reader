@@ -21,6 +21,19 @@ void renderFilteredPageElements(const std::vector<std::shared_ptr<PageElement>>&
 }  // namespace
 
 void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // One vertical rule per bordered ancestor, spanning the whole line box (including
+  // leading) so stacked lines read as one continuous rule. Positions are page-relative,
+  // so they use xOffset directly rather than this line's own left inset (xPos). Drawing
+  // per line is also what makes a block that continues onto the next page continue its
+  // rules with no cross-page bookkeeping.
+  const BlockStyle::BorderRules& rules = block->getBlockStyle().borders;
+  if (rules.width > 0 && rules.height > 0) {
+    for (uint8_t i = 0; i < rules.count; ++i) {
+      renderer.fillRect(xOffset + rules.x[i], yPos + yOffset, rules.width, rules.height, true);
+    }
+  }
+#endif
   block->render(renderer, fontId, xPos + xOffset, yPos + yOffset);
 }
 
