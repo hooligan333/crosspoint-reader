@@ -2126,6 +2126,17 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   }
   pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
 
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // The line box height is only known here (it depends on the user's line compression
+  // and this line's ruby shift), and the rules have to span it exactly for consecutive
+  // lines to read as one continuous rule — so stamp it onto the style now.
+  if (line->getBlockStyle().borders.count > 0) {
+    BlockStyle borderedStyle = line->getBlockStyle();
+    borderedStyle.borders.height = static_cast<uint8_t>(std::min(lineHeight, 255));
+    line->setBlockStyle(borderedStyle);
+  }
+#endif
+
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));

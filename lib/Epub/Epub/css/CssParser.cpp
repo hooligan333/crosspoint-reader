@@ -389,6 +389,25 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.imageWidth = len;
       style.defined.imageWidth = 1;
     }
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  } else if (iequalsAscii(name, "border-left") || iequalsAscii(name, "border-left-width")) {
+    // Shorthand `<width> || <style> || <color>`, in any order — only the width survives.
+    // Style and colour have nowhere to go on a 1-bit panel: every border is drawn as a
+    // solid dark rule. The first token that parses as a length wins, and a value that
+    // names no length at all (`none`, `hidden`, and also the rare style-only `solid`,
+    // which CSS would resolve to the `medium` initial width) means no border. Keeping
+    // the two property names on one branch is deliberate: `border-left-width` takes a
+    // bare length, which this same scan already handles.
+    std::string_view tokens[4];
+    const size_t tokenCount = collectEdgeValueTokens(stripTrailingImportant(value), tokens);
+    CssLength width;
+    bool haveWidth = false;
+    for (size_t i = 0; i < tokenCount && !haveWidth; ++i) {
+      haveWidth = tryInterpretLength(tokens[i], width);
+    }
+    style.borderLeftWidth = haveWidth ? width : CssLength{};
+    style.defined.borderLeft = 1;
+#endif
   } else if (iequalsAscii(name, "display")) {
     const std::string_view displayValue = stripTrailingImportant(value);
     style.display = iequalsAscii(displayValue, "none") ? CssDisplay::None : CssDisplay::Block;
@@ -744,6 +763,9 @@ bool CssParser::saveToCache() const {
     writeLength(style.paddingRight);
     writeLength(style.imageHeight);
     writeLength(style.imageWidth);
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    writeLength(style.borderLeftWidth);
+#endif
     file.write(static_cast<uint8_t>(style.display));
     file.write(static_cast<uint8_t>(style.verticalAlign));
 
@@ -767,6 +789,9 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    if (style.defined.borderLeft) definedBits |= 1 << 18;
+#endif
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -817,7 +842,11 @@ bool CssParser::loadFromCache() {
     return static_cast<size_t>(file.available()) >= neededBytes;
   };
 
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  constexpr size_t CSS_LENGTH_FIELD_COUNT = 12;
+#else
   constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
+#endif
   constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
   constexpr size_t CSS_FIXED_STYLE_BYTES =
       5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + sizeof(uint8_t) + sizeof(uint32_t);
@@ -904,7 +933,11 @@ bool CssParser::loadFromCache() {
     if (!readLength(style.textIndent) || !readLength(style.marginTop) || !readLength(style.marginBottom) ||
         !readLength(style.marginLeft) || !readLength(style.marginRight) || !readLength(style.paddingTop) ||
         !readLength(style.paddingBottom) || !readLength(style.paddingLeft) || !readLength(style.paddingRight) ||
-        !readLength(style.imageHeight) || !readLength(style.imageWidth)) {
+        !readLength(style.imageHeight) || !readLength(style.imageWidth)
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+        || !readLength(style.borderLeftWidth)
+#endif
+    ) {
       rulesBySelector_.clear();
       return false;
     }
@@ -949,6 +982,9 @@ bool CssParser::loadFromCache() {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    style.defined.borderLeft = (definedBits & 1 << 18) != 0;
+#endif
 
     rulesBySelector_[selector] = style;
   }

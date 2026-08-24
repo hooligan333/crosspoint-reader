@@ -43,7 +43,17 @@ namespace {
 // v40: Ruby groups remain intact when a large text block is soft-flushed.
 // v41: Simple HTML table rows are laid out as positioned columns instead of
 //      flattened paragraphs with synthetic row/cell labels.
+// v42: every line's serialized block style carries its left-border rule table
+//      (CROSSPOINT_CSS_CLASS_RULES). Kept inside the flag so a build without it is
+//      byte-identical to the pre-feature firmware and keeps reading v41 caches; the
+//      flagged build rebuilds section caches once on first flash. 42, not a reuse
+//      of 41: upstream #2654 took 41 for the table-column layout, and a border-rule
+//      cache must not be read as a table cache (or vice versa) across a reflash.
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+constexpr uint8_t SECTION_FILE_VERSION = 42;
+#else
 constexpr uint8_t SECTION_FILE_VERSION = 41;
+#endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
