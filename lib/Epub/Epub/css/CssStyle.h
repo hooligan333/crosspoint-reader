@@ -94,6 +94,9 @@ struct CssPropertyFlags {
   uint16_t imageWidth : 1;
   uint16_t display : 1;
   uint16_t direction : 1;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  uint16_t borderLeft : 1;
+#endif
   uint16_t verticalAlign : 1;
   uint16_t listStyleType : 1;
 
@@ -115,13 +118,20 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+        borderLeft(0),
+#endif
         verticalAlign(0),
         listStyleType(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign || listStyleType;
+           imageWidth || display || direction || verticalAlign || listStyleType
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+           || borderLeft
+#endif
+        ;
   }
 
   void clearAll() {
@@ -129,14 +139,26 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = listStyleType = 0;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    borderLeft = 0;
+#endif
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..18.
+// Cache serializes defined flags as uint32_t with bit indices 0..18 (0..19 with
+// CROSSPOINT_CSS_CLASS_RULES). The wire word is assembled field by field by
+// encodeStyleWire()/decodeStyleWire(), never memcpy'd off this struct: borderLeft
+// is declared between direction and verticalAlign (in-memory bit 17) while its wire
+// bit is 19, so the two orders deliberately differ.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+static_assert(sizeof(CssPropertyFlags) * 8 >= 20,
+              "CssPropertyFlags has fewer bits than properties; update bitfield widths");
+#else
 static_assert(sizeof(CssPropertyFlags) * 8 >= 19,
               "CssPropertyFlags has fewer bits than properties; update bitfield widths");
+#endif
 
 // Represents a collection of CSS style properties
 // Only stores properties relevant to e-ink text rendering
@@ -159,6 +181,11 @@ struct CssStyle {
   CssLength paddingRight;   // Padding right
   CssLength imageHeight;    // Height for img (e.g. 2em) – width derived from aspect ratio when only height set
   CssLength imageWidth;     // Width for img when both or only width set
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // border-left width only. Style and colour are parsed and discarded: the engine draws
+  // every border as a solid dark rule, which is all the panel can express.
+  CssLength borderLeftWidth;
+#endif
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
   CssListStyleType listStyleType = CssListStyleType::Disc;      // list-style-type (Disc or None)
@@ -244,6 +271,12 @@ struct CssStyle {
       listStyleType = base.listStyleType;
       defined.listStyleType = 1;
     }
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    if (base.hasBorderLeft()) {
+      borderLeftWidth = base.borderLeftWidth;
+      defined.borderLeft = 1;
+    }
+#endif
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -265,6 +298,9 @@ struct CssStyle {
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  [[nodiscard]] bool hasBorderLeft() const { return defined.borderLeft; }
+#endif
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -276,6 +312,9 @@ struct CssStyle {
     marginTop = marginBottom = marginLeft = marginRight = CssLength{};
     paddingTop = paddingBottom = paddingLeft = paddingRight = CssLength{};
     imageHeight = imageWidth = CssLength{};
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    borderLeftWidth = CssLength{};
+#endif
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     listStyleType = CssListStyleType::Disc;
