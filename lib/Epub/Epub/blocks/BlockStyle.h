@@ -15,6 +15,42 @@ struct BlockStyle {
   // the remaining space into a single gap.
   static constexpr float MAX_HORIZONTAL_INSET_EM = 2.0f;
 
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // Upper bound (px) on a single border-left. Keeps a pathological stylesheet from
+  // eating the text column, and lets the width live in a uint8_t.
+  static constexpr int16_t MAX_BORDER_WIDTH_PX = 8;
+  // Left-border rules inherited from the open block ancestors, one entry per ancestor
+  // that declares a border-left, outermost first. Nesting depth is the whole point of
+  // the feature (a comment tree renders as stacked vertical rules), so the positions
+  // are kept per level instead of collapsed into one inset. Levels past the cap still
+  // get their indent, they just draw no rule. Fixed-size by design: a block style is
+  // copied onto every rendered line, and a heap-allocated list there would be hundreds
+  // of small allocations per page.
+  static constexpr uint8_t MAX_BORDER_RULES = 8;
+  // Laid out so a line serializes as one header word plus `count` positions in a single
+  // write (an ordinary line costs 4 bytes on disk, a bordered one 4 + 2*count). Same
+  // write-the-struct-verbatim trick TextBlock's word arena uses.
+  struct BorderRules {
+    uint8_t count = 0;
+    uint8_t width = 0;   // px, shared by every rule on this block
+    uint8_t height = 0;  // line-box height; stamped when a line is placed on a page
+    // This element's own border-left width in px, straight from CSS. Consumed by the
+    // first horizontal combine with the parent (appended to x[], folded into the left
+    // inset) and cleared there, so it can never be counted twice. Always 0 by the time
+    // a line reaches serialization; it rides along only because it fills what would
+    // otherwise be alignment padding.
+    uint8_t ownWidth = 0;
+    int16_t x[MAX_BORDER_RULES] = {};  // page-relative x of each rule, outermost first
+  };
+  BorderRules borders;
+
+  // Carry `parent`'s rules into `result` and append `child`'s own border, folding its
+  // width into the left inset. Out of line (BlockStyle.cpp) on purpose: the combine it
+  // serves is inlined at every block-element callsite in the chapter parser, and one
+  // shared copy of this is a few hundred bytes of IROM cheaper than several inlined ones.
+  static void inheritBorderRules(BlockStyle& result, const BlockStyle& parent, const BlockStyle& child);
+#endif
+
   CssTextAlign alignment = CssTextAlign::Justify;
 
   // Spacing (in pixels)
@@ -84,6 +120,9 @@ struct BlockStyle {
       result.marginRight = static_cast<int16_t>(child.marginRight + marginRight);
       result.paddingLeft = static_cast<int16_t>(child.paddingLeft + paddingLeft);
       result.paddingRight = static_cast<int16_t>(child.paddingRight + paddingRight);
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+      inheritBorderRules(result, *this, child);
+#endif
       if (!child.textIndentDefined && textIndentDefined) {
         result.textIndent = textIndent;
         result.textIndentDefined = true;
@@ -143,6 +182,12 @@ struct BlockStyle {
     } else {
       blockStyle.alignment = paragraphAlignment;
     }
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+    if (cssStyle.hasBorderLeft()) {
+      const int16_t borderPx = cssStyle.borderLeftWidth.toPixelsInt16(emSize, vw);
+      blockStyle.borders.ownWidth = static_cast<uint8_t>(std::clamp<int16_t>(borderPx, 0, MAX_BORDER_WIDTH_PX));
+    }
+#endif
     // RTL direction from CSS/HTML
     if (cssStyle.hasDirection()) {
       blockStyle.isRtl = (cssStyle.direction == CssTextDirection::Rtl);

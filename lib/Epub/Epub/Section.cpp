@@ -48,10 +48,33 @@ namespace {
 // v42: Closing a block strips inherited vertical margins and padding.
 // v43: Paragraph base direction excludes direction changes from inline elements.
 // v44: Persist internal-link rectangles with each page for touch navigation.
-// v45: Internal EPUB links preserve CSS superscript/subscript positioning.
+// v45: Internal EPUB links preserve CSS superscript/subscript positioning (#3355).
 // v46: Ordered lists number their items, list-style-type: none suppresses markers,
-//      and <ul>/<ol> containers contribute their own margins/padding to child insets.
+//      and <ul>/<ol> containers contribute their own margins/padding to child insets (#3500).
+// v146: every line's serialized block style carries its left-border rule table
+//      (CROSSPOINT_CSS_CLASS_RULES). Kept inside the flag so a build without it is
+//      byte-identical to the pre-feature firmware and keeps reading v46 caches; the
+//      flagged build rebuilds section caches once on first flash.
+//
+// Fork numbering scheme (r4; replaces r3's "flagged = upstream + 1"):
+//   flags-off = upstream's number, byte for byte (46 here).
+//   flagged   = upstream's number + 100 (146), a reserved band upstream's linear
+//               march will not reach for decades.
+// "+1" was retired because it walks the flagged number through upstream's own space
+// one rebase behind, so a later flags-off number eventually lands on an earlier
+// flagged one -- and here the collision was imminent rather than historical:
+// upstream took 44 -> 45 -> 46 inside a single rebase window, so its NEXT bump is
+// 47, at which point an upstream v47 .bin and a fork-flagged v47 .bin would be
+// mutually accepted at every check below while their payloads differ (flagged
+// TextBlock::serialize writes 4 + 2*count extra bytes per line that the flags-off
+// deserialize never consumes, desyncing the block stream mid-page). The CSS side
+// carries the same scheme; see CssParser.h for the r3-flagged-12 / r4-off-12
+// collision that forced the rethink.
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+constexpr uint8_t SECTION_FILE_VERSION = 146;
+#else
 constexpr uint8_t SECTION_FILE_VERSION = 46;
+#endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -68,6 +91,14 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 // format version, so a stale-format partial otherwise passes the header check and
 // only fails (noisily, via the block-decode error path) when a page is loaded.
 // Derived so the pairing can't be forgotten: 0xFE for v28, 0xFD for v29, ...
+// Under the +100 flagged band the derivation still lands clear of everything that
+// can reach an SD card: flags-off v46 -> 0xEC (236), flagged v146 -> 0xFE - 118 =
+// 0x88 (136). 136 is not any full version this fork or upstream writes (upstream is
+// at 46 and marches up by one; the flagged full version is 146), it is not the
+// flags-off partial (236), and it is not an r3-era value (44/45 full, 237/238
+// partial, and the r3 CSS 12). Each build accepts exactly two bytes -- flags-off
+// {46, 236}, flagged {146, 136} -- and the two sets are disjoint, so a cross-flash
+// or a card swap rebuilds rather than misparses.
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
