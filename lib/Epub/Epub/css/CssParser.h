@@ -50,7 +50,32 @@ class CssParser {
   };
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
+  //
+  // Fork numbering scheme (r4; replaces r3's "flagged = upstream + 1"):
+  //   flags-off = upstream's number, byte for byte. Nothing is reserved on this side,
+  //               so a flags-off image reads and writes exactly what upstream does.
+  //   flagged   = upstream's number + 100, a band upstream's linear march will not
+  //               reach for decades. The flagged wire format is a superset of the
+  //               flags-off one (border-left width appended to every style record),
+  //               so the two must never be mutually readable.
+  // "+1" was retired because it is not stable across rebases: it walks the flagged
+  // number through the same space upstream walks, one rebase behind, so a later
+  // flags-off number lands on an earlier flagged one. Concretely: r3's flagged build
+  // wrote version 12 (upstream 11 + 1) with 71-byte style records, and r4's flags-off
+  // number is upstream's own 12 with 67-byte records -- one byte, two layouts, and
+  // the version gate cannot separate them. Caches written by an r3 combo image are
+  // therefore rejected only downstream, by the selector-length / unit / isfinite
+  // payload validation and the terminal trailing-bytes check (reject-and-rebuild, so
+  // no misrender, but by accident rather than by design). That legacy overlap cannot
+  // be fixed without moving flags-off off upstream's number, which is why the flagged
+  // side moved instead. From r4 on no flagged cache can collide with an upstream one.
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  // v112 = upstream 12 (#3500 took 11 -> 12 for list-style-type) + 100: CssStyle
+  // carries border-left width (CROSSPOINT_CSS_CLASS_RULES).
+  static constexpr uint8_t CSS_CACHE_VERSION = 112;
+#else
   static constexpr uint8_t CSS_CACHE_VERSION = 12;
+#endif
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
