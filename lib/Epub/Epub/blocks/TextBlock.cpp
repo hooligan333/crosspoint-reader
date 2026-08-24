@@ -1,3 +1,4 @@
+#include <cstddef>
 #include "TextBlock.h"
 
 #include <BidiUtils.h>
@@ -461,6 +462,10 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   const uint8_t ruleCount = blockStyle.borders.count;
   if (ruleCount > BlockStyle::MAX_BORDER_RULES) {
     LOG_ERR("TXB", "Deserialization failed: border rule count %u", ruleCount);
+    return nullptr;
+  }
+  if (blockStyle.borders.width > BlockStyle::MAX_BORDER_WIDTH_PX) {
+    LOG_ERR("TXB", "Deserialization failed: border width %u", blockStyle.borders.width);
     return nullptr;
   }
   const size_t ruleBytes = sizeof(int16_t) * ruleCount;

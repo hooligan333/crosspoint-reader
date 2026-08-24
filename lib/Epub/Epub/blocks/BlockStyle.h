@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <algorithm>
 #include <cstdint>
 
@@ -42,6 +43,8 @@ struct BlockStyle {
     uint8_t ownWidth = 0;
     int16_t x[MAX_BORDER_RULES] = {};  // page-relative x of each rule, outermost first
   };
+  static_assert(offsetof(BorderRules, x) == 4 && sizeof(BorderRules) == 20,
+                "BorderRules layout is the on-disk format; bump SECTION_FILE_VERSION if it changes");
   BorderRules borders;
 
   // Carry `parent`'s rules into `result` and append `child`'s own border, folding its

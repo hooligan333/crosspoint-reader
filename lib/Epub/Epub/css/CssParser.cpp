@@ -403,7 +403,20 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     CssLength width;
     bool haveWidth = false;
     for (size_t i = 0; i < tokenCount && !haveWidth; ++i) {
-      haveWidth = tryInterpretLength(tokens[i], width);
+      // tryInterpretLength defaults an unknown unit suffix to px, which lets a
+      // whitespace-tokenized functional color (`rgb(153,` -> "153px") win the
+      // scan. Only accept tokens whose suffix is a unit this engine evaluates.
+      const std::string_view t = tokens[i];
+      size_t digits = 0;
+      while (digits < t.size() && ((t[digits] >= '0' && t[digits] <= '9') || t[digits] == '.' || t[digits] == '-')) {
+        digits++;
+      }
+      const std::string_view unit = t.substr(digits);
+      if (digits == 0 || !(unit.empty() || iequalsAscii(unit, "px") || iequalsAscii(unit, "em") ||
+                           iequalsAscii(unit, "rem") || iequalsAscii(unit, "pt") || unit == "%")) {
+        continue;
+      }
+      haveWidth = tryInterpretLength(t, width);
     }
     style.borderLeftWidth = haveWidth ? width : CssLength{};
     style.defined.borderLeft = 1;
@@ -849,7 +862,7 @@ bool CssParser::loadFromCache() {
 #endif
   constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
   constexpr size_t CSS_FIXED_STYLE_BYTES =
-      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + sizeof(uint8_t) + sizeof(uint32_t);
+      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + 2 * sizeof(uint8_t) + sizeof(uint32_t);
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
