@@ -177,8 +177,8 @@ void FrontlightPanelActivity::runTile(const int idx) {
       // Toggles the existing Settings -> Controls option, nothing lower-level:
       // that setting only governs the reader's tap/swipe handling, so the
       // panel's own gestures (including the swipe that reopens it) keep
-      // working while it is off. Off remembers the mode (Tap/Swipe/Inverted
-      // Tap) so toggling back does not stomp the user's choice.
+      // working while it is off. Off remembers whichever mode was active so
+      // toggling back does not stomp the user's choice.
       if (SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF) {
         touchModeRestore = SETTINGS.touchReaderControls;
         SETTINGS.touchReaderControls = CrossPointSettings::TOUCH_READER_OFF;

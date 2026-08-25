@@ -80,16 +80,29 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
     return result;
   }
 
-  if (SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE) {
-    // Horizontal swipes turn pages; taps remain free for the centered reader-menu
-    // zone. A slow swipe never becomes a long-press chapter skip.
+  const bool swipeTap = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE_TAP;
+  if (SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE || swipeTap) {
+    // Horizontal swipes turn pages. In plain Swipe mode taps remain free for
+    // the centered reader-menu zone, and a slow swipe cannot become a
+    // long-press chapter skip. In Swipe + Tap only the COMPLETED-swipe half of
+    // that promise survives (a >= 60 px travel can never classify as a tap);
+    // an ABORTED slow swipe (under the distance threshold, over the 700 ms
+    // time cap) legally classifies as a tap at the touch-down point — see the
+    // heldMs note below for why that cannot misfire a long-press action.
     const auto dir = input.wasSwipe();
     if (dir == MappedInputManager::SwipeDir::Left) {
       result.next = true;
-    } else if (dir == MappedInputManager::SwipeDir::Right) {
-      result.prev = true;
+      return result;
     }
-    return result;
+    if (dir == MappedInputManager::SwipeDir::Right) {
+      result.prev = true;
+      return result;
+    }
+    // Swipe + Tap: no swipe this frame — fall through and treat a tap as a
+    // page turn through the zone logic below. Plain Swipe keeps taps free.
+    if (!swipeTap) {
+      return result;
+    }
   }
 
   int x = 0;
@@ -100,13 +113,22 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
 
   const int16_t width = static_cast<int16_t>(renderer.getScreenWidth());
   const int16_t height = static_cast<int16_t>(renderer.getScreenHeight());
-  // Outer thirds only: the center column contains the reader-menu tap target
-  // (isTouchMenuTap below), so it must not double as a page turn.
-  const int16_t zoneWidth = width / 3;
+  // Outer thirds while the center column contains the reader-menu tap target
+  // (isTouchMenuTap below) — it must not double as a page turn. In Swipe + Tap
+  // with the menu NOT on tap, the center has no claim, so the zones widen to
+  // halves and the whole surface pages. The classic Tap modes keep thirds
+  // either way (their long-standing shape; the center third is simply dead
+  // when the menu is not on tap).
+  const bool menuOwnsCenter = SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_TAP;
+  const bool halves = swipeTap && !menuOwnsCenter;
+  const int16_t zoneWidth = halves ? width / 2 : width / 3;
+  // In halves mode the right zone starts at the left zone's edge so an odd
+  // width leaves no dead column; in thirds mode it hugs the right edge.
+  const int16_t rightZoneX = halves ? zoneWidth : static_cast<int16_t>(width - zoneWidth);
   const bool inverted = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_TAP;
   const freeink::ui::TapZone zones[] = {
       {freeink::ui::Rect{0, 0, zoneWidth, height}, inverted ? READER_TOUCH_NEXT : READER_TOUCH_PREV},
-      {freeink::ui::Rect{static_cast<int16_t>(width - zoneWidth), 0, zoneWidth, height},
+      {freeink::ui::Rect{rightZoneX, 0, static_cast<int16_t>(width - rightZoneX), height},
        inverted ? READER_TOUCH_PREV : READER_TOUCH_NEXT},
   };
 
@@ -116,7 +138,12 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
     result.next = zone.action == READER_TOUCH_NEXT;
     break;
   }
-  result.heldMs = gpio.lastTouchHeldMs();
+  // Swipe + Tap taps never carry a hold duration: an aborted slow swipe (< 60
+  // px, > 700 ms) IS a valid tap here, and letting its dwell time through
+  // would fire the long-press action (chapter skip / rotate) from a gesture
+  // the user meant as a page swipe. The long-press affordance stays with the
+  // classic Tap modes, whose taps are deliberate.
+  result.heldMs = swipeTap ? 0 : gpio.lastTouchHeldMs();
   return result;
 }
 

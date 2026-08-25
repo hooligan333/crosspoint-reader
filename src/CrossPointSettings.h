@@ -196,6 +196,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     TOUCH_READER_ON = 1,
     TOUCH_READER_SWIPE = 2,
     TOUCH_READER_INVERTED_TAP = 3,
+    // Appended (stored value = index into the SettingsList row): swipes turn
+    // pages from anywhere, and taps turn pages too — outer thirds while the
+    // reader menu is on its center tap zone, halves otherwise.
+    TOUCH_READER_SWIPE_TAP = 4,
     TOUCH_READER_CONTROLS_COUNT
   };
 
