@@ -1,7 +1,9 @@
 #include "CrossPointWebServerActivity.h"
 
 #include <DNSServer.h>
+#ifndef CROSSPOINT_NO_MDNS
 #include <ESPmDNS.h>
+#endif
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -42,12 +44,21 @@ void stopDnsServer() {
 }
 
 void restartMdns(const char* hostname, const char* tag) {
+#ifdef CROSSPOINT_NO_MDNS
+  // mDNS compiled out (combo envs): dropping the only references lets
+  // gc-sections shed ESPmDNS + the IDF mdns component (~28 KB IROM, an
+  // 0x1C0000-cliff lever). STA mode leads with the IP URL + QR anyway; AP
+  // mode's captive portal resolves every hostname without mDNS.
+  (void)hostname;
+  (void)tag;
+#else
   MDNS.end();
   if (MDNS.begin(hostname)) {
     LOG_DBG(tag, "mDNS started: http://%s.local/", hostname);
   } else {
     LOG_DBG(tag, "WARNING: mDNS failed to start");
   }
+#endif
 }
 
 // 0..4 bars from RSSI (dBm), with 3 dBm hysteresis on currentBars to suppress flicker.
@@ -104,7 +115,9 @@ void CrossPointWebServerActivity::onExit() {
 
   state = WebServerActivityState::SHUTTING_DOWN;
   stopDnsServer();
+#ifndef CROSSPOINT_NO_MDNS
   MDNS.end();
+#endif
 
   // Skip reboot if WiFi was never activated (e.g. user backed out of mode selection).
   if (WiFi.getMode() != WIFI_MODE_NULL) {
@@ -477,9 +490,12 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     renderer.drawCenteredText(UI_10_FONT_ID, startY, webInfo.c_str(), true);
     startY += height10 + 5;
 
-    // Also show hostname URL
+#ifndef CROSSPOINT_NO_MDNS
+    // Also show hostname URL. Without mDNS the .local name resolves nowhere in
+    // STA mode, so the no-mdns build shows only the IP URL above.
     std::string hostnameUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + AP_HOSTNAME + ".local/";
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
+#endif
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
