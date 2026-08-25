@@ -1,6 +1,8 @@
 #include "CalibreConnectActivity.h"
 
+#ifndef CROSSPOINT_NO_MDNS
 #include <ESPmDNS.h>
+#endif
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -53,7 +55,9 @@ void CalibreConnectActivity::onEnter() {
 void CalibreConnectActivity::onExit() {
   Activity::onExit();
 
+#ifndef CROSSPOINT_NO_MDNS
   MDNS.end();
+#endif
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -75,11 +79,13 @@ void CalibreConnectActivity::startWebServer() {
   state = CalibreConnectState::SERVER_STARTING;
   requestUpdate();
 
+#ifndef CROSSPOINT_NO_MDNS
   MDNS.end();
   if (MDNS.begin(HOSTNAME)) {
     // mDNS is optional for the Calibre plugin but still helpful for users.
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
+#endif
 
   // Heap-critical allocation: SD-font caches retained for the CJK UI fallback
   // are rebuildable — release them (again: the WiFi selection screen may have
