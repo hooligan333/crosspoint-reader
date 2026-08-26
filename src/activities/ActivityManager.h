@@ -150,7 +150,8 @@ class ActivityManager {
   // "go back" action). Prefers the screen's own Home-gesture close path, which
   // is the only one that sets the ActivityResult its parent's handler expects;
   // screens without one are popped from the outside instead. False when no
-  // activity is up.
+  // activity is up or a transition is already pending (same guard, and same
+  // reason, as openShortcutMenuOnCurrent).
   bool goBackOneLevel();
 
   // Monotonic counter of activity swaps. Input arbiters that defer an action
