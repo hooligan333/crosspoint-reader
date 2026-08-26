@@ -85,6 +85,14 @@ class MappedInputManager {
   // is intentionally unused. Other boards retain the bottom-edge Home gesture.
   // The reader menu remains on its existing top-edge gesture and middle tap.
   bool wasHomeGesture() const;
+  // Swallow the next wasHomeGesture() read, once. The Home-key tap is a latched
+  // one-shot that only clears on the next HalGPIO::update(), so a global Home
+  // shortcut whose action runs a NESTED ActivityManager::loop() before the next
+  // input frame sees the very gesture it is already handling. Sleep does
+  // exactly that (goToSleep() paints the sleep screen inline), and the nested
+  // loop would take the legacy Home path and tear down the SleepActivity that
+  // was just queued. Armed by that dispatch path only.
+  void suppressHomeGestureOnce();
   // A Home-key hold runs the configured long-press action in the reader.
   bool wasHomeKeyHold() const;
   bool wasMenuGesture() const;
@@ -141,6 +149,8 @@ class MappedInputManager {
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
+  // Checked and cleared by wasHomeGesture(); see suppressHomeGestureOnce().
+  mutable bool homeGestureSuppressed = false;
 #if FREEINK_CAP_TOUCH
   bool powerConfirmClickFrame = false;
 #endif
