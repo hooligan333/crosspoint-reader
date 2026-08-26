@@ -59,6 +59,12 @@ class ActivityManager {
   enum class PendingAction { None, Push, Pop, Replace };
   PendingAction pendingAction = PendingAction::None;
 
+  // Set when the pending Pop was requested from OUTSIDE the activity — a global
+  // shortcut climbing one level, rather than the activity's own finish(). Such a
+  // pop never ran the activity's exit path, so setResult() never happened.
+  // Consumed (and cleared) by loop() when it processes the pending action.
+  bool externalPop = false;
+
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
   static void renderTaskTrampoline(void* param);
@@ -135,6 +141,13 @@ class ActivityManager {
   // False when no activity is up, a transition is pending, or the screen has
   // no menu (see Activity::openShortcutMenu).
   bool openShortcutMenuOnCurrent();
+
+  // Climb one activity level on behalf of a global shortcut (the Home-key
+  // "go back" action). Prefers the screen's own Home-gesture close path, which
+  // is the only one that sets the ActivityResult its parent's handler expects;
+  // screens without one are popped from the outside instead. False when no
+  // activity is up.
+  bool goBackOneLevel();
 
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);

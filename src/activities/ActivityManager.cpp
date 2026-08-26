@@ -7,6 +7,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <variant>
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -34,6 +35,21 @@ bool ActivityManager::isOnHomeScreen() const { return currentActivity && current
 
 bool ActivityManager::openShortcutMenuOnCurrent() {
   return currentActivity && pendingAction == PendingAction::None && currentActivity->openShortcutMenu();
+}
+
+bool ActivityManager::goBackOneLevel() {
+  if (!currentActivity) return false;
+  // Screens that own a Home-gesture close path use it, because that path is
+  // what pairs setResult() with finish() — EpubReaderMenuActivity::
+  // closeCancelled() is the canonical example. Popping such a screen from the
+  // outside instead would leave its ActivityResult on std::monostate and hand
+  // that to a parent handler that std::get<>s a specific alternative.
+  if (currentActivity->handleHomeGesture()) return true;
+  // No close path here, so this is an external pop: flag it, so the pop below
+  // knows the outgoing activity never got the chance to set a result.
+  externalPop = true;
+  popActivity();
+  return true;
 }
 
 void ActivityManager::begin() {
@@ -123,6 +139,10 @@ void ActivityManager::loop() {
     if (pendingAction == PendingAction::Pop) {
       RenderLock lock;
 
+      // Belongs to THIS pop only, whichever way the branch below exits.
+      const bool wasExternalPop = externalPop;
+      externalPop = false;
+
       if (!currentActivity) {
         // Should never happen in practice
         LOG_ERR("ACT", "Pop set but currentActivity is null; ignoring pop request");
@@ -148,13 +168,26 @@ void ActivityManager::loop() {
         LOG_DBG("ACT", "Popped from activity stack, new size = %zu", stackActivities.size());
         // Handle result if necessary
         if (currentActivity->resultHandler) {
-          LOG_DBG("ACT", "Handling result for popped activity");
-
           // Move it here to avoid the case where handler calling another startActivityForResult()
           auto handler = std::move(currentActivity->resultHandler);
           currentActivity->resultHandler = nullptr;
-          lock.unlock();  // Handler may acquire its own lock
-          handler(pendingResult);
+          // An external pop skipped the activity's own exit path, so setResult()
+          // never ran and the variant is still std::monostate. Handlers here
+          // std::get<> the one alternative they expect (a plain `if
+          // (!result.isCancelled)` does not rule monostate out — that flag
+          // defaults to false), and the firmware builds with -fno-exceptions, so
+          // a bad get aborts and the device panic-reboots. Drop the dispatch.
+          // Deliberately NOT keyed on monostate alone: plenty of screens finish()
+          // without ever setting a result, and their parents' handlers do real
+          // work off the bare return (SettingsActivity persists, OpdsServerList
+          // reloads). Those pops are internal and must keep running.
+          if (wasExternalPop && std::holds_alternative<std::monostate>(pendingResult.data)) {
+            LOG_DBG("ACT", "External pop carried no result; skipping result handler");
+          } else {
+            LOG_DBG("ACT", "Handling result for popped activity");
+            lock.unlock();  // Handler may acquire its own lock
+            handler(pendingResult);
+          }
         }
 
         // Request an update to ensure the popped activity gets re-rendered
@@ -169,6 +202,10 @@ void ActivityManager::loop() {
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
+
+      // A push/replace queued after an external pop request supersedes it; the
+      // marker must not survive to describe some later, unrelated pop.
+      externalPop = false;
 
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
