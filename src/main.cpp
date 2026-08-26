@@ -492,6 +492,27 @@ bool handleX4ProHomeDoubleClick() {
   return false;
 }
 
+// Home-key input, for the loop's inactivity timer. The capacitive Home key is a
+// GT911 status bit, not a touch contact and not a GPIO button, so none of
+// wasAnyPressed() / wasAnyReleased() / wasTouchActivity() reports it and a
+// device that has only been Home-tapped still looks idle. Two consequences the
+// tap/double-click arbitration cannot survive, both fixed by counting it:
+//   * the loop tail reaches the power-saving branch and parks in
+//     waitForInput(idleInputWaitMs()) for up to 1 s, so the 300 ms
+//     double-click window resolves after ~1 s instead of ~300 ms;
+//   * the auto-sleep check runs BEFORE the arbiter, so a tap that arms a window
+//     right at the inactivity boundary is swallowed by auto-sleep.
+static bool wasHomeKeyActivity() {
+  if (!BoardConfig::hasHomeKey()) return false;
+  if (gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed()) return true;
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+  // A motionless hold produces no further frames, so the level matters too.
+  return gpio.isHomeKeyDown();
+#else
+  return false;
+#endif
+}
+
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
 static void saveSleepFrameBuffer() {
@@ -980,8 +1001,8 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || wasHomeKeyActivity() ||
+      halTiltSensor.hadActivity() || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
