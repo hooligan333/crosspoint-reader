@@ -279,10 +279,9 @@ bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); 
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
-  if (homeGestureSuppressed) {
-    homeGestureSuppressed = false;
-    return false;
-  }
+  // Deliberately does NOT clear: the suppression covers the whole input frame,
+  // however many readers it has, and update() ends it.
+  if (homeGestureSuppressed) return false;
   return gpio.hasHomeKey() ? gpio.wasHomeKeyTapped() : wasBottomEdgeUpSwipe();
 }
 

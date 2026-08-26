@@ -39,7 +39,14 @@ class MappedInputManager {
 
   MappedInputManager(HalGPIO& gpio, const GfxRenderer& renderer) : gpio(gpio), renderer(renderer) {}
 
-  void update() const { gpio.update(); }
+  // Pulls a fresh input frame. Also ends any Home-gesture suppression: the new
+  // frame's latches replace the one that was being suppressed, so the next
+  // wasHomeGesture() read is answered from live input. See
+  // suppressHomeGestureOnce().
+  void update() const {
+    homeGestureSuppressed = false;
+    gpio.update();
+  }
 #if FREEINK_CAP_TOUCH
   // X4 Pro delays a single power click until its frontlight double-click window
   // expires. The main loop supplies that one-frame event here.
@@ -85,13 +92,21 @@ class MappedInputManager {
   // is intentionally unused. Other boards retain the bottom-edge Home gesture.
   // The reader menu remains on its existing top-edge gesture and middle tap.
   bool wasHomeGesture() const;
-  // Swallow the next wasHomeGesture() read, once. The Home-key tap is a latched
-  // one-shot that only clears on the next HalGPIO::update(), so a global Home
-  // shortcut whose action runs a NESTED ActivityManager::loop() before the next
-  // input frame sees the very gesture it is already handling. Sleep does
-  // exactly that (goToSleep() paints the sleep screen inline), and the nested
-  // loop would take the legacy Home path and tear down the SleepActivity that
-  // was just queued. Armed by that dispatch path only.
+  // Swallow this input frame's Home gesture: every wasHomeGesture() read is
+  // answered false until the next update() pulls a fresh frame. The Home-key
+  // tap is a latched one-shot that only clears on the next HalGPIO::update(),
+  // so a global Home shortcut whose action runs a NESTED ActivityManager::loop()
+  // before the next input frame sees the very gesture it is already handling.
+  // Sleep does exactly that (goToSleep() paints the sleep screen inline), and
+  // the nested loop would take the legacy Home path and tear down the
+  // SleepActivity that was just queued. Frame-scoped rather than one-read,
+  // because a frame can have several readers: the nested loop checks at
+  // ActivityManager::loop(), and an activity's own blocking pump can check
+  // again (CrossPointWebServerActivity does, twice) and act on the same latch.
+  //
+  // INVARIANT: only ever arm this on a path that does not return, so a frame
+  // that is never followed by an update() cannot strand the flag. Today that is
+  // the HOME_ACT_SLEEP dispatch alone.
   void suppressHomeGestureOnce();
   // A Home-key hold runs the configured long-press action in the reader.
   bool wasHomeKeyHold() const;
@@ -149,7 +164,8 @@ class MappedInputManager {
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
-  // Checked and cleared by wasHomeGesture(); see suppressHomeGestureOnce().
+  // Read (not cleared) by wasHomeGesture(), cleared by update(). Arm it only
+  // from a path that never returns — see suppressHomeGestureOnce().
   mutable bool homeGestureSuppressed = false;
 #if FREEINK_CAP_TOUCH
   bool powerConfirmClickFrame = false;

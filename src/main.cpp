@@ -284,10 +284,14 @@ bool executeHomeButtonAction(uint8_t action) {
       // comes), so that nested loop would read it as a fresh Home gesture and
       // handleHomeGesture()/goHome() away the SleepActivity it just queued: no
       // sleep screen, and the outgoing reader's onExit() — background build
-      // stop, progress save — skipped. Eat the latch first. The nested loop's
-      // own check is the first wasHomeGesture() read that follows, so the
-      // suppression lands there and nowhere else; startDeepSleep() does not
-      // return, so an unconsumed flag cannot survive into a later frame either.
+      // stop, progress save — skipped. Eat the latch first, for the whole frame
+      // rather than for one read: the nested loop is not its only reader, since
+      // the current activity's own blocking pump gets to check too (the web
+      // server screen reads it twice) and would call onGoHome() on the same
+      // latch. This is the one place allowed to arm the suppression, and it
+      // satisfies the never-returns invariant: startDeepSleep() does not come
+      // back, so the flag cannot strand into a frame that would be surprised
+      // by it.
       mappedInputManager.suppressHomeGestureOnce();
       enterDeepSleep(false);
       return true;
