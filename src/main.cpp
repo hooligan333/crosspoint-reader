@@ -446,7 +446,7 @@ bool handleX4ProHomeDoubleClick() {
   const bool tap = gpio.wasHomeKeyTapped();
   if (tap && !homeTapTracker.armed) {
     // First tap: start the window and hold the frame so no screen acts on it.
-    homeTapTracker.arm(millis());
+    homeTapTracker.arm(millis(), activityManager.getActivityGeneration());
     return true;
   }
   if (!homeTapTracker.armed) return false;
@@ -462,13 +462,26 @@ bool handleX4ProHomeDoubleClick() {
       // The device home screen consumes no action (and would leak the latch
       // into the next screen), so it stays off-limits to the deferred tap.
       // OFF taps are swallowed everywhere.
-      if (SETTINGS.homeButtonTapAction != CrossPointSettings::HOME_ACT_OFF && !activityManager.isOnHomeScreen()) {
+      // The screen must also still be the one the tap was aimed at. This action
+      // was decided a whole window ago and nothing was blocked meanwhile, so a
+      // screen change in between must void it: a stray Home brush in the file
+      // browser followed by Confirm would otherwise have its "go back" land on
+      // the book that just opened — and loadBook() blocking the loop for
+      // seconds makes that the likely ordering, not the unlucky one. The live
+      // second tap of a double click needs no such check: it is this frame's
+      // input, aimed at what is on screen now.
+      if (SETTINGS.homeButtonTapAction != CrossPointSettings::HOME_ACT_OFF && !activityManager.isOnHomeScreen() &&
+          homeTapTracker.armedGeneration == activityManager.getActivityGeneration()) {
         executeHomeButtonAction(SETTINGS.homeButtonTapAction);
       }
       if (tap) {
         // A stalled loop can deliver the expiry and the next physical tap on
         // the same frame; that tap starts a fresh window instead of being lost.
-        homeTapTracker.arm(millis());
+        // It records the generation as it stands now, before the transition the
+        // action above may have queued is adopted — so if that action does
+        // change screens, this window is voided when it expires. Deliberate:
+        // the tap was made against a screen the user had not yet seen replaced.
+        homeTapTracker.arm(millis(), activityManager.getActivityGeneration());
         return true;
       }
       return false;  // no Home event left this frame: the action already ran

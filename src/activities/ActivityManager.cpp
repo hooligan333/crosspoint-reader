@@ -155,6 +155,7 @@ void ActivityManager::loop() {
       // Destroy the current activity
       exitActivity(lock);
       pendingAction = PendingAction::None;
+      ++activityGeneration;
 
       if (stackActivities.empty()) {
         LOG_DBG("ACT", "No more activities on stack, going home");
@@ -222,6 +223,7 @@ void ActivityManager::loop() {
       }
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);
+      ++activityGeneration;
 
       lock.unlock();  // onEnter may acquire its own lock
       currentActivity->onEnter();

@@ -65,6 +65,10 @@ class ActivityManager {
   // Consumed (and cleared) by loop() when it processes the pending action.
   bool externalPop = false;
 
+  // Bumped once per activity swap, i.e. every time loop() adopts a pending
+  // push / pop / replace. See getActivityGeneration().
+  uint32_t activityGeneration = 0;
+
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
   static void renderTaskTrampoline(void* param);
@@ -148,6 +152,15 @@ class ActivityManager {
   // screens without one are popped from the outside instead. False when no
   // activity is up.
   bool goBackOneLevel();
+
+  // Monotonic counter of activity swaps. Input arbiters that defer an action
+  // (the Home-key tap, held back for the double-click window) record it when
+  // they arm and compare it on dispatch, so an action decided against one
+  // screen can never land on another. A counter rather than the activity
+  // pointer — freed addresses get reused — or its name, which repeats on the
+  // stack. Wraparound is harmless: only equality is ever tested, and 2^32
+  // swaps inside one 300 ms window is not a thing.
+  uint32_t getActivityGeneration() const { return activityGeneration; }
 
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);
