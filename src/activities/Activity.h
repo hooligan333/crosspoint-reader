@@ -55,6 +55,9 @@ class Activity {
   // (e.g. the capacitive Home-key long press). Returns false when this screen
   // has no menu; the shortcut then does nothing instead of falling through.
   virtual bool openShortcutMenu() { return false; }
+  // True means "I closed myself" — ActivityManager::goBackOneLevel() takes it as
+  // such and does not pop, so an override that returns true merely to swallow
+  // the Home gesture silently disables the Go Back shortcut on that screen.
   virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 

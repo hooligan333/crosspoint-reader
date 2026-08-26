@@ -14,6 +14,7 @@
 namespace fui = freeink::ui;
 
 void MappedInputManager::update() const {
+  homeGestureSuppressed = false;
   gpio.update();
   for (uint8_t value = 0; value <= static_cast<uint8_t>(Button::ScreenDown); ++value) {
     if (!isPressed(static_cast<Button>(value))) longPressFiredButtons &= ~(1u << value);
@@ -285,10 +286,9 @@ bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); 
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
-  if (homeGestureSuppressed) {
-    homeGestureSuppressed = false;
-    return false;
-  }
+  // Deliberately does NOT clear: the suppression covers the whole input frame,
+  // however many readers it has, and update() ends it.
+  if (homeGestureSuppressed) return false;
   return gpio.hasHomeKey() ? gpio.wasHomeKeyTapped() : wasBottomEdgeUpSwipe();
 }
 
