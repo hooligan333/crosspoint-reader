@@ -389,7 +389,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void openReaderMenu();
   // Activity override: the reader's contextual menu is what a Home-key
   // long press opens (CrossInk-style configurable long-press action).
-  bool openShortcutMenu() const override;
+  bool openShortcutMenu() override;
   void openDictionaryWordSelect();
   bool launchKOReaderSync();
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
