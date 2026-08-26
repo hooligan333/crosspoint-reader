@@ -40,7 +40,14 @@ bool ActivityManager::openShortcutMenuOnCurrent() {
 }
 
 bool ActivityManager::goBackOneLevel() {
-  if (!currentActivity) return false;
+  // Same pending-action guard as openShortcutMenuOnCurrent(), for the same
+  // reason: a transition queued one frame ago has not been adopted yet, and
+  // popActivity() would silently reset it (its "should never happen" LOG_ERR is
+  // compiled out at LOG_LEVEL=0). The concrete case is a Home long press that
+  // queued the reader menu — the arbiter consumed that frame, so the push is
+  // adopted next frame — followed by a tap or double click landing in between,
+  // which would drop the menu and pop the reader instead.
+  if (!currentActivity || pendingAction != PendingAction::None) return false;
   // Screens that own a Home-gesture close path use it, because that path is
   // what pairs setResult() with finish() — EpubReaderMenuActivity::
   // closeCancelled() is the canonical example. Popping such a screen from the
