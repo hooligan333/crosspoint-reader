@@ -289,6 +289,18 @@ bool executeHomeButtonAction(uint8_t action) {
       return activityManager.openShortcutMenuOnCurrent();
     case CrossPointSettings::HOME_ACT_SLEEP:
       LOG_INF("MAIN", "Sleep triggered by Home-key shortcut");
+      // enterDeepSleep() -> goToSleep() queues the SleepActivity and then runs
+      // ActivityManager::loop() inline so the sleep screen is painted before the
+      // chip powers down. The Home tap that got us here is still latched in this
+      // input frame (it only clears on the next HalGPIO::update(), which never
+      // comes), so that nested loop would read it as a fresh Home gesture and
+      // handleHomeGesture()/goHome() away the SleepActivity it just queued: no
+      // sleep screen, and the outgoing reader's onExit() — background build
+      // stop, progress save — skipped. Eat the latch first. The nested loop's
+      // own check is the first wasHomeGesture() read that follows, so the
+      // suppression lands there and nowhere else; startDeepSleep() does not
+      // return, so an unconsumed flag cannot survive into a later frame either.
+      mappedInputManager.suppressHomeGestureOnce();
       enterDeepSleep(false);
       return true;
     case CrossPointSettings::HOME_ACT_SCREENSHOT: {
