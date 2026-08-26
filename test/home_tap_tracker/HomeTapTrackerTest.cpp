@@ -10,6 +10,20 @@ TEST(HomeTapTracker, ArmConsumesFrame) {
   EXPECT_EQ(tracker.armedAt, 1000);
 }
 
+// The deferred single-tap action is dispatched on the frame the window expires,
+// which is after disarm(), so the screen token recorded at arm time has to
+// survive that disarm for the caller to compare against.
+TEST(HomeTapTracker, ArmedGenerationSurvivesExpiry) {
+  HomeTapTracker tracker;
+  tracker.arm(1000, 7);
+  EXPECT_EQ(tracker.armedGeneration, 7u);
+  EXPECT_EQ(tracker.update(false, 1300, 300), HomeTapTracker::Step::WindowExpired);
+  EXPECT_FALSE(tracker.armed);
+  EXPECT_EQ(tracker.armedGeneration, 7u);
+  tracker.arm(1400, 8);
+  EXPECT_EQ(tracker.armedGeneration, 8u);
+}
+
 TEST(HomeTapTracker, SecondTapWithinWindowIsDoubleClick) {
   HomeTapTracker tracker;
   tracker.arm(1000);
