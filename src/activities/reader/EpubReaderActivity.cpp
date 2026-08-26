@@ -288,6 +288,12 @@ bool EpubReaderActivity::loadBook() {
   return true;
 }
 
+bool EpubReaderActivity::openShortcutMenu() const {
+  // openReaderMenu() mutates reader state; the const-override just forwards.
+  const_cast<EpubReaderActivity*>(this)->openReaderMenu();
+  return true;
+}
+
 void EpubReaderActivity::openReaderMenu() {
   pendingManualTurn = 0;
   const int currentPage = section ? section->currentPage + 1 : 0;
