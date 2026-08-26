@@ -298,8 +298,11 @@ bool executeHomeButtonAction(uint8_t action) {
     }
     case CrossPointSettings::HOME_ACT_GO_BACK:
       // Climb one activity level; at the top of the stack this falls back to
-      // the home screen (mirroring the X4's left-edge back swipe).
-      activityManager.popActivity();
+      // the home screen (mirroring the X4's left-edge back swipe). Routed
+      // through the manager rather than popActivity() directly so the screen's
+      // own Home-gesture close path wins where it exists — that is the path
+      // that sets the result its parent is waiting for.
+      activityManager.goBackOneLevel();
       return true;
     default:
       return false;
