@@ -527,15 +527,18 @@ bool handleX4ProHomeDoubleClick() {
 //     double-click window resolves after ~1 s instead of ~300 ms;
 //   * the auto-sleep check runs BEFORE the arbiter, so a tap that arms a window
 //     right at the inactivity boundary is swallowed by auto-sleep.
+//
+// EDGES ONLY. Never the isHomeKeyDown() level: that latch stays true for as
+// long as anything rests on the bezel (a finger, a bag strap, a case flap), and
+// every loop pass would then refresh lastActivityTime and call
+// setPowerSaving(false), pinning ESP_PM_CPU_FREQ_MAX with no tickless light
+// sleep and no auto-sleep, indefinitely. The level is not needed here either:
+// idleInputWaitMs() already returns 0 while the key is down, which keeps the
+// 50 ms poll cadence the long-press timer wants, and HOME_KEY_LONG_PRESS_MS is
+// measured against the wall clock, so CPU frequency cannot stretch it.
 static bool wasHomeKeyActivity() {
   if (!BoardConfig::hasHomeKey()) return false;
-  if (gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed()) return true;
-#ifdef CROSSPOINT_TOUCH_INT_WAKE
-  // A motionless hold produces no further frames, so the level matters too.
-  return gpio.isHomeKeyDown();
-#else
-  return false;
-#endif
+  return gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed();
 }
 
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
