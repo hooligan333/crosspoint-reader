@@ -154,6 +154,13 @@ void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
   s.kernRightClasses = nullptr;
   delete[] s.ligaturePairs;
   s.ligaturePairs = nullptr;
+  // loadStyleKernLigatureData() publishes the ligature array on the stub, and
+  // the stub outlives this free (it is what epdFont.data points at once the
+  // mini data is gone). Clear the copy, or getLigature()/applyLigatures() read
+  // freed memory. The kern pointers need no such clearing: they are only ever
+  // published into miniData, which freeStyleMiniData() zeroes wholesale.
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
   s.kernLigLoaded = false;
 }
 
