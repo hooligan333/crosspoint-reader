@@ -2,6 +2,9 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
+#include <HalHeapGauge.h>  // free-heap gate for the cache release below
+#endif
 #include <I18n.h>
 
 #include <algorithm>
@@ -30,6 +33,16 @@ constexpr int SIDE_PADDING = 20;
 // path, which holds no per-page copies.
 constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
 
+#ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
+// Cache-release floor, enlarged-advance-table builds only. Dropping the SD font
+// caches on exit also drops the persistent advance table, and at the raised cap
+// that table holds a whole CJK section's metadata -- so the page underneath pays
+// a full advance/kern/ligature rebuild for every word looked up. Only worth that
+// when the heap actually needs the space; matches the 40 KB floor SdCardFont
+// uses for its own retention bets (MINI_RETAIN_MIN_FREE_HEAP).
+constexpr size_t CACHE_RETAIN_MIN_FREE_HEAP = 40 * 1024;
+#endif
+
 }  // namespace
 
 void DictionaryDefinitionActivity::onEnter() {
@@ -46,6 +59,9 @@ void DictionaryDefinitionActivity::onEnter() {
 
 void DictionaryDefinitionActivity::onExit() {
   Activity::onExit();
+#ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
+  if (gateFreeHeap() >= CACHE_RETAIN_MIN_FREE_HEAP) return;
+#endif
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseSdFontCaches();
   }
