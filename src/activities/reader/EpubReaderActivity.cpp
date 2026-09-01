@@ -1530,21 +1530,28 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS: {
+      // Release the section BEFORE the settings screen opens, like
+      // SELECT_CHAPTER above, not in the result handler: an external pop (the
+      // Home-key "Go Back" action) skips a no-result handler, and a section
+      // released only there survives a font change — renderBook() then draws
+      // the old layout's word positions with the new size's glyphs (spacing
+      // collapses or gapes until something else rebuilds the section).
+      // Resetting up front means every return path rebuilds against the
+      // settings as they are then, and the settings screen's font previews get
+      // the section's tens-of-KB footprint, as the chapter list already does.
+      {
+        RenderLock lock;
+        if (section) {
+          rememberCurrentContentOffset();
+          cachedSpineIndex = currentSpineIndex;
+          cachedChapterTotalPageCount = section->pageCount;
+          nextPageNumber = section->currentPage;
+        }
+        section.reset();
+      }
       startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                     TextSettingsActivity::Tab::Family),
-                             [this](const ActivityResult&) {
-                               {
-                                 RenderLock lock;
-                                 if (section) {
-                                   rememberCurrentContentOffset();
-                                   cachedSpineIndex = currentSpineIndex;
-                                   cachedChapterTotalPageCount = section->pageCount;
-                                   nextPageNumber = section->currentPage;
-                                 }
-                                 section.reset();
-                               }
-                               openReaderMenu();
-                             });
+                             [this](const ActivityResult&) { openReaderMenu(); });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::NIGHT_MODE:
