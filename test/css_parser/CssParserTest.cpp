@@ -18,7 +18,13 @@ constexpr size_t kMaxRules = 1500;
 constexpr size_t kMaxUniqueStyles = 256;
 constexpr size_t kCacheHeaderBytes = sizeof(uint8_t) * 2 + sizeof(uint16_t);
 constexpr size_t kStyleEnumPrefixBytes = 5;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+// The flag appends CssStyle::borderLeftWidth to the wire's positional length
+// table (and bit 18 to the defined-flags word); CSS_CACHE_VERSION moves with it.
+constexpr size_t kStyleLengthFieldCount = 12;
+#else
 constexpr size_t kStyleLengthFieldCount = 11;
+#endif
 constexpr size_t kStyleLengthBytes = sizeof(decltype(CssLength::value)) + sizeof(uint8_t);
 
 class CssParserTest : public ::testing::Test {
@@ -288,5 +294,62 @@ TEST_F(CssParserTest, CacheHydrationRejectsNonFiniteStyleLengths) {
     EXPECT_TRUE(reader.empty());
   }
 }
+
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+// border-left is the one property CROSSPOINT_CSS_CLASS_RULES adds to the parser.
+// Only its WIDTH survives: style and colour have nowhere to go on a 1-bit panel.
+TEST_F(CssParserTest, ParsesBorderLeftWidthOnly) {
+  CssParser parser(cachePath());
+  ASSERT_EQ(loadCss(parser,
+                    "blockquote.c { border-left: 2px solid #999; padding-left: 0.6em; }\n"
+                    "p.none { border-left: none; }\n"
+                    "p.styleonly { border-left: solid; }\n"
+                    "p.explicit { border-left-width: 3px; }\n"
+                    "p.rgb { border-left: 1px solid rgb(153, 153, 153); }\n"
+                    "p.em { border-left: 0.5em dotted black; }\n"),
+            CssParser::ParseResult::Complete);
+
+  const CssStyle quote = parser.resolveStyle("blockquote", "c");
+  ASSERT_TRUE(quote.hasBorderLeft());
+  EXPECT_FLOAT_EQ(quote.borderLeftWidth.value, 2.0f);
+  EXPECT_EQ(quote.borderLeftWidth.unit, CssUnit::Pixels);
+  // The border must not displace the properties that already worked.
+  ASSERT_TRUE(quote.hasPaddingLeft());
+  EXPECT_FLOAT_EQ(quote.paddingLeft.value, 0.6f);
+
+  // A value naming no length means no border, but the property is still
+  // "defined" so it overrides an inherited one.
+  for (const char* cls : {"none", "styleonly"}) {
+    const CssStyle style = parser.resolveStyle("p", cls);
+    ASSERT_TRUE(style.hasBorderLeft()) << cls;
+    EXPECT_FLOAT_EQ(style.borderLeftWidth.value, 0.0f) << cls;
+  }
+
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "explicit").borderLeftWidth.value, 3.0f);
+  // A whitespace-tokenized functional colour must not be read as "153px".
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "rgb").borderLeftWidth.value, 1.0f);
+  EXPECT_EQ(parser.resolveStyle("p", "rgb").borderLeftWidth.unit, CssUnit::Pixels);
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "em").borderLeftWidth.value, 0.5f);
+  EXPECT_EQ(parser.resolveStyle("p", "em").borderLeftWidth.unit, CssUnit::Em);
+
+  // `blockquote` and `blockquote.c` are distinct keys: a bare tag gets nothing.
+  EXPECT_FALSE(parser.resolveStyle("blockquote", "").hasBorderLeft());
+}
+
+TEST_F(CssParserTest, BorderLeftWidthSurvivesTheCacheRoundTrip) {
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer, "blockquote.c { border-left: 2px solid #999; padding-left: 0.6em; }\n"),
+            CssParser::ParseResult::Complete);
+  ASSERT_TRUE(writer.saveToCache(true));
+
+  CssParser reader(cachePath());
+  ASSERT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Complete);
+  const CssStyle style = reader.resolveStyle("blockquote", "c");
+  ASSERT_TRUE(style.hasBorderLeft());
+  EXPECT_FLOAT_EQ(style.borderLeftWidth.value, 2.0f);
+  EXPECT_EQ(style.borderLeftWidth.unit, CssUnit::Pixels);
+  EXPECT_FLOAT_EQ(style.paddingLeft.value, 0.6f);
+}
+#endif  // CROSSPOINT_CSS_CLASS_RULES
 
 }  // namespace
