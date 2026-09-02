@@ -965,11 +965,25 @@ void loop() {
 #ifdef CROSSPOINT_AUTO_LIGHT_SLEEP
   // Track the USB host state for the sleep-suppression lock. Here rather than
   // at the battery-icon repaint further down, which several of loop()'s early
-  // returns skip: this is a level the lock must not get wrong, and the edge is
-  // reported only for the one update() that saw the change.
-  if (gpio.wasUsbStateChanged()) {
-    powerManager.noteUsbConnected(gpio.isUsbConnected());
-  }
+  // returns skip -- including the exclusive-storage one immediately below: this
+  // is a level the lock must not get wrong.
+  //
+  // Driven from the LEVEL, not the plug/unplug edge. The USB Drive term below
+  // has no edge to hang off, and isUsbConnected() costs one digitalRead on the
+  // X4 Pro (its board profile leaves usbDetect unassigned, so upstream #3223's
+  // fallback resolves to the charger STAT pin); noteUsbConnected() no-ops when
+  // the level has not changed.
+  //
+  // USB Drive is OR'd in because it is the one case this app-side lock uniquely
+  // covers. The serial console is guarded kernel-side and SOF-accurately by
+  // CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION, but that monitor releases its lock as
+  // soon as the PHY is handed to USB-OTG, TinyUSB takes no PM lock of its own,
+  // and the charge-STAT proxy goes LOW at charge termination -- exactly the
+  // state a device parked on a host settles into. A light-sleep window in the
+  // middle of an MSC transfer drops the device: USB-OTG must answer a SOF
+  // within 1 ms. The term also covers the raw USB-Serial/JTAG handoff on exit,
+  // which runs inside that same activity's loop().
+  powerManager.noteUsbConnected(gpio.isUsbConnected() || activityManager.requiresExclusiveStorageLoop());
   // WiFi half of the same lock, refreshed every pass: setPowerSaving() samples
   // it too, but only runs on some iterations, and the enable/disable sites all
   // live in activity code that this keeps covered without relying on their
