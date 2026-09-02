@@ -3199,6 +3199,25 @@ void EpubReaderActivity::handleOverlayInput() {
         overlay = Overlay::None;
         overlayPopup.dismiss();
         discardOverlayPage();
+        // Release the section BEFORE the picker opens, the same way the classic
+        // menu's TEXT_SETTINGS branch does. applyReaderTextSettings() below
+        // still resets it, but that runs only when the result handler runs, and
+        // an EXTERNAL pop (the Home-key "Go Back" action) skips a handler whose
+        // result is monostate — so a font or size change made here would leave
+        // the old layout's baked word positions to be drawn with the new size's
+        // glyphs. Resetting up front means every return path rebuilds against
+        // the settings as they are then, and frees the section's tens of KB for
+        // the picker's font previews.
+        {
+          RenderLock lock;
+          if (section) {
+            rememberCurrentContentOffset();
+            cachedSpineIndex = currentSpineIndex;
+            cachedChapterTotalPageCount = section->pageCount;
+            nextPageNumber = section->currentPage;
+          }
+          section.reset();
+        }
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
                                [this](const ActivityResult&) {
