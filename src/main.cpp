@@ -905,6 +905,26 @@ void setup() {
   // either configured as a level hold or reported unusable.
   gpio.beginInputWake();
 #endif
+
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // Re-arm the wake-hold absorb from the LIVE button level, which covers every
+  // wake classification. The `case PowerButton` arm above is the only other
+  // place that sets it, and upstream #3248 (e37164ca) narrowed what reaches it:
+  // HalGPIO::isXteinkDevice() omits X4 Pro and X4 Classic (its sibling
+  // hasEdgeSideButtons() includes both), so coldBootImpliesPowerButton() is
+  // false here and a button-energized cold boot -- the X4 Pro's normal way back
+  // from a dropped power latch -- now classifies as Other. The boot hold's
+  // release would then arrive in loop() as a live power-button release and fire
+  // a short-press action: the TOGGLE_LIGHT block near the end of loop() states
+  // the opposite as its invariant ("A wake hold cannot reach here either"), and
+  // this restores it. Bounded either way: the flag exists only when the fork's
+  // Toggle Light action does, and the level is only high if the button is still
+  // held after the whole of setup().
+  if (gpio.isPressed(HalGPIO::BTN_POWER)) {
+    wakePowerReleasePending = true;
+  }
+#endif
+
   allowSleepAt = millis() + 2000;
 }
 
