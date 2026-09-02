@@ -18,7 +18,14 @@ constexpr size_t kMaxRules = 1500;
 constexpr size_t kMaxUniqueStyles = 256;
 constexpr size_t kCacheHeaderBytes = sizeof(uint8_t) * 2 + sizeof(uint16_t);
 constexpr size_t kStyleEnumPrefixBytes = 5;
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+// The flag appends CssStyle::borderLeftWidth to the wire's positional length
+// table (and bit 19 to the defined-flags word -- upstream #3500 took bit 18 for
+// list-style-type); CSS_CACHE_VERSION moves with it.
+constexpr size_t kStyleLengthFieldCount = 12;
+#else
 constexpr size_t kStyleLengthFieldCount = 11;
+#endif
 constexpr size_t kStyleLengthBytes = sizeof(decltype(CssLength::value)) + sizeof(uint8_t);
 
 class CssParserTest : public ::testing::Test {
@@ -287,6 +294,137 @@ TEST_F(CssParserTest, CacheHydrationRejectsNonFiniteStyleLengths) {
     EXPECT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Invalid);
     EXPECT_TRUE(reader.empty());
   }
+}
+
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+// border-left is the one property CROSSPOINT_CSS_CLASS_RULES adds to the parser.
+// Only its WIDTH survives: style and colour have nowhere to go on a 1-bit panel.
+TEST_F(CssParserTest, ParsesBorderLeftWidthOnly) {
+  CssParser parser(cachePath());
+  ASSERT_EQ(loadCss(parser,
+                    "blockquote.c { border-left: 2px solid #999; padding-left: 0.6em; }\n"
+                    "p.none { border-left: none; }\n"
+                    "p.styleonly { border-left: solid; }\n"
+                    "p.explicit { border-left-width: 3px; }\n"
+                    "p.rgb { border-left: 1px solid rgb(153, 153, 153); }\n"
+                    "p.em { border-left: 0.5em dotted black; }\n"),
+            CssParser::ParseResult::Complete);
+
+  const CssStyle quote = parser.resolveStyle("blockquote", "c");
+  ASSERT_TRUE(quote.hasBorderLeft());
+  EXPECT_FLOAT_EQ(quote.borderLeftWidth.value, 2.0f);
+  EXPECT_EQ(quote.borderLeftWidth.unit, CssUnit::Pixels);
+  // The border must not displace the properties that already worked.
+  ASSERT_TRUE(quote.hasPaddingLeft());
+  EXPECT_FLOAT_EQ(quote.paddingLeft.value, 0.6f);
+
+  // A value naming no length means no border, but the property is still
+  // "defined" so it overrides an inherited one.
+  for (const char* cls : {"none", "styleonly"}) {
+    const CssStyle style = parser.resolveStyle("p", cls);
+    ASSERT_TRUE(style.hasBorderLeft()) << cls;
+    EXPECT_FLOAT_EQ(style.borderLeftWidth.value, 0.0f) << cls;
+  }
+
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "explicit").borderLeftWidth.value, 3.0f);
+  // A whitespace-tokenized functional colour must not be read as "153px".
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "rgb").borderLeftWidth.value, 1.0f);
+  EXPECT_EQ(parser.resolveStyle("p", "rgb").borderLeftWidth.unit, CssUnit::Pixels);
+  EXPECT_FLOAT_EQ(parser.resolveStyle("p", "em").borderLeftWidth.value, 0.5f);
+  EXPECT_EQ(parser.resolveStyle("p", "em").borderLeftWidth.unit, CssUnit::Em);
+
+  // `blockquote` and `blockquote.c` are distinct keys: a bare tag gets nothing.
+  EXPECT_FALSE(parser.resolveStyle("blockquote", "").hasBorderLeft());
+}
+
+TEST_F(CssParserTest, BorderLeftWidthSurvivesTheCacheRoundTrip) {
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer, "blockquote.c { border-left: 2px solid #999; padding-left: 0.6em; }\n"),
+            CssParser::ParseResult::Complete);
+  ASSERT_TRUE(writer.saveToCache(true));
+
+  CssParser reader(cachePath());
+  ASSERT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Complete);
+  const CssStyle style = reader.resolveStyle("blockquote", "c");
+  ASSERT_TRUE(style.hasBorderLeft());
+  EXPECT_FLOAT_EQ(style.borderLeftWidth.value, 2.0f);
+  EXPECT_EQ(style.borderLeftWidth.unit, CssUnit::Pixels);
+  EXPECT_FLOAT_EQ(style.paddingLeft.value, 0.6f);
+}
+
+// One style carrying border-left AND both properties upstream added in the bits
+// below it. Round-tripping all three together is what proves bit 19 and the
+// widened defined-flags mask at once: a mask still cut at (1u<<19)-1 would drop
+// borderLeft, and a wire that appended borderLeftWidth anywhere but last would
+// shift list-style-type / vertical-align out of position.
+TEST_F(CssParserTest, BorderLeftSharesOneStyleWithTheUpstreamBitsAcrossTheWire) {
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer,
+                    "blockquote.c { border-left: 0.5em dotted black; list-style-type: none;"
+                    " vertical-align: super; }\n"),
+            CssParser::ParseResult::Complete);
+  ASSERT_TRUE(writer.saveToCache(true));
+
+  CssParser reader(cachePath());
+  ASSERT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Complete);
+  const CssStyle style = reader.resolveStyle("blockquote", "c");
+  ASSERT_TRUE(style.hasBorderLeft());
+  EXPECT_FLOAT_EQ(style.borderLeftWidth.value, 0.5f);
+  EXPECT_EQ(style.borderLeftWidth.unit, CssUnit::Em);  // the unit, not just the value
+  ASSERT_TRUE(style.hasListStyleType());               // upstream #3500, bit 18
+  EXPECT_EQ(style.listStyleType, CssListStyleType::None);
+  ASSERT_TRUE(style.hasVerticalAlign());  // upstream #3355
+  EXPECT_EQ(style.verticalAlign, CssVerticalAlign::Super);
+}
+#endif  // CROSSPOINT_CSS_CLASS_RULES
+
+// The serialized style record must be exactly the positional layout the constants
+// above describe: 5 enum bytes, kStyleLengthFieldCount (value, unit) pairs, 3
+// trailing enum bytes (display, vertical-align, list-style-type) and the 4-byte
+// defined-flags word. 67 flags-off, 72 flagged. Nothing else in the suite pins the
+// wire SIZE, so a field added anywhere but the end would otherwise pass silently.
+TEST_F(CssParserTest, StyleRecordIsExactlyTheDeclaredWireLayout) {
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer, "blockquote.c { padding-left: 0.6em; }\n"), CssParser::ParseResult::Complete);
+  ASSERT_TRUE(writer.saveToCache(true));
+
+  const std::vector<uint8_t> cache = readCache();
+  ASSERT_GE(cache.size(), kCacheHeaderBytes + sizeof(uint16_t));
+  uint16_t selectorLength = 0;
+  memcpy(&selectorLength, cache.data() + kCacheHeaderBytes, sizeof(selectorLength));
+  const size_t styleOffset = kCacheHeaderBytes + sizeof(selectorLength) + selectorLength;
+  ASSERT_GT(cache.size(), styleOffset);
+  EXPECT_EQ(cache.size() - styleOffset,
+            kStyleEnumPrefixBytes + kStyleLengthFieldCount * kStyleLengthBytes + 3 + sizeof(uint32_t));
+}
+
+// The version byte is the gate between the two wire formats, so the OTHER flag
+// state's number must be refused outright -- not caught downstream by payload
+// validation. Flagged lives at upstream + 100 precisely so this can never be a
+// near miss; see the numbering note in CssParser.h.
+TEST_F(CssParserTest, TheOtherFlagStatesVersionByteIsRejected) {
+#ifdef CROSSPOINT_CSS_CLASS_RULES
+  constexpr uint8_t kOtherVersion = 12;  // flags-off == upstream
+  static_assert(CssParser::CSS_CACHE_VERSION == 112, "flagged CSS_CACHE_VERSION must be upstream's 12 + 100");
+#else
+  constexpr uint8_t kOtherVersion = 112;  // flagged == upstream + 100
+  static_assert(CssParser::CSS_CACHE_VERSION == 12, "flags-off CSS_CACHE_VERSION must stay upstream's own number");
+#endif
+  static_assert(CssParser::CSS_CACHE_VERSION != kOtherVersion, "the two flag states must not share a version byte");
+
+  CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer, "blockquote.c { padding-left: 0.6em; }\n"), CssParser::ParseResult::Complete);
+  ASSERT_TRUE(writer.saveToCache(true));
+
+  std::vector<uint8_t> cache = readCache();
+  ASSERT_FALSE(cache.empty());
+  ASSERT_EQ(cache[0], CssParser::CSS_CACHE_VERSION);
+  cache[0] = kOtherVersion;
+  writeCache(cache);
+
+  CssParser reader(cachePath());
+  EXPECT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Invalid);
+  EXPECT_TRUE(reader.empty());
 }
 
 }  // namespace
