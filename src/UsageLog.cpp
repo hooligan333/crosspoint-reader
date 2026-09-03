@@ -5,13 +5,22 @@
 #include <Arduino.h>
 #include <BatteryMonitor.h>
 #include <HalClock.h>
+#include <HalDisplay.h>
 #include <HalFrontlight.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_system.h>
 
+// LS rows need the light-sleep residency counters, which only exist when the
+// automatic light sleep feature is compiled in AND its profiling flag is set.
+#if defined(CROSSPOINT_PM_STATS) && defined(CROSSPOINT_AUTO_LIGHT_SLEEP)
+#define CROSSPOINT_USAGE_LOG_LS 1
+#include <HalPowerManager.h>
+#endif
+
 #include <cstdio>
+#include <cstring>
 
 #include "CivilDate.h"
 #include "CrossPointSettings.h"
@@ -23,12 +32,13 @@ namespace {
 constexpr char LOG_DIR[] = "/.crosspoint";
 constexpr char LOG_PATH[] = "/.crosspoint/usage.csv";
 constexpr char OLD_PATH[] = "/.crosspoint/usage.old.csv";
-constexpr char CSV_HEADER[] = "datetime,millis,event,pct,mv,chg,aux\n";
+constexpr char CSV_HEADER[] = "datetime,millis,event,pct,mv,chg,aux,detail\n";
 
 // Indexed by UsageLog::Event; kept short so a row stays well inside the
 // stack buffer in writeRow().
-const char* const EVENT_NAMES[] = {"BOOT",     "SLEEP",     "PAGE",    "FL_ON",    "FL_OFF",
-                                   "NIGHT_ON", "NIGHT_OFF", "WIFI_ON", "WIFI_OFF", "DROP"};
+const char* const EVENT_NAMES[] = {"BOOT",     "SLEEP",    "PAGE",   "FL_ON",  "FL_OFF",  "NIGHT_ON", "NIGHT_OFF",
+                                   "WIFI_ON",  "WIFI_OFF", "DROP",   "CHG_ON", "CHG_OFF", "FR",       "BOOK_OPEN",
+                                   "BOOK_RDY", "CH_START", "CH_RDY", "LS",     "LSN"};
 
 // Battery access mirrors HalPowerManager/HalGPIO: one function-local static
 // monitor for the process, constructed on first use so BoardConfig::ACTIVE is
@@ -62,6 +72,19 @@ void UsageLog::begin() {
       // landed) still needs the header, so treat only a non-empty file as
       // existing -- the append below reuses it either way.
       exists = size > 0;
+      // Schema check, free of an extra open because the file is already here:
+      // a first line that is not the current header means an older build wrote
+      // this file. Force it down the rotation path by claiming it is oversized
+      // -- the old rows keep their own header in usage.old.csv and this session
+      // starts a fresh file, instead of appending 8-column rows under a
+      // 7-column header. `size` is only read by that branch, and its LOG_INF no
+      // longer prints it, so clobbering it here says nothing untrue.
+      if (exists) {
+        char header[sizeof(CSV_HEADER)];
+        const int got = file.read(header, sizeof(CSV_HEADER) - 1);
+        if (got != static_cast<int>(sizeof(CSV_HEADER) - 1) || memcmp(header, CSV_HEADER, sizeof(CSV_HEADER) - 1) != 0)
+          size = MAX_LOG_BYTES + 1;
+      }
       file.close();
     }
   }
@@ -69,7 +92,7 @@ void UsageLog::begin() {
     Storage.remove(OLD_PATH);
     if (Storage.rename(LOG_PATH, OLD_PATH)) {
       exists = false;
-      LOG_INF("ULOG", "Rotated usage log (%lu KB)", static_cast<unsigned long>(size / 1024));
+      LOG_INF("ULOG", "Rotated usage log");
     }
   }
   needHeader = !exists;
@@ -84,9 +107,11 @@ void UsageLog::begin() {
   lastFrontlightOn = Frontlight.present() && Frontlight.isOn();
   lastNightMode = SETTINGS.screenInverted != 0;
   lastWifiOn = WiFi.getMode() != WIFI_MODE_NULL;
+  lastChgLogged = lastChg;
   if (lastFrontlightOn) record(EV_FL_ON, Frontlight.brightness());
   if (lastNightMode) record(EV_NIGHT_ON, 0);
   if (lastWifiOn) record(EV_WIFI_ON, 0);
+  if (lastChgLogged) record(EV_CHG_ON, 0);
 }
 
 void UsageLog::tick() {
@@ -97,6 +122,7 @@ void UsageLog::tick() {
 
   sampleBattery();
   pollState();
+  pollRefreshes();
 
   if (count >= FLUSH_WATERMARK || (count > 0 && now - pendingSinceMs >= FLUSH_AGE_MS)) {
     // A card that just failed is not retried on every poll: without this the
@@ -113,14 +139,39 @@ void UsageLog::notePageTurn(const bool isForward, const bool isSkip) {
   record(EV_PAGE, aux);
 }
 
+void UsageLog::noteBookOpen(const BookCache state) { record(EV_BOOK_OPEN, static_cast<uint8_t>(state)); }
+
+void UsageLog::noteBookReady() { record(EV_BOOK_RDY, 0); }
+
+void UsageLog::noteSectionStart(const bool isForward, const bool prebuilt) {
+  record(EV_CH_START, isForward ? 1 : 2, prebuilt ? 1 : 2);
+}
+
+void UsageLog::noteSectionReady(const bool isForward) { record(EV_CH_RDY, isForward ? 1 : 2); }
+
 void UsageLog::noteSleep() {
   if (!started) return;
   sampleBattery();
+  // The sleep screen's own flashing refresh has already happened by now, so
+  // drain the counter before the last flush rather than losing it.
+  pollRefreshes();
+#ifdef CROSSPOINT_USAGE_LOG_LS
+  uint32_t entries = 0;
+  uint32_t sleptMs = 0;
+  powerManager.getLightSleepStats(entries, sleptMs);
+  const uint32_t uptimeMs = millis();
+  uint32_t pct = uptimeMs > 0 ? static_cast<uint32_t>((static_cast<uint64_t>(sleptMs) * 100u) / uptimeMs) : 0;
+  if (pct > 100) pct = 100;
+  record(EV_LS, static_cast<uint8_t>(pct), sleptMs);
+  // The wake count needs the 32-bit detail field, so it is its own row rather
+  // than another byte on LS (whose aux is the residency percent already).
+  record(EV_LSN, 0, entries);
+#endif
   record(EV_SLEEP, 0);
   flush();
 }
 
-void UsageLog::record(const uint8_t event, const uint8_t aux) {
+void UsageLog::record(const uint8_t event, const uint8_t aux, const uint32_t detail) {
   if (!started) return;
   if (count == RING_SIZE) {
     // Card missing or erroring: keep the newest window and say how much went.
@@ -139,6 +190,7 @@ void UsageLog::record(const uint8_t event, const uint8_t aux) {
   e.pct = lastPct;
   e.event = event;
   e.aux = aux;
+  e.detail = detail;
   e.chg = lastChg ? 1 : 0;
   if (count == 0) pendingSinceMs = e.ms;
   count++;
@@ -176,6 +228,27 @@ void UsageLog::pollState() {
     lastWifiOn = wifiOn;
     record(wifiOn ? EV_WIFI_ON : EV_WIFI_OFF, 0);
   }
+
+  // The charger comes free: sampleBattery() has just refreshed lastChg for the
+  // `chg` column, so the transition costs a compare. Debounced, though: an
+  // MCP73832-class STAT pin blinks and a marginal charge current chatters the
+  // comparator, either of which would put two CHG rows a second into a
+  // 32-entry ring. Only the EDGE events debounce -- the `chg` column on every
+  // other row still carries the instantaneous sample.
+  if (lastChg != lastChgLogged) {
+    if (++chgStableCount >= CHG_DEBOUNCE_SAMPLES) {
+      lastChgLogged = lastChg;
+      chgStableCount = 0;
+      record(lastChg ? EV_CHG_ON : EV_CHG_OFF, 0);
+    }
+  } else {
+    chgStableCount = 0;
+  }
+}
+
+void UsageLog::pollRefreshes() {
+  const uint32_t refreshes = HalDisplay::takeFullRefreshCount();
+  if (refreshes > 0) record(EV_FR, 0, refreshes);
 }
 
 bool UsageLog::flush() {
@@ -209,7 +282,7 @@ bool UsageLog::flush() {
 
   // Anything lost while the card was unwritable is reported once, ahead of the
   // batch, borrowing the oldest surviving entry's timestamp and battery sample.
-  if (dropped > 0 && !writeRow(file, entries[head], EV_DROP, dropped, flushWall, flushMs)) {
+  if (dropped > 0 && !writeRow(file, entries[head], EV_DROP, dropped, 0, flushWall, flushMs)) {
     file.close();
     lastFlushFailMs = millis();
     flushFailed = true;
@@ -217,7 +290,7 @@ bool UsageLog::flush() {
   }
   for (uint8_t i = 0; i < count; i++) {
     const Entry& e = entries[(head + i) % RING_SIZE];
-    if (!writeRow(file, e, e.event, e.aux, flushWall, flushMs)) {
+    if (!writeRow(file, e, e.event, e.aux, e.detail, flushWall, flushMs)) {
       // Nothing is dropped on a short write: the whole batch stays buffered and
       // a later tick retries it. A card that fails mid-batch can therefore leave
       // the rows it did take duplicated in the file -- cheaper to de-duplicate
@@ -238,8 +311,14 @@ bool UsageLog::flush() {
   return true;
 }
 
-bool UsageLog::writeRow(HalFile& file, const Entry& e, const uint8_t event, const uint8_t aux, const uint32_t flushWall,
-                        const uint32_t flushMs) {
+bool UsageLog::writeRow(HalFile& file, const Entry& e, const uint8_t event, const uint8_t aux, const uint32_t detail,
+                        const uint32_t flushWall, const uint32_t flushMs) {
+  // EVENT_NAMES is indexed by the raw event byte with no bounds check, so a new
+  // enumerator that never got a name would print garbage (or fault). Tie the
+  // two together at compile time; EV_LSN must stay the last enumerator.
+  static_assert(sizeof(EVENT_NAMES) / sizeof(EVENT_NAMES[0]) == EV_LSN + 1,
+                "EVENT_NAMES needs exactly one entry per UsageLog::Event");
+
   char stamp[20] = "";
   if (flushWall != 0) {
     // The entry's own wall time, walked back from the one clock read by its
@@ -255,11 +334,12 @@ bool UsageLog::writeRow(HalFile& file, const Entry& e, const uint8_t event, cons
   }
 
   // 80 bytes is not a truncation risk: every field is fixed-width by type, and
-  // the longest possible row (19 stamp + 10 millis + 9 NIGHT_OFF + 3 + 5 + 3 + 3
-  // + 6 commas + newline) is 58 bytes, so `len` is always the full row.
+  // the longest possible row (19 stamp + 10 millis + 9 NIGHT_OFF/BOOK_OPEN + 3
+  // + 5 + 3 + 3 + 10 detail + 7 commas + newline) is 70 bytes, so `len` is
+  // always the full row.
   char line[80];
-  const int len = snprintf(line, sizeof(line), "%s,%lu,%s,%u,%u,%u,%u\n", stamp, static_cast<unsigned long>(e.ms),
-                           EVENT_NAMES[event], e.pct, e.mv, e.chg, aux);
+  const int len = snprintf(line, sizeof(line), "%s,%lu,%s,%u,%u,%u,%u,%lu\n", stamp, static_cast<unsigned long>(e.ms),
+                           EVENT_NAMES[event], e.pct, e.mv, e.chg, aux, static_cast<unsigned long>(detail));
   if (len <= 0 || file.write(line, static_cast<size_t>(len)) != static_cast<size_t>(len)) {
     LOG_ERR("ULOG", "Short write to %s", LOG_PATH);
     return false;
