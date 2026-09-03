@@ -44,6 +44,7 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UsageLog.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -1341,7 +1342,11 @@ void EpubReaderActivity::loop() {
     }
     const bool forward = pendingManualTurn > 0;
     pendingManualTurn = 0;
-    pageTurn(forward);
+    if (pageTurn(forward)) {
+#ifdef CROSSPOINT_USAGE_LOG
+      usageLog.notePageTurn(forward);
+#endif
+    }
     requestUpdate();
     return;
   }
@@ -1365,7 +1370,12 @@ void EpubReaderActivity::loop() {
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool longPress = !fromTilt && heldMs >= ReaderUtils::SKIP_HOLD_MS;
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    skipPages(nextTriggered ? 1 : -1);
+    if (skipPages(nextTriggered ? 1 : -1)) {
+#ifdef CROSSPOINT_USAGE_LOG
+      // A chapter skip, not a page turn: the log records it as such.
+      usageLog.notePageTurn(nextTriggered, true);
+#endif
+    }
     requestUpdate();
     return;
   }
@@ -1389,10 +1399,13 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  if (prevTriggered) {
-    pageTurn(false);
-  } else {
-    pageTurn(true);
+  // One call so the usage log's PAGE hook sees the direction and whether the
+  // page actually moved; the empty body is what a flags-off build compiles to.
+  const bool forward = !prevTriggered;
+  if (pageTurn(forward)) {
+#ifdef CROSSPOINT_USAGE_LOG
+    usageLog.notePageTurn(forward);
+#endif
   }
   requestUpdate();
 }
