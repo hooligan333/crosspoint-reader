@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 
+#include "ClockDst.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "components/UIScale.h"
@@ -806,10 +807,17 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     leftClusterWidth += batteryWidth;
   }
 
-  // Draw Clock (X3 only — DS3231 RTC)
+  // Draw Clock (RTC only)
   if (sb.showsClock() && halClock.isAvailable()) {
     char timeBuf[9];
-    if (halClock.formatTime(timeBuf, sizeof(timeBuf), sb.clockUtcOffsetQ, sb.clock12h)) {
+#ifdef CROSSPOINT_CLOCK_DST
+    // Resolved here rather than in statusBarSpec() so the DST rule (and the RTC
+    // read behind it) only costs anything when the clock is actually drawn.
+    const uint8_t clockOffsetQ = effectiveUtcOffsetQ(sb.clockUtcOffsetQ, sb.clockDstRule);
+#else
+    const uint8_t clockOffsetQ = sb.clockUtcOffsetQ;
+#endif
+    if (halClock.formatTime(timeBuf, sizeof(timeBuf), clockOffsetQ, sb.clock12h)) {
       int clockTextWidth = renderer.getTextWidth(SMALL_FONT_ID, timeBuf);
       int clockX = 0;
       // Position to the left or right of the progress text (with a small gap)

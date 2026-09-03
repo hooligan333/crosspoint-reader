@@ -499,6 +499,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "statusBarClock", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Value(StrId::STR_CLOCK_UTC_OFFSET, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1},
                            "clockUtcOffsetQ", StrId::STR_CUSTOMISE_STATUS_BAR),
+#ifdef CROSSPOINT_CLOCK_DST
+        // Automatic DST rule. The offset above is then the STANDARD time one;
+        // an out-of-range persisted value reads as Off (see ClockDst.cpp).
+        SettingInfo::Enum(StrId::STR_CLOCK_AUTO_DST, &CrossPointSettings::clockDstRule,
+                          {StrId::STR_STATE_OFF, StrId::STR_DST_US, StrId::STR_DST_EU, StrId::STR_DST_AU},
+                          "clockDstRule", StrId::STR_CUSTOMISE_STATUS_BAR),
+#endif
         SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat,
                           {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H}, "clockFormat",
                           StrId::STR_CUSTOMISE_STATUS_BAR),

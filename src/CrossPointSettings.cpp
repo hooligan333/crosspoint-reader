@@ -253,6 +253,11 @@ CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
   spec.clockMode = statusBarClock;
   spec.clock12h = clockFormat == 1;
   spec.clockUtcOffsetQ = clockUtcOffsetQ;
+#ifdef CROSSPOINT_CLOCK_DST
+  // Plain byte copy, like every other field here: the rule is RESOLVED on the
+  // draw side (BaseTheme), which keeps this snapshot free of side effects.
+  spec.clockDstRule = clockDstRule;
+#endif
   spec.progressBarMode = statusBarProgressBar;
   spec.progressBarHeightPx =
       statusBarProgressBar != HIDE_PROGRESS ? static_cast<uint8_t>((statusBarProgressBarThickness + 1) * 2) : 0;

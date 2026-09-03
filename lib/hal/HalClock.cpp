@@ -39,7 +39,7 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   return true;
 }
 
-#ifdef CROSSPOINT_USAGE_LOG
+#if defined(CROSSPOINT_USAGE_LOG) || defined(CROSSPOINT_CLOCK_DST)
 bool HalClock::getDateTime(Rtc::DateTime& out) const {
   if (!_available) return false;
   return _sdkRtc.now(out);

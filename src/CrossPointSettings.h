@@ -58,6 +58,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     STATUS_BAR_CLOCK_MODE_COUNT
   };
 
+#ifdef CROSSPOINT_CLOCK_DST
+  enum CLOCK_DST_RULE { CLOCK_DST_OFF = 0, CLOCK_DST_US = 1, CLOCK_DST_EU = 2, CLOCK_DST_AU = 3, CLOCK_DST_RULE_COUNT };
+#endif
+
   enum ORIENTATION {
     PORTRAIT = 0,       // 480x800 logical coordinates (current default)
     LANDSCAPE_CW = 1,   // 800x480 logical coordinates, rotated 180° (swap top/bottom)
@@ -252,12 +256,23 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBarTitle = CHAPTER_TITLE;
   uint8_t statusBarBattery = 1;
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
-  // Clock display in status bar (X3 only, requires DS3231 RTC)
+  // Clock display in status bar (RTC-equipped devices only)
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
   // Clock UTC offset in quarter-hour steps, biased by 48 so it fits in uint8_t.
   // Value 48 = UTC+0, 0 = UTC-12:00, 104 = UTC+14:00.
   // Quarter-hour granularity supports oddball zones like Nepal (+5:45) and Chatham (+12:45).
   uint8_t clockUtcOffsetQ = 48;
+#ifdef CROSSPOINT_CLOCK_DST
+  // Automatic daylight-saving rule (CLOCK_DST_RULE). While a rule is selected,
+  // clockUtcOffsetQ above is read as the STANDARD time offset and the displayed
+  // clock gains an hour inside that region's DST window; see src/ClockDst.h.
+  //
+  // Accepted limitation: the key is flag-gated, so a firmware image built
+  // without CROSSPOINT_CLOCK_DST rewrites settings.json without it. Flashing a
+  // non-combo image and coming back resets Auto DST to Off — the offset itself
+  // survives, so the clock is then an hour out until the row is set again.
+  uint8_t clockDstRule = CLOCK_DST_OFF;
+#endif
   // Clock display format: 0 = 24-hour, 1 = 12-hour
   uint8_t clockFormat = 0;
   // Set once an NTP sync succeeds. Used to skip re-syncing on every WiFi connect.
@@ -430,7 +445,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     bool showBatteryPercent = false;
     uint8_t clockMode = STATUS_BAR_CLOCK_HIDE;  // STATUS_BAR_CLOCK_MODE
     bool clock12h = false;
-    uint8_t clockUtcOffsetQ = 48;             // 48 = UTC+0
+    uint8_t clockUtcOffsetQ = 48;  // 48 = UTC+0; STANDARD time while a DST rule is set
+#ifdef CROSSPOINT_CLOCK_DST
+    // CLOCK_DST_RULE, carried raw. The rule is resolved on the draw side so
+    // this snapshot stays a side-effect-free byte read; see src/ClockDst.h.
+    uint8_t clockDstRule = CLOCK_DST_OFF;
+#endif
     uint8_t progressBarMode = HIDE_PROGRESS;  // STATUS_BAR_PROGRESS_BAR
     uint8_t progressBarHeightPx = 0;          // (thickness+1)*2; 0 when the bar is hidden
     uint8_t xtcMode = XTC_STATUS_BAR_HIDE;    // XTC_STATUS_BAR_MODE

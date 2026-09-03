@@ -27,10 +27,11 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
-#ifdef CROSSPOINT_USAGE_LOG
+#if defined(CROSSPOINT_USAGE_LOG) || defined(CROSSPOINT_CLOCK_DST)
   // Full calendar date and time, straight off the RTC. Unlike getTime() this
-  // does not go through the 10 s cache: the usage log's only caller reads it
-  // once per flush and needs a date, which the cache does not keep.
+  // does not go through the 10 s cache: callers read it rarely (once per usage
+  // log flush, at most once a minute for the DST rule) and need a date, which
+  // the cache does not keep.
   // Returns false if the RTC is not available or the read failed.
   bool getDateTime(Rtc::DateTime& out) const;
 #endif

@@ -8,6 +8,7 @@
 
 #include <cstdio>
 
+#include "ClockDst.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -77,7 +78,12 @@ void ClockSyncActivity::runSync() {
 
   // Read the freshly synced time back for the user-facing confirmation.
   char buf[9];
-  if (halClock.formatTime(buf, sizeof(buf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) {
+#ifdef CROSSPOINT_CLOCK_DST
+  const uint8_t offsetQ = effectiveUtcOffsetQ(SETTINGS.clockUtcOffsetQ, SETTINGS.clockDstRule);
+#else
+  const uint8_t offsetQ = SETTINGS.clockUtcOffsetQ;
+#endif
+  if (halClock.formatTime(buf, sizeof(buf), offsetQ, SETTINGS.clockFormat == 1)) {
     snprintf(syncedTime, sizeof(syncedTime), "%s", buf);
   }
   state = SUCCESS;
