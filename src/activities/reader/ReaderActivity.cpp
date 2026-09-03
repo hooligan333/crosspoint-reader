@@ -20,6 +20,7 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UsageLog.h"
 #include "XtcReaderActivity.h"
 #include "util/PluginEvents.h"
 
@@ -247,18 +248,30 @@ void ReaderActivity::loop() {
     if (skip) {
       const bool succeeded = skipPages(-10);
       notePageTurn(false, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+      if (succeeded) usageLog.notePageTurn(false, true);
+#endif
     } else {
       const bool succeeded = pageTurn(false);
       notePageTurn(false, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+      if (succeeded) usageLog.notePageTurn(false, false);
+#endif
     }
   } else {
     if (skip) {
       // A skip is navigation, not reading: it never counts toward session dwell.
       const bool succeeded = skipPages(10);
       notePageTurn(false, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+      if (succeeded) usageLog.notePageTurn(true, true);
+#endif
     } else {
       const bool succeeded = pageTurn(true);
       notePageTurn(true, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+      if (succeeded) usageLog.notePageTurn(true, false);
+#endif
     }
   }
   requestUpdate();
