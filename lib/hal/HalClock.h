@@ -38,6 +38,14 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
+#ifdef CROSSPOINT_USAGE_LOG
+  // Full calendar date and time (UTC), straight off the RTC. Unlike getTime()
+  // this does not go through the 10 s cache: the usage log's only caller reads
+  // it once per flush and needs a date, which the cache does not keep.
+  // Returns false if the RTC is not available or the read failed.
+  bool getDateTime(Rtc::DateTime& out) const;
+#endif
+
   // Format the local time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // Returns false if RTC is not available.

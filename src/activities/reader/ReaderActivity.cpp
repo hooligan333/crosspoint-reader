@@ -20,6 +20,7 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UsageLog.h"
 #include "XtcReaderActivity.h"
 #include "util/PluginEvents.h"
 
@@ -246,6 +247,10 @@ void ReaderActivity::loop() {
   const bool changed = skip ? skipPages(prevTriggered ? -10 : 10) : pageTurn(!prevTriggered);
   // A skip is navigation, not reading: it never counts toward session dwell.
   notePageTurn(!skip && !prevTriggered, changed);
+#ifdef CROSSPOINT_USAGE_LOG
+  // The log, unlike the dwell hook, records the real direction for a skip.
+  if (changed) usageLog.notePageTurn(!prevTriggered, skip);
+#endif
   if (changed && (touch.prev || touch.next)) haptic_feedback::touchAction(skip);
   requestUpdate();
 }

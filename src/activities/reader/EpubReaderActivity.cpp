@@ -47,6 +47,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "UsageLog.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
@@ -1373,6 +1374,9 @@ void EpubReaderActivity::loop() {
     pendingManualTurn = 0;
     const bool succeeded = pageTurn(forward);
     notePageTurn(forward, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+    if (succeeded) usageLog.notePageTurn(forward);
+#endif
     if (succeeded && pendingManualTurnTouch) haptic_feedback::touchAction();
     pendingManualTurnTouch = false;
     requestUpdate();
@@ -1400,6 +1404,10 @@ void EpubReaderActivity::loop() {
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
     const bool succeeded = skipPages(nextTriggered ? 1 : -1);
     notePageTurn(false, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+    // A chapter skip, not a page turn: the log records it as such.
+    if (succeeded) usageLog.notePageTurn(nextTriggered, true);
+#endif
     if (succeeded && (touch.prev || touch.next)) haptic_feedback::touchAction(true);
     requestUpdate();
     return;
@@ -1428,6 +1436,9 @@ void EpubReaderActivity::loop() {
 
   const bool succeeded = pageTurn(!prevTriggered);
   notePageTurn(!prevTriggered, succeeded);
+#ifdef CROSSPOINT_USAGE_LOG
+  if (succeeded) usageLog.notePageTurn(!prevTriggered);
+#endif
   if (succeeded && (touch.prev || touch.next)) haptic_feedback::touchAction();
   requestUpdate();
 }
