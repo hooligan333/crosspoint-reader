@@ -16,6 +16,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "TxtReaderActivity.h"
+#include "UsageLog.h"
 #include "XtcReaderActivity.h"
 
 ReaderActivity::ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -166,18 +167,15 @@ void ReaderActivity::loop() {
   const bool skip =
       !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
 
-  if (prevTriggered) {
-    if (skip) {
-      skipPages(-10);
-    } else {
-      pageTurn(false);
-    }
-  } else {
-    if (skip) {
-      skipPages(10);
-    } else {
-      pageTurn(true);
-    }
+  // The usage log's PAGE hook wants the direction and whether the page actually
+  // moved, so the four calls collapse into one expression; the empty body is
+  // what a flags-off build compiles to.
+  const bool forward = !prevTriggered;
+  if (skip ? skipPages(forward ? 10 : -10) : pageTurn(forward)) {
+#ifdef CROSSPOINT_USAGE_LOG
+    // `skip` is the +/-10-page jump, which the log separates from a page turn.
+    usageLog.notePageTurn(forward, skip);
+#endif
   }
   requestUpdate();
 }

@@ -39,6 +39,13 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   return true;
 }
 
+#ifdef CROSSPOINT_USAGE_LOG
+bool HalClock::getDateTime(Rtc::DateTime& out) const {
+  if (!_available) return false;
+  return _sdkRtc.now(out);
+}
+#endif
+
 bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased, bool use12Hour) const {
   if (bufSize < (use12Hour ? 9u : 6u)) return false;
   uint8_t h, m;
