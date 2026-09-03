@@ -69,7 +69,37 @@ class EpubReaderActivity final : public ReaderActivity {
   bool currentPageBookmarked = false;
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
-  unsigned long lastRenderCompleteMs = 0;
+  // Stamped by renderBook() on every path that puts a frame on the panel (the
+  // rendered page and the error screens alike). Written by the RENDER task and
+  // read from the loop task by the idle prewarm below and, in usage-log builds,
+  // by the _RDY hook -- so a relaxed atomic: on the LX7 that compiles to the
+  // same plain aligned 32-bit load/store the unsynchronised member was, and no
+  // other state is published through it, since both readers only ask "has this
+  // moved since I looked?".
+  std::atomic<uint32_t> lastRenderCompleteMs{0};
+#ifdef CROSSPOINT_USAGE_LOG
+  // Usage-log book/chapter load profiling. The _RDY half of each pair is "the
+  // first page is physically on the panel", which only the RENDER task knows --
+  // and the usage log's ring is loop-task only. So the start hook parks the
+  // then-current lastRenderCompleteMs here, and loop() emits the _RDY row on the
+  // first pass where the render task has moved that stamp on. Nothing is
+  // recorded off the loop task, and no new cross-task state is introduced:
+  // lastRenderCompleteMs is already read this way by the idle prewarm.
+  uint32_t ulogRenderMsAtLoad = 0;
+  uint8_t ulogPendingReady = 0;     // 0 none, 1 BOOK_RDY, 2 CH_RDY forward, 3 CH_RDY back
+  uint32_t ulogPendingStartMs = 0;  // millis() when that pending _RDY was armed
+  // Belt and braces against a fabricated row. Every frame-painting path in
+  // renderBook() stamps lastRenderCompleteMs, error screens included, so a
+  // pending _RDY is normally answered within the load. Where it is not -- the
+  // spine-past-the-end early return, which paints nothing and leaves the panel
+  // to the base class's end-of-book screen -- the pending is DROPPED here
+  // instead of surviving to fire minutes later against a stale _START and
+  // publish an absurd load time. 90 s sits well above any plausible cold index
+  // build; the cost is that a build slower than that loses its _RDY row.
+  static constexpr uint32_t ULOG_READY_DEADLINE_MS = 90UL * 1000UL;
+  // Arms that pending _RDY and writes the CH_START row.
+  void ulogNoteSectionStart(bool isForward, bool prebuilt);
+#endif
 #ifdef CROSSPOINT_PAGE_CACHE
   // One-entry deserialized-page cache, filled by the idle prewarm above. That
   // prewarm already reads (spine, currentPage+1) off SD and deserializes it just

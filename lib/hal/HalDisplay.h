@@ -61,6 +61,36 @@ class HalDisplay {
 #endif
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
 
+#ifdef CROSSPOINT_USAGE_LOG
+  // Flashing-refresh counter for the usage log. Every RefreshMode-taking entry
+  // point in this class -- displayBuffer(), displayBufferAsync(),
+  // refreshDisplay() and displayGrayscaleBase(), declared above and below this
+  // block -- funnels its mode through one converter, which bumps a free-running
+  // counter for anything that is not FAST_REFRESH.
+  //
+  // WHAT THIS COUNTS, exactly: refresh REQUESTS for a non-FAST mode at the HAL
+  // boundary -- the reader's refresh-every-N cadence, an activity transition, a
+  // menu, the manual power-button refresh. It is NOT a count of flashing panel
+  // waveforms. The layers below promote some FAST requests to a flashing
+  // waveform, and those promotions happen past this choke point, so they are
+  // invisible here and the count UNDERSTATES the real number of flashes. The
+  // two known promotions are FreeInkDisplay turning FAST into HALF when the
+  // night-mode inversion is dirty, and Uc8179Driver turning FAST into a full
+  // clear when it needs one (the post-resync boot paint, an abandoned gray
+  // sequence). The night-mode ones are at least attributable off-device: the
+  // usage log's NIGHT_ON/NIGHT_OFF rows mark exactly the refreshes that get
+  // promoted for inversion.
+  //
+  // Refreshes are issued from the render task AND, on a few legacy paths, from
+  // the loop task, while the usage log's ring is loop-task-only. The counter is
+  // therefore a lock-free atomic that the log DRAINS: takeFullRefreshCount()
+  // returns the number since the previous call and zeroes it in one exchange,
+  // so no count is lost between two drains and the log stays single-task. Any
+  // task may call either function.
+  static void noteFullRefresh();
+  static uint32_t takeFullRefreshCount();
+#endif
+
   // Output polarity. The framebuffer remains in normal polarity; inversion is
   // applied by the display driver while sending it to the panel.
   void setInverted(bool inverted);

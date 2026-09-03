@@ -239,11 +239,41 @@ bool EpubReaderActivity::loadBook() {
     return false;
   }
 
+#ifdef CROSSPOINT_USAGE_LOG
+  // book.bin's first byte is BookMetadataCache's format version, and its load()
+  // rejects anything else and rebuilds the whole cache. A plain exists() check
+  // therefore reports every book as a WARM open for the one boot after a
+  // version bump -- exactly the boot whose load times are worth having. One
+  // open and one byte separate the three states, in place of the exists() call
+  // this replaces. An unreadable or empty book.bin reads as COLD, which is what
+  // it behaves like -- the cache gets rebuilt from the zip either way.
+  uint8_t cacheVersion = 0;
+  bool haveBookBin = false;
+  {
+    HalFile bookBin;
+    if (Storage.openFileForRead("ERS", loadedEpub->getCachePath() + "/book.bin", bookBin)) {
+      haveBookBin = bookBin.read(&cacheVersion, 1) == 1;
+      bookBin.close();
+    }
+  }
+  const bool staleCache = haveBookBin && cacheVersion != BookMetadataCache::CACHE_VERSION;
+  const bool uncached = !haveBookBin;
+#else
   const bool uncached = !Storage.exists((loadedEpub->getCachePath() + "/book.bin").c_str());
+#endif
   if (uncached) {
     disableFastInitialRefresh();
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
+#ifdef CROSSPOINT_USAGE_LOG
+  // Ahead of the load itself, so BOOK_OPEN -> BOOK_RDY brackets the whole cost.
+  // lastRenderCompleteMs is still 0 here (nothing of this book has rendered),
+  // which is exactly what ulogRenderMsAtLoad wants to compare against.
+  usageLog.noteBookOpen(uncached ? UsageLog::CACHE_COLD : staleCache ? UsageLog::CACHE_STALE : UsageLog::CACHE_WARM);
+  ulogRenderMsAtLoad = lastRenderCompleteMs.load(std::memory_order_relaxed);
+  ulogPendingReady = 1;
+  ulogPendingStartMs = millis();
+#endif
 
   bool loaded;
   {
@@ -978,6 +1008,26 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+#ifdef CROSSPOINT_USAGE_LOG
+  // See ulogPendingReady in the header: the render task has just put the first
+  // page of the book / section it belongs to on the panel.
+  if (ulogPendingReady != 0) {
+    if (lastRenderCompleteMs.load(std::memory_order_relaxed) != ulogRenderMsAtLoad) {
+      if (ulogPendingReady == 1) {
+        usageLog.noteBookReady();
+      } else {
+        usageLog.noteSectionReady(ulogPendingReady == 2);
+      }
+      ulogPendingReady = 0;
+    } else if (millis() - ulogPendingStartMs > ULOG_READY_DEADLINE_MS) {
+      // Nothing painted in 90 s. Drop the pending rather than let it answer a
+      // frame from some unrelated, much later render. See the deadline note on
+      // ULOG_READY_DEADLINE_MS.
+      ulogPendingReady = 0;
+    }
+  }
+#endif
+
   // Someone else turned the screen while this reader was stacked (the control
   // center's orientation tile). Reflow before the next render, or the page
   // would be drawn with a layout built for the previous frame size.
@@ -988,9 +1038,10 @@ void EpubReaderActivity::loop() {
   }
 
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
-      lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
-      gateFreeHeap() > RENDER_MIN_FREE_HEAP && gateMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+  const uint32_t lastRenderMs = lastRenderCompleteMs.load(std::memory_order_relaxed);
+  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() && lastRenderMs != 0 &&
+      millis() - lastRenderMs > IDLE_PREWARM_DEBOUNCE_MS && gateFreeHeap() > RENDER_MIN_FREE_HEAP &&
+      gateMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
     RenderLock lock;
     if (section && !section->isBuilding() &&
@@ -1841,6 +1892,12 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
 #else
       section.reset();
 #endif
+#ifdef CROSSPOINT_USAGE_LOG
+      // Both arms above have run, so a surviving `section` IS the adopted
+      // prebuild and a null one means renderBook() will build/load on demand --
+      // the CH_START row can state the source without waiting for the render.
+      ulogNoteSectionStart(true, section != nullptr);
+#endif
       lastPageTurnTime = millis();
       return true;
     } else {
@@ -1859,12 +1916,25 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
       pendingPageJump = std::numeric_limits<uint16_t>::max();
       currentSpineIndex--;
       section.reset();
+#ifdef CROSSPOINT_USAGE_LOG
+      // There is no backward prebuild: a back-boundary turn always loads.
+      ulogNoteSectionStart(false, false);
+#endif
       lastPageTurnTime = millis();
       return true;
     }
   }
   return false;
 }
+
+#ifdef CROSSPOINT_USAGE_LOG
+void EpubReaderActivity::ulogNoteSectionStart(const bool isForward, const bool prebuilt) {
+  usageLog.noteSectionStart(isForward, prebuilt);
+  ulogRenderMsAtLoad = lastRenderCompleteMs.load(std::memory_order_relaxed);
+  ulogPendingReady = isForward ? 2 : 3;
+  ulogPendingStartMs = millis();
+}
+#endif
 
 bool EpubReaderActivity::skipPages(int amount) {
   if (!section) return false;
@@ -1927,6 +1997,9 @@ void EpubReaderActivity::renderBook() {
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
     automaticPageTurnActive = false;
+    // drawPopup() displays: a frame IS on the panel, so this is a render
+    // completion like any other. See lastRenderCompleteMs in the header.
+    lastRenderCompleteMs.store(millis(), std::memory_order_relaxed);
   };
 
   if (currentSpineIndex < 0) currentSpineIndex = 0;
@@ -2214,6 +2287,11 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_CHAPTER), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    // A frame went to the panel, so this counts as a render completion even
+    // though no page rendered. Without it the idle prewarm keeps its stale
+    // stamp and a pending usage-log _RDY would be answered by a much later
+    // frame. See lastRenderCompleteMs in the header.
+    lastRenderCompleteMs.store(millis(), std::memory_order_relaxed);
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
@@ -2224,6 +2302,7 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    lastRenderCompleteMs.store(millis(), std::memory_order_relaxed);  // frame on the panel; see above
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
@@ -2263,6 +2342,7 @@ void EpubReaderActivity::renderBook() {
         renderer.clearScreen();
         renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
         renderer.displayBuffer();
+        lastRenderCompleteMs.store(millis(), std::memory_order_relaxed);  // frame on the panel; see above
         showPendingSyncSaveError();
         return;
       }
@@ -2286,7 +2366,7 @@ void EpubReaderActivity::renderBook() {
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
-    lastRenderCompleteMs = millis();
+    lastRenderCompleteMs.store(millis(), std::memory_order_relaxed);
   }
 
   if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||

@@ -11,6 +11,13 @@
 
 class BookMetadataCache {
  public:
+  // book.bin's first byte. load() rejects any other value and the caller then
+  // rebuilds the whole cache, so this is public for callers that need to know
+  // whether an existing book.bin will be REUSED or silently rebuilt -- a
+  // question Storage.exists() cannot answer. Bump it when the file layout
+  // changes; the .cpp's BOOK_CACHE_VERSION is an alias for it.
+  static constexpr uint8_t CACHE_VERSION = 10;  // v10: ignore ambiguous guide text references
+
   struct BookMetadata {
     std::string title;
     std::string author;

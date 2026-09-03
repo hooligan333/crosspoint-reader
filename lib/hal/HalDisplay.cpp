@@ -1,6 +1,10 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 
+#ifdef CROSSPOINT_USAGE_LOG
+#include <atomic>
+#endif
+
 // Global HalDisplay instance
 HalDisplay display;
 
@@ -45,7 +49,31 @@ void HalDisplay::drawImageTransparent(const uint8_t* imageData, uint16_t x, uint
   einkDisplay.drawImageTransparent(imageData, x, y, w, h, fromProgmem);
 }
 
-EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
+#ifdef CROSSPOINT_USAGE_LOG
+namespace {
+// Bumped from whichever task issues the refresh (render task, or the loop task
+// on the legacy direct-displayBuffer paths), drained from the loop task. See
+// HalDisplay::noteFullRefresh() in the header for the contract.
+std::atomic<uint32_t> fullRefreshes{0};
+}  // namespace
+
+void HalDisplay::noteFullRefresh() { fullRefreshes.fetch_add(1, std::memory_order_relaxed); }
+
+uint32_t HalDisplay::takeFullRefreshCount() { return fullRefreshes.exchange(0, std::memory_order_relaxed); }
+#endif
+
+// static: the usage log's counting invariant is "every RefreshMode this class
+// hands down passes through here exactly once", which only holds while nothing
+// outside this translation unit can call it. Never declared in a header.
+static EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
+#ifdef CROSSPOINT_USAGE_LOG
+  // FULL and HALF both run the panel's flashing OTP waveform; only FAST is the
+  // partial update. Every refresh entry point in this file converts its mode
+  // here, so this one line counts them all -- at the HAL boundary. Promotions
+  // of a FAST request to a flashing waveform happen below this point and are
+  // not counted; see the contract on HalDisplay::noteFullRefresh().
+  if (mode != HalDisplay::FAST_REFRESH) HalDisplay::noteFullRefresh();
+#endif
   switch (mode) {
     case HalDisplay::FULL_REFRESH:
       return EInkDisplay::FULL_REFRESH;
