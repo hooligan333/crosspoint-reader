@@ -43,6 +43,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WifiCredentialStore.h"
+#include "UsageLog.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -642,6 +643,10 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   halTiltSensor.deepSleep();
   display.deepSleep();
+#ifdef CROSSPOINT_USAGE_LOG
+  // Ahead of prepareForDeepSleep(): the forced flush needs the card mounted.
+  usageLog.noteSleep();
+#endif
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
@@ -835,6 +840,12 @@ void setup() {
       isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
 
+#ifdef CROSSPOINT_USAGE_LOG
+  // After the SD mount, SETTINGS and the frontlight restore: the BOOT row and
+  // the seeded FL/NIGHT/WIFI state all read what those three just established.
+  usageLog.begin();
+#endif
+
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       // With Short Power Button Press = Sleep, a single click wakes on any
@@ -843,6 +854,9 @@ void setup() {
       if (!wakeHoldVerified && SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::SLEEP &&
           !(FREEINK_DEVICE_PICCO && gpio.isUsbConnected())) {
         LOG_DBG("MAIN", "Power-button wake not held through verification, sleeping");
+#ifdef CROSSPOINT_USAGE_LOG
+        usageLog.noteSleep();
+#endif
         Storage.prepareForDeepSleep();
         powerManager.startDeepSleep(gpio);
       }
@@ -862,6 +876,9 @@ void setup() {
       // the device in a USB-replug boot loop (or sleep right after a flash).
       break;
 #else
+#ifdef CROSSPOINT_USAGE_LOG
+      usageLog.noteSleep();
+#endif
       Storage.prepareForDeepSleep();
       powerManager.startDeepSleep(gpio);
       break;
@@ -1111,6 +1128,13 @@ void loop() {
 
   // After the exclusive-storage return: it saves settings to the SD card.
   handleSlideSwitch();
+#ifdef CROSSPOINT_USAGE_LOG
+  // Polls the frontlight / night mode / WiFi levels and flushes the ring; it
+  // rate-limits itself, so this costs a millis() compare on most passes. Below
+  // the exclusive-storage return above: no SD work while USB Drive owns the card.
+  usageLog.tick();
+#endif
+
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   // Under the render lock, so a step never overlaps the themes' gauge reads.
