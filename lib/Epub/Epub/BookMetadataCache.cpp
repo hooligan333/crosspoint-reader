@@ -68,7 +68,9 @@ inline void readString(BookBinMirrorReader& in, std::string& s) {
 #endif  // CROSSPOINT_BOOKBIN_PSRAM
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 10;  // v10: ignore ambiguous guide text references
+// Single source of truth lives in the header, so an out-of-class caller can ask
+// whether an existing book.bin is the version this build accepts.
+constexpr uint8_t BOOK_CACHE_VERSION = BookMetadataCache::CACHE_VERSION;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
