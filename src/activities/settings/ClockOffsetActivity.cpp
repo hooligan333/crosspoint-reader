@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "ClockDst.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -355,10 +356,18 @@ void ClockOffsetActivity::render(RenderLock&&) {
   }
 
   // Live preview of the resulting wall-clock time, so users can verify against a watch.
+  // The picked value is STANDARD time, so with an Auto DST rule active it is not
+  // what the status bar shows: preview the effective offset instead, or a user
+  // dialling the preview to match their watch would calibrate an hour out.
   if (halClock.isAvailable()) {
     char timeBuf[9];
     const uint8_t encoded = encodeOffset(sign, hours, minutesQuarter);
-    if (halClock.formatTime(timeBuf, sizeof(timeBuf), encoded, SETTINGS.clockFormat == 1)) {
+#ifdef CROSSPOINT_CLOCK_DST
+    const uint8_t previewQ = effectiveUtcOffsetQ(encoded, SETTINGS.clockDstRule);
+#else
+    const uint8_t previewQ = encoded;
+#endif
+    if (halClock.formatTime(timeBuf, sizeof(timeBuf), previewQ, SETTINGS.clockFormat == 1)) {
       // 24 bytes did not even hold the label itself once translated: STR_CURRENT_TIME
       // is 26 bytes in Russian, 24 in Arabic and Ukrainian. See ClockSyncActivity.
       char preview[64];

@@ -17,8 +17,8 @@
 namespace fui = freeink::ui;
 
 namespace {
-// Menu items in their natural order. Clock entries are appended only when the
-// DS3231 RTC is present so X4 devices don't see them at all.
+// Menu items in their natural order. Clock entries are appended only when an
+// RTC is present (halClock.isAvailable()), so RTC-less devices don't see them.
 enum MenuItem {
   ITEM_CHAPTER_PAGE_COUNT = 0,
   ITEM_BOOK_PROGRESS_PERCENTAGE,
@@ -27,10 +27,13 @@ enum MenuItem {
   ITEM_TITLE,
   ITEM_BATTERY,
   ITEM_XTC_STATUS_BAR,
-  ITEM_CLOCK,             // X3 only
-  ITEM_CLOCK_FORMAT,      // X3 only
-  ITEM_CLOCK_UTC_OFFSET,  // X3 only, launches ClockOffsetActivity
-  ITEM_CLOCK_SYNC,        // X3 only, launches ClockSyncActivity
+  ITEM_CLOCK,             // RTC only
+  ITEM_CLOCK_FORMAT,      // RTC only
+  ITEM_CLOCK_UTC_OFFSET,  // RTC only, launches ClockOffsetActivity
+#ifdef CROSSPOINT_CLOCK_DST
+  ITEM_CLOCK_AUTO_DST,  // RTC only, reinterprets the offset above as standard time
+#endif
+  ITEM_CLOCK_SYNC,  // RTC only, launches ClockSyncActivity
   ITEM_COUNT
 };
 
@@ -50,11 +53,20 @@ const StrId menuNames[FULL_MENU_ITEMS] = {
     StrId::STR_CLOCK,
     StrId::STR_CLOCK_FORMAT,
     StrId::STR_CLOCK_UTC_OFFSET,
+#ifdef CROSSPOINT_CLOCK_DST
+    StrId::STR_CLOCK_AUTO_DST,
+#endif
     StrId::STR_CLOCK_SYNC_NOW,
 };
 
 constexpr int CLOCK_FORMAT_ITEMS = 2;
 const StrId clockFormatNames[CLOCK_FORMAT_ITEMS] = {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H};
+
+#ifdef CROSSPOINT_CLOCK_DST
+constexpr int CLOCK_DST_ITEMS = CrossPointSettings::CLOCK_DST_RULE_COUNT;
+const StrId clockDstNames[CLOCK_DST_ITEMS] = {StrId::STR_STATE_OFF, StrId::STR_DST_US, StrId::STR_DST_EU,
+                                              StrId::STR_DST_AU};
+#endif
 
 std::string formatUtcOffset(uint8_t biasedQ) {
   // biasedQ is in quarter-hour steps, biased by 48 (so 48 = UTC+0).
@@ -119,6 +131,12 @@ void StatusBarSettingsActivity::onEnter() {
   if (SETTINGS.clockFormat >= CLOCK_FORMAT_ITEMS) {
     SETTINGS.clockFormat = 0;
   }
+
+#ifdef CROSSPOINT_CLOCK_DST
+  if (SETTINGS.clockDstRule >= CLOCK_DST_ITEMS) {
+    SETTINGS.clockDstRule = CrossPointSettings::CLOCK_DST_RULE::CLOCK_DST_OFF;
+  }
+#endif
 
   if (SETTINGS.statusBarClock >= STATUS_BAR_CLOCK_ITEMS) {
     SETTINGS.statusBarClock = CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
@@ -194,6 +212,11 @@ void StatusBarSettingsActivity::handleSelection() {
       // Launch the dedicated offset picker. It saves on exit, no result handler needed.
       startActivityForResult(std::make_unique<ClockOffsetActivity>(renderer, mappedInput), nullptr);
       return;
+#ifdef CROSSPOINT_CLOCK_DST
+    case ITEM_CLOCK_AUTO_DST:
+      SETTINGS.clockDstRule = (SETTINGS.clockDstRule + 1) % CLOCK_DST_ITEMS;
+      break;
+#endif
     case ITEM_CLOCK_SYNC:
       startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), nullptr);
       return;
@@ -227,6 +250,12 @@ std::string StatusBarSettingsActivity::rowValueText(const int index) {
     }
     case ITEM_CLOCK_UTC_OFFSET:
       return formatUtcOffset(SETTINGS.clockUtcOffsetQ);
+#ifdef CROSSPOINT_CLOCK_DST
+    case ITEM_CLOCK_AUTO_DST: {
+      const uint8_t rule = SETTINGS.clockDstRule < CLOCK_DST_ITEMS ? SETTINGS.clockDstRule : 0;
+      return std::string(I18N.get(clockDstNames[rule]));
+    }
+#endif
     case ITEM_CLOCK_SYNC:
       return SETTINGS.clockHasBeenSynced ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
     default:
