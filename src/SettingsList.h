@@ -406,6 +406,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::String(StrId::STR_RSS_DEST_FOLDER, &SETTINGS.rssDestFolder[0], sizeof(SETTINGS.rssDestFolder),
                             "rssDestFolder"),
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+        // Deck feed URL + destination folder: same category-less treatment as
+        // the RSS pair above, because FlashcardSettingsActivity (Settings >
+        // System > Configure Deck Feed) owns the on-device editing.
+        SettingInfo::String(StrId::STR_DECK_FEED_URL, &SETTINGS.flashcardFeedUrl[0], sizeof(SETTINGS.flashcardFeedUrl),
+                            "flashcardFeedUrl"),
+        SettingInfo::String(StrId::STR_DECK_DEST_FOLDER, &SETTINGS.flashcardDestFolder[0],
+                            sizeof(SETTINGS.flashcardDestFolder), "flashcardDestFolder"),
+#endif
 
         // Frontlight quick-panel state: persisted and web-exposed, but hidden
         // from the on-device Settings screen because the swipe panel owns it.

@@ -28,6 +28,9 @@ enum class SettingAction {
 #ifdef CROSSPOINT_RSS_SYNC
   RssSettings,
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+  FlashcardSettings,
+#endif
 };
 
 struct SettingInfo {

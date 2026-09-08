@@ -496,3 +496,12 @@ STR_RSS_DUPLICATE_FILENAME_FORMAT: "Feed has duplicate filenames: '%.24s' / '%.2
 STR_RSS_SUMMARY_CANCELLED: "Sync Cancelled"
 STR_RSS_REMAINING_FORMAT: "Remaining: %d"
 STR_RSS_RECEIVED_KB_FORMAT: "Received: %d KB"
+
+STR_DECK_SYNC: "Sync Decks"
+STR_DECK_CONFIGURE: "Configure Deck Feed"
+STR_DECK_FEED_URL: "Deck Feed URL"
+STR_DECK_DEST_FOLDER: "Deck Folder"
+STR_DECK_NO_URL: "Set a deck feed URL in Settings > System"
+STR_DECK_NO_ITEMS: "Feed has no decks"
+STR_DECK_INVALID_FORMAT: "Invalid: %d"
+STR_DECK_UPDATED_FORMAT: "Updated: %d"

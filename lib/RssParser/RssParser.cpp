@@ -1,6 +1,6 @@
 #include "RssParser.h"
 
-#ifdef CROSSPOINT_RSS_SYNC
+#if defined(CROSSPOINT_RSS_SYNC) || defined(CROSSPOINT_FLASHCARDS)
 
 #include <Logging.h>
 #include <Utf8.h>
@@ -222,4 +222,4 @@ void XMLCALL RssParser::characterData(void* userData, const XML_Char* s, const i
   }
 }
 
-#endif  // CROSSPOINT_RSS_SYNC
+#endif  // CROSSPOINT_RSS_SYNC || CROSSPOINT_FLASHCARDS

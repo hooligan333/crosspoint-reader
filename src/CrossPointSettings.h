@@ -339,6 +339,22 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char rssFeedUrl[128] = "";
   char rssDestFolder[64] = "/RSS";
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+  // Flashcard deck feed sync. Persisted exactly like the RSS pair above:
+  // category-less SettingInfo::String entries in SettingsList.h, so they round
+  // trip through settings.json and the web API but stay out of the on-device
+  // Settings list (FlashcardSettingsActivity owns the editing UI). Its own feed
+  // and its own folder — decks are not books (FLASHCARD_SPEC.md §0.1).
+  //
+  // Accepted limitation, same shape as clockDstRule above: both keys are
+  // flag-gated, so a firmware image built without CROSSPOINT_FLASHCARDS
+  // rewrites settings.json without them. Flashing a non-combo image and coming
+  // back resets the feed URL to empty and the folder to /Decks — the decks
+  // themselves and their scheduling state stay on the card, but the URL has to
+  // be typed again.
+  char flashcardFeedUrl[128] = "";
+  char flashcardDestFolder[64] = "/Decks";
+#endif
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
