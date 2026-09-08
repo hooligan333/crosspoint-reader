@@ -1,6 +1,6 @@
-#include "RssSettingsActivity.h"
+#include "FlashcardSettingsActivity.h"
 
-#ifdef CROSSPOINT_RSS_SYNC
+#ifdef CROSSPOINT_FLASHCARDS
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -16,50 +16,50 @@
 
 namespace fui = freeink::ui;
 
-RssSettingsActivity::RssSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("RssSettings", renderer, mappedInput) {
-  fieldRowItems[ROW_URL].label = I18N.get(StrId::STR_RSS_FEED_URL);
-  fieldRowItems[ROW_FOLDER].label = I18N.get(StrId::STR_RSS_DEST_FOLDER);
+FlashcardSettingsActivity::FlashcardSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : UiListActivity("FlashcardSettings", renderer, mappedInput) {
+  fieldRowItems[ROW_URL].label = I18N.get(StrId::STR_DECK_FEED_URL);
+  fieldRowItems[ROW_FOLDER].label = I18N.get(StrId::STR_DECK_DEST_FOLDER);
   for (int i = 0; i < ROW_COUNT; i++) {
     fieldRowItems[i].actionValue = static_cast<int16_t>(i);
   }
 }
 
-const char* RssSettingsActivity::headerTitle() const { return tr(STR_RSS_CONFIGURE); }
+const char* FlashcardSettingsActivity::headerTitle() const { return tr(STR_DECK_CONFIGURE); }
 
 // Both fields go through ONE keyboard launch and ONE result handler, keyed on
 // the selected row: a lambda per field would mint a full copy of the store
 // logic in flash, and this screen's whole job is two strings.
-void RssSettingsActivity::activateIndex(const int index) {
+void FlashcardSettingsActivity::activateIndex(const int index) {
   nav.selected = index;
   // Activation opens the keyboard; a lingering flash would gray an unrelated
   // row on the way back.
   app.clearTapFlash();
 
   const bool isUrl = index == ROW_URL;
-  const char* const field = isUrl ? SETTINGS.rssFeedUrl : SETTINGS.rssDestFolder;
-  // Plain http only (see RssSyncActivity::fetchFeed), so an empty URL field
-  // prefills http://, not https://.
+  const char* const field = isUrl ? SETTINGS.flashcardFeedUrl : SETTINGS.flashcardDestFolder;
+  // Plain http only (see FlashcardSyncActivity::fetchFeed), so an empty URL
+  // field prefills http://, not https://.
   const std::string prefill = (isUrl && field[0] == '\0') ? "http://" : std::string(field);
 
   startActivityForResult(
       std::make_unique<KeyboardEntryActivity>(
-          renderer, mappedInput, I18N.get(isUrl ? StrId::STR_RSS_FEED_URL : StrId::STR_RSS_DEST_FOLDER), prefill,
-          (isUrl ? sizeof(SETTINGS.rssFeedUrl) : sizeof(SETTINGS.rssDestFolder)) - 1,
+          renderer, mappedInput, I18N.get(isUrl ? StrId::STR_DECK_FEED_URL : StrId::STR_DECK_DEST_FOLDER), prefill,
+          (isUrl ? sizeof(SETTINGS.flashcardFeedUrl) : sizeof(SETTINGS.flashcardDestFolder)) - 1,
           isUrl ? InputType::Url : InputType::Text),
       [this](const ActivityResult& result) { onFieldEntered(result); });
 }
 
-void RssSettingsActivity::onFieldEntered(const ActivityResult& result) {
+void FlashcardSettingsActivity::onFieldEntered(const ActivityResult& result) {
   if (result.isCancelled) return;
   const std::string& text = std::get<KeyboardResult>(result.data).text;
 
   const bool isUrl = nav.selected == ROW_URL;
-  char* const field = isUrl ? SETTINGS.rssFeedUrl : SETTINGS.rssDestFolder;
-  const size_t size = isUrl ? sizeof(SETTINGS.rssFeedUrl) : sizeof(SETTINGS.rssDestFolder);
+  char* const field = isUrl ? SETTINGS.flashcardFeedUrl : SETTINGS.flashcardDestFolder;
+  const size_t size = isUrl ? sizeof(SETTINGS.flashcardFeedUrl) : sizeof(SETTINGS.flashcardDestFolder);
   // A bare scheme left over from the prefill means "not set".
   const std::string value = isUrl ? (text == "http://" || text == "https://" ? std::string() : text)
-                                  : normalizeDestFolder(text, RSS_DEFAULT_FOLDER);
+                                  : normalizeDestFolder(text, DECK_DEFAULT_FOLDER);
 
   strncpy(field, value.c_str(), size - 1);
   field[size - 1] = '\0';
@@ -67,7 +67,7 @@ void RssSettingsActivity::onFieldEntered(const ActivityResult& result) {
   requestUpdate();
 }
 
-void RssSettingsActivity::buildScreen(UiScreen& screen) {
+void FlashcardSettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Content below the GUI.drawHeader band, above the button hints.
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
@@ -75,8 +75,8 @@ void RssSettingsActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // Values point straight at the settings fields — no per-repaint strings.
-  fieldRowItems[ROW_URL].value = SETTINGS.rssFeedUrl[0] ? SETTINGS.rssFeedUrl : tr(STR_NOT_SET);
-  fieldRowItems[ROW_FOLDER].value = SETTINGS.rssDestFolder;
+  fieldRowItems[ROW_URL].value = SETTINGS.flashcardFeedUrl[0] ? SETTINGS.flashcardFeedUrl : tr(STR_NOT_SET);
+  fieldRowItems[ROW_FOLDER].value = SETTINGS.flashcardDestFolder;
 
   fui::ListProps props;
   props.items = fieldRowItems;
@@ -88,4 +88,4 @@ void RssSettingsActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
-#endif  // CROSSPOINT_RSS_SYNC
+#endif  // CROSSPOINT_FLASHCARDS
