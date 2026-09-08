@@ -24,7 +24,7 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/BookCacheUtils.h"
-#include "util/RssFolder.h"
+#include "util/DestFolder.h"
 #include "util/UrlUtils.h"
 
 namespace fui = freeink::ui;
@@ -74,7 +74,7 @@ void RssSyncActivity::onEnter() {
   // Normalised HERE, not just in the settings editor: the web settings API and
   // a hand-edited settings.json write rssDestFolder verbatim, and this screen
   // deletes files under whatever it is handed.
-  destFolder = normalizeRssFolder(SETTINGS.rssDestFolder);
+  destFolder = normalizeDestFolder(SETTINGS.rssDestFolder, RSS_DEFAULT_FOLDER);
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });

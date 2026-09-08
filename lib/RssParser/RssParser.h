@@ -1,5 +1,5 @@
 #pragma once
-#ifdef CROSSPOINT_RSS_SYNC
+#if defined(CROSSPOINT_RSS_SYNC) || defined(CROSSPOINT_FLASHCARDS)
 
 #include <expat.h>
 
@@ -39,6 +39,12 @@ void rssShortDate(const std::string& pubDate, char* out, size_t size);
  *
  * Malformed XML sets error(); the caller is expected to discard the partial
  * result rather than use it.
+ *
+ * Shared with CROSSPOINT_FLASHCARDS: the deck feed is the same RSS 2.0
+ * document with a different <enclosure type> (DECK_SERVER_SPEC.md §2), and the
+ * type attribute is advisory here — so FlashcardSyncActivity reuses this
+ * parser verbatim instead of duplicating the handler set (~1.9 KB of IROM by
+ * the RSS measurement in platformio.ini) for an identical grammar.
  *
  *   RssParser parser;
  *   HttpDownloader::fetchUrl(url, [&](const uint8_t* d, size_t n) { return parser.feed(d, n); });
@@ -90,4 +96,4 @@ class RssParser final {
   bool feedTruncated = false;
 };
 
-#endif  // CROSSPOINT_RSS_SYNC
+#endif  // CROSSPOINT_RSS_SYNC || CROSSPOINT_FLASHCARDS
