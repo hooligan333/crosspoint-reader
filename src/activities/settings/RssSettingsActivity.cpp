@@ -12,7 +12,7 @@
 #include "MappedInputManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
-#include "util/RssFolder.h"
+#include "util/DestFolder.h"
 
 namespace fui = freeink::ui;
 
@@ -58,8 +58,8 @@ void RssSettingsActivity::onFieldEntered(const ActivityResult& result) {
   char* const field = isUrl ? SETTINGS.rssFeedUrl : SETTINGS.rssDestFolder;
   const size_t size = isUrl ? sizeof(SETTINGS.rssFeedUrl) : sizeof(SETTINGS.rssDestFolder);
   // A bare scheme left over from the prefill means "not set".
-  const std::string value =
-      isUrl ? (text == "http://" || text == "https://" ? std::string() : text) : normalizeRssFolder(text);
+  const std::string value = isUrl ? (text == "http://" || text == "https://" ? std::string() : text)
+                                  : normalizeDestFolder(text, RSS_DEFAULT_FOLDER);
 
   strncpy(field, value.c_str(), size - 1);
   field[size - 1] = '\0';

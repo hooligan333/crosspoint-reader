@@ -222,11 +222,20 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
 #ifdef CROSSPOINT_RSS_SYNC
   // RSS feed URL + destination folder: persisted + web-exposed, but
   // category-less like the OPDS pair above, because RssSettingsActivity
-  // (Settings > Network > Configure RSS Feed) owns the on-device editing.
+  // (Settings > Connectivity > Configure RSS Feed) owns the on-device editing.
   emit(SettingInfo::String(StrId::STR_RSS_FEED_URL, &SETTINGS.rssFeedUrl[0], sizeof(SETTINGS.rssFeedUrl),
                            "rssFeedUrl"));
   emit(SettingInfo::String(StrId::STR_RSS_DEST_FOLDER, &SETTINGS.rssDestFolder[0], sizeof(SETTINGS.rssDestFolder),
                            "rssDestFolder"));
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+  // Deck feed URL + destination folder: same category-less treatment as
+  // the RSS pair above, because FlashcardSettingsActivity (Settings >
+  // Connectivity > Configure Deck Feed) owns the on-device editing.
+  emit(SettingInfo::String(StrId::STR_DECK_FEED_URL, &SETTINGS.flashcardFeedUrl[0], sizeof(SETTINGS.flashcardFeedUrl),
+                           "flashcardFeedUrl"));
+  emit(SettingInfo::String(StrId::STR_DECK_DEST_FOLDER, &SETTINGS.flashcardDestFolder[0],
+                           sizeof(SETTINGS.flashcardDestFolder), "flashcardDestFolder"));
 #endif
 
   // Frontlight quick-panel state: persisted and web-exposed, but hidden
