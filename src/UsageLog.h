@@ -59,15 +59,44 @@
 //   BOOK_RDY   the first page of that book is on the panel. The load time is
 //              the millis delta BOOK_OPEN -> BOOK_RDY.
 //   CH_START   a section (chapter) load began, because a page turn crossed a
-//              section boundary. aux = 1 forward, 2 backward. detail = 1 the
-//              section was adopted from the background prebuild / cache,
-//              2 it will be built or loaded on demand. The EPUB reader decides
-//              that at the boundary itself, so detail is always known here and
-//              CH_RDY leaves it 0. Only page-turn boundary crossings emit the
-//              pair: a chapter SKIP (long press) and the TOC / percent / link
-//              jumps also load a section, but they never adopt a prebuild and
-//              they do not go through the boundary hook, so they are silent
-//              rather than half-reported. PAGE aux 3/4 still marks the skips.
+//              section boundary. aux = 1 forward, 2 backward. detail says where
+//              the section came from and, when it did not come from the
+//              background prebuild, WHY not (UsageLog::SectionSource):
+//                1 = adopted from the prebuild, fully laid out
+//                2 = built or loaded on demand: nothing was parked at the
+//                    boundary (never armed, declined, or discarded). Every
+//                    backward crossing is a 2 -- there is no backward prebuild.
+//                3 = adopted from the prebuild while its background layout was
+//                    still running (the render finishes the pages it needs)
+//                4 = one was parked, but for a render spec the reader no longer
+//                    uses -- a font/margin/orientation change since it started
+//                5 = one was parked for a different spine (the reader jumped)
+//                6 = adopted as a partial whose background layout is NOT
+//                    running: its pages are real up to the partial watermark,
+//                    and the reader's own foreground extension resumes the
+//                    rest once it pages near that watermark
+//              1, 3 and 6 are the hits (6 the weakest -- it saves the load but
+//              not the whole chapter); 2/4/5 all load on demand and are the
+//              three distinguishable ways the feature misses. 4 and 5 are now
+//              expected to read ZERO: every path that could leave a prebuild
+//              parked for a spine or a spec the reader had moved off discards it
+//              instead (see EpubReaderActivity's discard-site list). A nonzero
+//              count on either is therefore an ALARM -- a discard site was
+//              missed -- and not a normal miss mode to be netted off the hit
+//              rate. Codes 1 and 2 are
+//              unchanged from the first version of this row, so old logs read
+//              correctly -- but only READ correctly, they do not COMPARE: the
+//              old code 2 was an undifferentiated "not prebuilt" bucket that
+//              also swallowed today's 4 and 5. Any cross-flash trend on this
+//              row must therefore compare the OLD 2 against the NEW (2+4+5),
+//              never old-2 against new-2, and old-1 against new (1+3+6).
+//              The EPUB reader decides all of this at the boundary
+//              itself, so detail is always known here and CH_RDY leaves it 0.
+//              Only page-turn boundary crossings emit the pair: a chapter SKIP
+//              (long press) and the TOC / percent / link jumps also load a
+//              section, but they never adopt a prebuild and they do not go
+//              through the boundary hook, so they are silent rather than
+//              half-reported. PAGE aux 3/4 still marks the skips.
 //   CH_RDY     the first page of that section is on the panel. aux repeats the
 //              direction; detail is 0.
 //   LS         light-sleep residency snapshot, written at sleep entry just
@@ -213,12 +242,27 @@ class UsageLog {
   // against publishing an invented load time.
   void noteBookReady();
 
+  // Where the section a boundary crossing installs came from; the CH_START
+  // row's detail. The three ON_DEMAND-equivalent codes are kept apart because
+  // "no prebuild was parked" and "one was parked but did not match" are
+  // different bugs -- and the two MISMATCH codes are kept even though they
+  // should now never be emitted: they are the assertion that the discard sites
+  // are complete, so reading one in a log means a site was missed. See the
+  // CH_START note at the top for the full table.
+  enum SectionSource : uint8_t {
+    SECTION_PREBUILT = 1,
+    SECTION_ON_DEMAND = 2,
+    SECTION_PREBUILT_BUILDING = 3,
+    SECTION_SPEC_MISMATCH = 4,
+    SECTION_SPINE_MISMATCH = 5,
+    SECTION_PREBUILT_PARTIAL = 6,
+  };
+
   // A section (chapter) load is starting because a page turn crossed a section
-  // boundary. `prebuilt` is true when the section was adopted from the
-  // background prebuild / cache instead of being built on demand -- the EPUB
-  // reader knows this at the boundary itself, so both halves of the row are
-  // filled in here and noteSectionReady() only repeats the direction.
-  void noteSectionStart(bool isForward, bool prebuilt);
+  // boundary. The EPUB reader knows `source` at the boundary itself, so both
+  // halves of the row are filled in here and noteSectionReady() only repeats
+  // the direction.
+  void noteSectionStart(bool isForward, SectionSource source);
 
   // The first page of that new section is on the panel.
   void noteSectionReady(bool isForward);
