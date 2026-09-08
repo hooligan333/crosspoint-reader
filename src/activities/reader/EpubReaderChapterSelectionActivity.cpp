@@ -29,7 +29,16 @@ void EpubReaderChapterSelectionActivity::onEnter() {
   // normal page-turn cost), giving this list room to keep every row's
   // fallback glyphs resident — otherwise each repaint re-reads the visible
   // rows' glyphs from SD.
+  //
+  // Under a RenderLock: onEnter() runs after ActivityManager released its own
+  // lock (it unlocks immediately before the call, precisely so onEnter may take
+  // one), and a Push does NOT stop the activity underneath -- the reader is
+  // still live, its render task can be painting a page and its background build
+  // task can be laying out the next chapter, both measuring text through the
+  // arenas this frees. Nothing on this path holds the lock, so the blocking
+  // acquire cannot deadlock; the scope is one call wide.
   if (auto* fcm = renderer.getFontCacheManager()) {
+    RenderLock lock;
     fcm->clearCache();
   }
 
