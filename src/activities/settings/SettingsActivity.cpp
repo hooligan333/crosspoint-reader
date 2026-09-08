@@ -30,6 +30,9 @@
 #ifdef CROSSPOINT_RSS_SYNC
 #include "RssSettingsActivity.h"
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+#include "FlashcardSettingsActivity.h"
+#endif
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
@@ -141,6 +144,9 @@ void SettingsActivity::rebuildSettings() {
   addAction(SettingsSection::Network, StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser);
 #ifdef CROSSPOINT_RSS_SYNC
   addAction(SettingsSection::Network, StrId::STR_RSS_CONFIGURE, SettingAction::RssSettings);
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+  addAction(SettingsSection::Network, StrId::STR_DECK_CONFIGURE, SettingAction::FlashcardSettings);
 #endif
   addAction(SettingsSection::Network, StrId::STR_PLUGINS, SettingAction::Plugins);
 
@@ -419,6 +425,11 @@ void SettingsActivity::toggleSelectedSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: RssSettingsActivity");
         }
+        break;
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+      case SettingAction::FlashcardSettings:
+        startActivityForResult(std::make_unique<FlashcardSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
 #endif
       case SettingAction::None:
