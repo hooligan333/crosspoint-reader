@@ -29,6 +29,9 @@
 #ifdef CROSSPOINT_RSS_SYNC
 #include "RssSettingsActivity.h"
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+#include "FlashcardSettingsActivity.h"
+#endif
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
@@ -109,6 +112,9 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
 #ifdef CROSSPOINT_RSS_SYNC
   systemSettings.push_back(SettingInfo::Action(StrId::STR_RSS_CONFIGURE, SettingAction::RssSettings));
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_DECK_CONFIGURE, SettingAction::FlashcardSettings));
 #endif
   // OTA fetches this board's own release asset (see OtaUpdater); boards whose
   // asset isn't published yet just report no update available.
@@ -455,6 +461,11 @@ void SettingsActivity::toggleCurrentSetting() {
         } else {
           LOG_ERR("SETTINGS", "OOM: RssSettingsActivity");
         }
+        break;
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+      case SettingAction::FlashcardSettings:
+        startActivityForResult(std::make_unique<FlashcardSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
 #endif
       case SettingAction::None:

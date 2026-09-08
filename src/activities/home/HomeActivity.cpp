@@ -31,6 +31,9 @@ int HomeActivity::getMenuItemCount() const {
 #else
   int count = 4;  // File Browser, Library, File transfer, Settings
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+  count++;  // Sync Decks
+#endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -337,6 +340,11 @@ void HomeActivity::loop() {
         onRssSyncOpen();
         break;
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+      case HomeMenuItem::FLASHCARD_SYNC:
+        onFlashcardSyncOpen();
+        break;
+#endif
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -535,6 +543,16 @@ void HomeActivity::render(RenderLock&&) {
                                         tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+  // "Sync Decks" sits directly above Settings, after "Sync RSS Feed" when that
+  // flag is on too — the same slot menuItemToIndex()/indexToMenuItem() fence it
+  // into. Inserted rather than folded into the initialisers above so a build
+  // with this flag off keeps byte-identical code (FLASHCARD_SPEC.md §0.5).
+  // Bookmark is the closest glyph the UIIcon set ships that the home menu does
+  // not already spend on another row (see BaseTheme.h).
+  menuItems.insert(menuItems.end() - 1, tr(STR_DECK_SYNC));
+  menuIcons.insert(menuIcons.end() - 1, Bookmark);
+#endif
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -585,6 +603,10 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 #ifdef CROSSPOINT_RSS_SYNC
 void HomeActivity::onRssSyncOpen() { activityManager.goToRssSync(); }
+#endif
+
+#ifdef CROSSPOINT_FLASHCARDS
+void HomeActivity::onFlashcardSyncOpen() { activityManager.goToFlashcardSync(); }
 #endif
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
