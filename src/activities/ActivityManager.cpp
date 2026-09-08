@@ -29,6 +29,9 @@
 #ifdef CROSSPOINT_RSS_SYNC
 #include "network/RssSyncActivity.h"
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+#include "network/FlashcardSyncActivity.h"
+#endif
 #include "reader/ReaderActivity.h"
 #include "reader/RemoteTurnGate.h"
 #include "settings/OpdsServerListActivity.h"
@@ -341,6 +344,12 @@ void ActivityManager::goToPlugins(bool showOpds) {
 void ActivityManager::goToRssSync() { replaceActivity(std::make_unique<RssSyncActivity>(renderer, mappedInput)); }
 #endif
 
+#ifdef CROSSPOINT_FLASHCARDS
+void ActivityManager::goToFlashcardSync() {
+  replaceActivity(std::make_unique<FlashcardSyncActivity>(renderer, mappedInput));
+}
+#endif
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
@@ -389,6 +398,10 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
 #ifdef CROSSPOINT_RSS_SYNC
     } else if (activityName == "RssSync") {
       initialMenuItem = HomeMenuItem::RSS_SYNC;
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+    } else if (activityName == "FlashcardSync") {
+      initialMenuItem = HomeMenuItem::FLASHCARD_SYNC;
 #endif
     } else if (activityName == "Settings" || activityName == "SettingsList") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
