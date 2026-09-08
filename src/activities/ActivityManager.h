@@ -142,6 +142,15 @@ class ActivityManager {
   // ever consume a queued gesture.
   bool isOnHomeScreen() const;
 
+  // True when `activity` is the one on top -- the activity being rendered and
+  // given input -- rather than one parked on the stack under a pushed
+  // sub-activity. Deliberately NOT isReaderActivity(), which walks the whole
+  // stack and so stays true for a reader sitting under its own menu. The
+  // caller in EpubReaderActivity is the background build task, which reads this
+  // under the RenderLock: every currentActivity swap in loop() happens under
+  // that same lock, so the pointer it compares is never a torn or stale read.
+  bool isCurrentActivity(const Activity* activity) const { return currentActivity.get() == activity; }
+
   // Run the current activity's contextual menu on behalf of a global shortcut.
   // False when no activity is up, a transition is pending, or the screen has
   // no menu (see Activity::openShortcutMenu).

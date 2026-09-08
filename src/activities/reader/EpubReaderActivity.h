@@ -39,6 +39,11 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#ifdef CROSSPOINT_USAGE_LOG
+// For UsageLog::SectionSource, the CH_START hook's argument type. That header
+// is entirely inside its own flag guard, so a flags-off build gets nothing.
+#include "UsageLog.h"
+#endif
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -97,8 +102,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // publish an absurd load time. 90 s sits well above any plausible cold index
   // build; the cost is that a build slower than that loses its _RDY row.
   static constexpr uint32_t ULOG_READY_DEADLINE_MS = 90UL * 1000UL;
-  // Arms that pending _RDY and writes the CH_START row.
-  void ulogNoteSectionStart(bool isForward, bool prebuilt);
+  // Arms that pending _RDY and writes the CH_START row. `source` is one of
+  // UsageLog's SECTION_* codes -- where the section came from, and when it did
+  // not come from the prebuild, why not.
+  void ulogNoteSectionStart(bool isForward, UsageLog::SectionSource source);
 #endif
 #ifdef CROSSPOINT_PAGE_CACHE
   // One-entry deserialized-page cache, filled by the idle prewarm above. That
@@ -268,40 +275,148 @@ class EpubReaderActivity final : public ReaderActivity {
                 "CROSSPOINT_BG_IDLE_STRETCH_MS must not undercut the 25 ms transient cadence");
 #endif
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-  // Prebuild (cache pre-load) of the NEXT spine's Section by the background
-  // build task while the reader sits near the end of a fully-built chapter, so
-  // the forward chapter-boundary turn swaps a ready Section in instead of the
-  // synchronous load. CACHED-ONLY: the prebuild never starts a build — a second
-  // live build context would share the Epub's single CssParser and the
-  // html/.bin.part paths with any build renderBook() starts, both racy.
-  // Everything (construction, loadSectionFile, park, discard, consume) runs
-  // under the try-acquired RenderLock, so the shared book.bin metadata handle
-  // and all reader state are only ever touched serialized. Cache-miss next
-  // spines fall back to today's boundary behavior (remembered in
-  // prebuildDeclinedSpine so idle iterations don't re-probe SD).
+  // Prebuild of the NEXT spine's Section by the background build task while the
+  // reader sits near the end of a fully-built chapter, so the forward
+  // chapter-boundary turn swaps a ready Section in instead of paying the
+  // synchronous load. Two ways to get one, tried in that order: ADOPT an
+  // existing layout cache (tens of ms), or LAY THE CHAPTER OUT here. The second
+  // is what covers a book being read forward for the first time, where the next
+  // spine has no .bin at all -- on-device logging measured that case as
+  // essentially every forward transition. Of 57 logged CH_START pairs, 52 were
+  // forward and 5 backward; 5 of those 52 forward crossings adopted a cache,
+  // and all five were returns across a boundary the reader had just crossed
+  // backwards.
+  //
+  // Everything -- construction, loadSectionFile, startBuild, every build tick,
+  // park, discard, consume -- runs under the try-acquired RenderLock, so the
+  // shared book.bin metadata handle and all reader state are only ever touched
+  // serialized, and a prebuild tick can never overlap a render.
+  //
+  // The lock holds are NOT all one size, and the outlier is worth naming:
+  // loadSectionFile and a build tick are both tens of ms, but startBuild() opens
+  // SD files, loads the cached CSS and constructs the chapter parser -- 100-300
+  // ms on a slow card, and it fires exactly when the reader is turning pages
+  // near a chapter end. So the ARMING call that would run it is additionally
+  // deferred while activityManager.hasPendingRender() is true (the same
+  // requestedUpdate/pendingRenders count the loop's idle tail reads): a render
+  // already queued goes first, and the arm retries on the next pass, on the
+  // 25 ms transient cadence. That check and the arm's heap floor are both taken
+  // BEFORE the candidate Section is constructed and its cache probed, so a pass
+  // that is going to decline costs no SD I/O at all. Nothing else on this path
+  // defers -- once a layout is armed, its ticks are the same size as the active
+  // section's.
+  //
+  // ONE LIVE BUILD CONTEXT AT A TIME, and that is the load-bearing invariant: a
+  // Section's build holds the Epub's single CssParser (hydrated at startBuild,
+  // cleared at finalize/suspend/abandon) and the parser keeps its rules by
+  // reference, so two builds would corrupt each other whatever the locking. It
+  // holds in both directions:
+  //  * this task never STARTS one while `section` is building or partial (the
+  //    arming gate in prebuildStep, unchanged), and only ever pumps one build
+  //    per idle pass -- the active section's first, this one only when that has
+  //    nothing to do (see PrebuildPhase for where in the ladder each half sits);
+  //  * every foreground build start first calls discardPrebuiltSection() under
+  //    the RenderLock it already holds -- renderBook()'s chapter-load branch and
+  //    loop()'s deferred partial extension. No wait is needed, unlike the
+  //    pre-inflate's cancel, precisely because a prebuild tick never runs
+  //    outside the lock: holding it is proof no tick is in flight.
+  //
+  // The same discard is what keeps an in-flight layout from OUTLIVING the reader
+  // that armed it. A Push does not stop this activity: ActivityManager moves it
+  // to the stack without calling onExit(), so the build task keeps running while
+  // a sub-activity is up -- and the font pickers and the chapter list tear fonts
+  // down (SdFontSystem::ensureLoaded, FontCacheManager::clearCache) under a
+  // renderer this task measures text through. So every site that releases
+  // `section` before pushing, or abandons the spec the prebuild was armed for,
+  // discards it too, under the RenderLock it already holds: the two TEXT_SETTINGS
+  // branches (classic menu and toolbar), applyReaderTextSettings (the return
+  // path both of those take, plus the Text panel's own live edits),
+  // SELECT_CHAPTER, applyOrientation, toggleAutoPageTurn, and the backward
+  // chapter-boundary arm. The two font teardowns themselves were moved INSIDE a
+  // RenderLock for the same reason.
+  // Belt and braces on top of that: prebuildStep drops the prebuild whenever
+  // `section` is null, so anything that releases it without discarding still
+  // stops the pump on the next background pass. And nothing new is ARMED while
+  // this activity is not the current one (activityManager.isCurrentActivity),
+  // so a sub-activity that keeps its own section resident cannot have a prebuild
+  // started underneath it -- nor have the arm probe SD for one every pass. The
+  // pump stays live while stacked on purpose: an armed build is bounded work the
+  // reader still wants when it comes back.
+  // A discarded in-flight prebuild is not lost work -- ~Section suspends it to a
+  // partial .bin, which the eventual visit to that spine resumes from, and which
+  // a later prebuild of the same spine resumes in the background.
   std::unique_ptr<Section> prebuiltSection;
   int prebuiltSpineIndex = -1;
-  int prebuildDeclinedSpine = -1;
+  // Spine whose prebuild is settled (started, or refused for a reason that will
+  // not change) so idle iterations don't re-probe SD every wake. A refusal for
+  // "the next spine's HTML is not inflated yet" IS expected to change, and the
+  // pre-inflate below clears this when it promotes.
+  // std::atomic, unlike the members beside it, for one site: the pre-inflate
+  // clears it from its UNLOCKED phase (the only access not under the RenderLock),
+  // which would otherwise be a plain data race against the loop task's boundary
+  // hook. Relaxed everywhere -- nothing is published through this value, the
+  // worst a lost update can cost is one extra SD probe, and relaxed int loads
+  // and stores are the same instructions the plain int compiled to.
+  std::atomic<int> prebuildDeclinedSpine{-1};
   ReaderRenderSpec prebuiltSpec{};
   // Spec snapshot for the task; written by renderBook() under the RenderLock.
   ReaderRenderSpec lastRenderSpec{};
   bool lastRenderSpecValid = false;
   static bool renderSpecEquals(const ReaderRenderSpec& a, const ReaderRenderSpec& b);
-  bool prebuildStep();
+  // The prebuild runs as two steps at DIFFERENT priorities in the idle ladder,
+  // because they cost different things and serve deadlines that are minutes
+  // apart:
+  //   Arm  -- drop a stale prebuild, probe the next spine's cache, park it or
+  //           start its layout -- and resume a parked partial whose own start
+  //           was refused. Cheap, one-shot per spine, and its deadline is
+  //           the boundary turn, so it sits where the old single step did:
+  //           straight after the active section's build tick.
+  //   Pump -- one buildSomeMore() tick of that layout. This is the LOWEST
+  //           priority work in the ladder, below the image pre-decode: a
+  //           chapter's layout runs for a minute or more and returns didWork
+  //           every pass, so pumping it above the pre-decode starved the images
+  //           of pages the reader reaches in seconds for the whole runway. The
+  //           prebuild's own runway is 95 s median, which is what makes it the
+  //           one that can afford to yield.
+  enum class PrebuildPhase : uint8_t { Arm, Pump };
+  // `workPlausible` follows htmlInflateStep's convention: set when this pass
+  // could not rule out IMMINENT work (contended lock, a build tick's heap gate,
+  // deferred for a queued render) so the task retries on the 25 ms cadence
+  // instead of parking. Deliberately NOT set by the arm's own heap floor: a heap
+  // shortfall persists, and spinning against it is the one way this step can
+  // cost real idle power -- the sibling steps' heap gates set nothing either.
+  bool prebuildStep(bool& workPlausible, PrebuildPhase phase);
+  // Drop whatever is parked (suspending its build, if any) and re-arm the probe.
+  void discardPrebuiltSection();
   // Start prebuilding when the reader is within this many pages of chapter end.
+  // Measured runway inside that window: 95 s median, 4.6 s minimum -- ample for
+  // a layout that costs the boundary turn ~1.6 s today.
   static constexpr int PREBUILD_NEAR_END_PAGES = 3;
+  // Free-heap floor for STARTING a prebuild's layout (its ticks are then gated
+  // by buildTickHeapGate(), exactly as the active section's are). The same
+  // allocations -- BuildContext, chapter parser, hydrated CSS rules -- are made
+  // with no floor at all when the boundary turn builds the chapter itself, so
+  // this only has to stop the OPPORTUNISTIC copy from taking blocks the render
+  // task is about to need on the other core.
+  static constexpr size_t PREBUILD_BUILD_MIN_FREE_HEAP = 64 * 1024;
+  static constexpr size_t PREBUILD_BUILD_MIN_MAX_ALLOC = 32 * 1024;
 
   // --- Background HTML pre-inflate of the next spine ---------------------------
-  // The prebuild above can only ADOPT an existing layout cache; a next chapter
-  // that has never been visited has none, and the boundary turn then pays the
-  // whole cold cost: inflating the chapter HTML out of the zip (multi-second on
-  // a large spine), parsing CSS, laying out page one. The first of those three
-  // is the only one that is safely movable off the critical path -- it produces
-  // a file, not reader state, and Section::startBuild already has a fast path
-  // for finding that file present (`reusedHtml`). So when the reader is near
-  // the end of a chapter and the next spine's HTML is NOT cached, inflate it
-  // here, on the background task's idle path; the eventual boundary turn then
-  // pays only CSS + first-page layout.
+  // A next chapter that has never been visited has no layout cache, and the
+  // boundary turn then pays the whole cold cost: inflating the chapter HTML out
+  // of the zip (multi-second on a large spine), parsing CSS, laying out page
+  // one. This step moves the first of those three off the critical path -- it
+  // produces a file, not reader state, and Section::startBuild already has a
+  // fast path for finding that file present (`reusedHtml`). So when the reader
+  // is near the end of a chapter and the next spine's HTML is NOT cached,
+  // inflate it here, on the background task's idle path.
+  //
+  // It is also the PRECONDITION for the prebuild above laying that chapter out:
+  // prebuildStep refuses to start a build whose startBuild() would inflate,
+  // because that inflate is seconds long and would run under the RenderLock.
+  // The two therefore run in sequence over a couple of idle passes -- inflate
+  // here, then build there -- which is why a promotion re-arms
+  // prebuildDeclinedSpine.
   //
   // Two phases, copied from the image pre-decode below because the hazard is
   // the same shape:

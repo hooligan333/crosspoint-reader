@@ -181,6 +181,16 @@ class PsramPlane {
 }  // namespace
 
 EpubReaderActivity::~EpubReaderActivity() {
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+  // Ahead of everything, and in particular ahead of the read-folder move below:
+  // a parked prebuild holds SD handles in the book's cache dir and its
+  // destructor may commit a partial .bin there, so it has to be gone before that
+  // directory is moved or removed. onExit() normally got here first (it stops
+  // the build task and discards), but a destructor must not depend on that
+  // having run -- and the task is already stopped by then either way, so this is
+  // a no-op on the ordinary path rather than a second teardown.
+  discardPrebuiltSection();
+#endif
   ImageBlock::setExtractor(nullptr, nullptr);
   discardOverlayPage();  // free the overlay's page snapshot if one is held
 
@@ -223,10 +233,10 @@ void EpubReaderActivity::onExit() {
   // the task's short wait cadence.
   stopBgBuildTask();
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-  // Task is stopped; safe to discard directly. The parked Section never has a
-  // build context, so its destructor touches no shared build state.
-  prebuiltSection.reset();
-  prebuiltSpineIndex = -1;
+  // Task is stopped, so nothing can be mid-tick; discard directly. A prebuild
+  // still laying itself out is suspended to a partial .bin here, exactly as
+  // section.reset() below suspends the current chapter's build.
+  discardPrebuiltSection();
 #endif
   ReaderActivity::onExit();
 }
@@ -581,25 +591,40 @@ void EpubReaderActivity::bgBuildTaskLoop() {
       }
     }
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+    // Arming only -- the probe, the park and the layout start. Cheap, one-shot
+    // per spine, and it is what actually makes a boundary turn instant, so it
+    // keeps the slot the whole prebuild used to hold. Its BUILD ticks are the
+    // Pump phase at the bottom of this ladder; see PrebuildPhase.
     if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
-      didWork = prebuildStep();
+      didWork = prebuildStep(workPlausible, PrebuildPhase::Arm);
     }
-    // Below the cached prebuild (that one is what actually makes a boundary turn
-    // instant, and it is tens of ms under the lock), above the image pre-decode:
-    // this is one-shot per spine and has a deadline -- the boundary turn -- while
-    // the pre-decode re-arms every time the reader moves and would otherwise
-    // starve it indefinitely on an image-dense chapter. Costing the pre-decode
-    // at most one inflate of delay is the cheaper side of that trade.
+    // Below the prebuild's arming (which this is the precondition for -- an
+    // uninflated next spine is exactly what makes the arm defer), above the
+    // image pre-decode: this is one-shot per spine and has a deadline -- the
+    // boundary turn -- while the pre-decode re-arms every time the reader moves
+    // and would otherwise starve it indefinitely on an image-dense chapter.
+    // Costing the pre-decode at most one inflate of delay is the cheaper side of
+    // that trade.
     if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
       didWork = htmlInflateStep(workPlausible);
     }
 #endif
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
-    // Lowest-priority idle work: it is the only step here that runs for seconds
-    // with the lock released, so it goes after everything the reader is
-    // actually waiting on.
+    // It is the only step here that runs for seconds with the lock released, so
+    // it goes after everything with a nearer deadline than its own.
     if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
       didWork = imageDecodeStep(workPlausible);
+    }
+#endif
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+    // Lowest-priority idle work, and deliberately BELOW the pre-decode: laying a
+    // chapter out takes a minute or more of ticks that each report progress, so
+    // running it above the pre-decode would starve the images of pages the
+    // reader reaches in seconds for the whole of that runway. The prebuild is
+    // the one step with a runway to give up (95 s median inside its window), so
+    // it yields and the pre-decode does not.
+    if (!didWork && !bgBuildStop.load(std::memory_order_acquire)) {
+      didWork = prebuildStep(workPlausible, PrebuildPhase::Pump);
     }
 #endif
     if (didWork) {
@@ -640,48 +665,194 @@ bool EpubReaderActivity::renderSpecEquals(const ReaderRenderSpec& a, const Reade
          a.imageRendering == b.imageRendering && a.focusReadingEnabled == b.focusReadingEnabled;
 }
 
+void EpubReaderActivity::discardPrebuiltSection() {
+  prebuiltSection.reset();
+  prebuiltSpineIndex = -1;
+  prebuildDeclinedSpine.store(-1, std::memory_order_relaxed);
+}
+
 // One prebuild step, run on the background build task when the active section
-// has nothing to build. CACHED-ONLY by design: the prebuild never calls
-// startBuild(), because a second live build context would share the Epub's
-// single CssParser and the html/.bin.part file paths with any build
-// renderBook() starts synchronously — adversarial review found both to be racy.
-// A cache-miss next spine simply falls back to today's boundary behavior. All
-// work — including Section construction and loadSectionFile, which read the
-// shared book.bin metadata handle — happens under the (try-acquired)
-// RenderLock; a cached load is tens of ms, the same order as a build tick.
-// Returns true if it made progress.
-bool EpubReaderActivity::prebuildStep() {
+// has nothing to build: adopt the next spine's layout cache if it has one, lay
+// the chapter out here if it does not, and pump that layout a tick at a time
+// until it is parked and ready. Those are two phases at two different ladder
+// priorities (see PrebuildPhase); `phase` says which one this call is.
+//
+// All work — Section construction, loadSectionFile and startBuild (which read
+// the shared book.bin metadata handle) and every build tick — happens under the
+// (try-acquired) RenderLock, which is both what serializes it against renders
+// and what makes the one-live-build-context invariant provable (see the
+// header). Returns true if it made progress.
+bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase phase) {
   RenderLock lock{RenderLock::TryAcquire{}};
-  if (!lock.locked()) return false;
-  // Drop a stale prebuild (reader jumped/paged back, or settings changed). The
-  // parked Section never has a build context, so its destructor touches no
-  // shared build state (no CssParser, no .part commit).
-  if (prebuiltSection && (prebuiltSpineIndex != currentSpineIndex + 1 || !lastRenderSpecValid ||
-                          !renderSpecEquals(prebuiltSpec, lastRenderSpec))) {
-    prebuiltSection.reset();
-    prebuiltSpineIndex = -1;
-    prebuildDeclinedSpine = -1;
+  if (!lock.locked()) {
+    workPlausible = true;
+    return false;
   }
-  if (prebuiltSection) return false;  // parked and ready
+  // Drop a stale prebuild: the reader jumped or paged back, the settings
+  // changed, or `section` has been released outright. That last one is the
+  // catch-all for a sub-activity push — a font picker or the chapter list
+  // releases the section and then tears fonts down while this activity sits on
+  // the stack, still running this task. Those sites discard explicitly (see the
+  // header), so reaching here with a live prebuild and no section means one of
+  // them was missed; stopping the pump is the safety net, not the mechanism.
+  // The arming gate below keeps its own `!section` test because it dereferences
+  // `section`, and this one only fires when something is parked.
+  if (prebuiltSection && (!section || prebuiltSpineIndex != currentSpineIndex + 1 || !lastRenderSpecValid ||
+                          !renderSpecEquals(prebuiltSpec, lastRenderSpec))) {
+    discardPrebuiltSection();
+  }
+  // The preconditions for STARTING a layout that startBuild() does not supply
+  // itself, split in two because only the second half needs a Section to ask.
+  // Lambdas rather than inline gates because there are now two callers: the
+  // fresh arm at the bottom of this function, and the parked-partial resume
+  // just below it.
+  //
+  // Neither of these needs a Section or touches the card, which is why both
+  // callers run them FIRST: an arm that is going to decline must not pay
+  // `new Section` + loadSectionFile()'s SD I/O to find that out. It did, on
+  // every pass, until this order was fixed -- and on the 25 ms transient cadence
+  // that is a measurable idle drain. The cost of hoisting is that a pass which
+  // could merely have ADOPTED a finished cache (no layout to start) declines
+  // too; that only defers the adoption to a later pass, and the boundary turn
+  // loads the very same cache synchronously in the worst case.
+  const auto layoutStartDeferred = [&]() -> bool {
+    // No workPlausible on the heap gate: a shortfall persists, so the 25 ms
+    // cadence would just spend a reading session probing SD against it.
+    // htmlInflateStep() and imageDecodeStep() set nothing on their heap gates
+    // either; the parked cadence is the right retry for this.
+    if (gateFreeHeap() < PREBUILD_BUILD_MIN_FREE_HEAP || gateMaxAllocHeap() < PREBUILD_BUILD_MIN_MAX_ALLOC) return true;
+    // The one lock hold on this path that is not tens of ms: SD file setup, the
+    // cached CSS load and the chapter parser cost 100-300 ms on a slow card, and
+    // the reader is by definition turning pages near a chapter end when this
+    // arms. A render already queued goes first. That one IS transient, so it
+    // asks for the 25 ms cadence, and the next Arm pass retries -- by re-probing
+    // when nothing is parked, or through the resume below when a partial is.
+    if (activityManager.hasPendingRender()) {
+      workPlausible = true;
+      return true;
+    }
+    return false;
+  };
+  // Set when a refusal is permanent for this spine (as opposed to worth
+  // retrying on a later pass).
+  bool settled = false;
+  const auto startLayout = [&](Section& target, const int spine) -> bool {
+    // The HTML must already be inflated: startBuild() would otherwise stream it
+    // out of the zip, seconds long, under this lock. htmlInflateStep() is the
+    // next step in the ladder and re-arms the decline memory when it promotes,
+    // so this resolves in a pass or two.
+    if (!target.hasHtmlCache()) {
+      settled = true;
+      return false;
+    }
+    if (!target.startBuild(lastRenderSpec)) {
+      LOG_ERR("ERS", "Failed to start prebuild of section %d", spine);
+      settled = true;
+      return false;
+    }
+    return true;
+  };
+
+  if (prebuiltSection) {
+    if (!prebuiltSection->isBuilding()) {
+      // Parked. A parked PARTIAL is stopped dead at its watermark because its
+      // startLayout() was refused, and nothing else would ever retry it: the arm
+      // below never runs while something is parked here. So retry the resume,
+      // on the Arm pass, under exactly the gates the fresh arm uses. The
+      // staleness drop above has already proved the spine and the render spec
+      // still match, so there is nothing else to re-check. A parked section that
+      // is NOT partial is finished work -- nothing to do either way.
+      if (phase != PrebuildPhase::Arm || !prebuiltSection->isPartial()) return false;
+      // This starts a build, so it owes the same ONE LIVE BUILD CONTEXT check
+      // the fresh arm makes. Reaching here with a building or partial `section`
+      // should be impossible -- every foreground build start discards the
+      // prebuild first (see the header) -- which is exactly why the test is
+      // written out rather than argued: it keeps the invariant provable from
+      // this function alone.
+      if (!section || section->isBuilding() || section->isPartial()) return false;
+      // The same settled memory the fresh arm consults, for the same reason: a
+      // resume already refused for something that will not change must not be
+      // re-attempted (SD setup, 100-300 ms under this lock) every idle pass.
+      if (prebuildDeclinedSpine.load(std::memory_order_relaxed) == prebuiltSpineIndex) return false;
+      if (layoutStartDeferred()) return false;
+      if (!startLayout(*prebuiltSection, prebuiltSpineIndex)) {
+        // Refused: the partial STAYS parked either way -- its pages are real up
+        // to the watermark and the boundary turn still adopts them (CH_START
+        // detail 6). All a settled refusal changes is that this stops asking.
+        if (settled) prebuildDeclinedSpine.store(prebuiltSpineIndex, std::memory_order_relaxed);
+        return false;
+      }
+      LOG_DBG("ERS", "Resumed prebuild of partial section %d", prebuiltSpineIndex);
+      return true;
+    }
+    if (phase != PrebuildPhase::Pump) return false;  // build ticks run at the bottom of the ladder
+    // Still laying itself out: same tick size, heap gate and per-tick lock
+    // scope as the active section's ticks above, and never at the same time as
+    // one — the arming gate below refuses to start while `section` builds.
+    if (!buildTickHeapGate()) {
+      workPlausible = true;  // transient: the 25 ms retry, as the active build's tick takes
+      return false;
+    }
+    if (!prebuiltSection->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+      // buildSomeMore has already abandoned the build. A parse error recurs
+      // against the same HTML, so stop offering this spine; the boundary turn
+      // reports it exactly as it does today.
+      LOG_ERR("ERS", "Prebuild of section %d failed", prebuiltSpineIndex);
+      const int failedSpine = prebuiltSpineIndex;
+      discardPrebuiltSection();
+      prebuildDeclinedSpine.store(failedSpine, std::memory_order_relaxed);
+      return false;
+    }
+    return true;
+  }
+  if (phase != PrebuildPhase::Arm) return false;  // arming is the Arm pass's job
+  // Arm ONLY while this reader is the activity on top. A Push does not stop this
+  // activity (see the header), so without this the arm keeps probing SD for as
+  // long as the menu, the chapter list, the bookmark list, a footnote, the
+  // dictionary, the QR view or the go-to-percent dialog sits on top of the
+  // reader -- and those screens raise pendingRenders as they scroll, so the
+  // deferral above would hold it on the 25 ms cadence the whole time. Pumping a
+  // build that is ALREADY armed stays allowed while stacked (above): that work
+  // is bounded and the reader still wants it. ActivityManager::isReaderActivity()
+  // is the wrong test here -- it walks the stack, so it stays true for exactly
+  // the pushed-sub-activity case this excludes.
+  if (!activityManager.isCurrentActivity(this)) return false;
   // Consider prebuilding: current chapter fully built, reader near its end.
   if (!section || section->isBuilding() || section->isPartial() || !lastRenderSpecValid) return false;
   if (section->pageCount == 0 || section->currentPage + PREBUILD_NEAR_END_PAGES < static_cast<int>(section->pageCount))
     return false;
   if (currentSpineIndex + 1 >= epub->getSpineItemsCount()) return false;
   const int buildSpine = currentSpineIndex + 1;
-  if (prebuildDeclinedSpine == buildSpine) return false;  // known cache miss; don't re-probe every idle tick
+  // settled; don't re-probe every idle tick
+  if (prebuildDeclinedSpine.load(std::memory_order_relaxed) == buildSpine) return false;
+  // Above the probe, not inside the layout start below it: see layoutStartDeferred().
+  if (layoutStartDeferred()) return false;
 
   auto candidate = std::unique_ptr<Section>(new Section(epub, buildSpine, renderer));
-  if (!candidate->loadSectionFile(lastRenderSpec)) {
-    // No usable cache for the next spine. Remember the miss so idle iterations
-    // don't re-open SD files on every wake; cleared when the reader moves on.
-    prebuildDeclinedSpine = buildSpine;
-    return false;
+  const bool loaded = candidate->loadSectionFile(lastRenderSpec);
+  // No layout cache at all — the state every next chapter of a book being read
+  // forward for the first time is in — or one that loaded as a PARTIAL, which is
+  // now the common artifact: every discarded in-flight prebuild suspends to one.
+  // A parked partial stops dead at its watermark, so resume its build here, the
+  // same way loop()'s foreground extension resumes the active section's.
+  if (!loaded || candidate->isPartial()) {
+    if (!startLayout(*candidate, buildSpine) && !loaded) {
+      // Nothing loaded, so there is nothing worth parking.
+      if (settled) prebuildDeclinedSpine.store(buildSpine, std::memory_order_relaxed);
+      return false;
+    }
+    // A partial that could not resume is still parked: its pages are real up to
+    // the watermark, and the boundary turn's foreground extension picks up the
+    // rest (CH_START detail 6). A transient refusal is not the end of it -- the
+    // resume path above re-attempts it from the next Arm pass onwards.
   }
   prebuiltSpineIndex = buildSpine;
   prebuiltSpec = lastRenderSpec;
   prebuiltSection = std::move(candidate);
-  LOG_DBG("ERS", "Prebuilt next section %d (%s)", buildSpine, prebuiltSection->isPartial() ? "partial" : "ready");
+  LOG_DBG("ERS", "Prebuilt next section %d (%s)", buildSpine,
+          prebuiltSection->isBuilding()  ? "building"
+          : prebuiltSection->isPartial() ? "partial"
+                                         : "ready");
   return true;
 }
 
@@ -744,8 +915,14 @@ bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
     target = currentSpineIndex + 1;
     if (target >= epub->getSpineItemsCount()) return false;
     if (htmlInflateDeclinedSpine == target) return false;
-    // A parked prebuild means the next spine already has a layout cache, which
-    // it could only have got from an inflate that ran to completion.
+    // A parked prebuild means this spine needs nothing from here: it loaded a
+    // layout cache (which an inflate must have run for), or it is laying one
+    // out, which prebuildStep only starts once the HTML is there. The one state
+    // that is neither is a partial parked without a resume -- prebuildStep tries
+    // to resume every partial it loads, so that means the resume was refused,
+    // and the refusal this step could lift (no HTML cache) is the rarest of them
+    // (a partial is written by a build that had the HTML). Left to the reader's
+    // own foreground extension rather than special-cased here.
     if (prebuiltSection && prebuiltSpineIndex == target) return false;
     if (gateFreeHeap() < HTML_INFLATE_MIN_FREE_HEAP || gateMaxAllocHeap() < HTML_INFLATE_MIN_MAX_ALLOC) return false;
 
@@ -783,6 +960,15 @@ bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
   switch (result) {
     case Section::HtmlInflate::Promoted:
       htmlInflateDeclinedSpine = target;
+      // prebuildStep settled this spine because its HTML was not inflated yet
+      // (that is why this ran); it is now, so let the next pass lay the chapter
+      // out. Written off the lock, unlike every other access to it: it is
+      // std::atomic for exactly this one site (see the header), and the only
+      // other writer that can run concurrently is the loop task's boundary hook,
+      // which writes the same -1 -- so the worst a race can cost is one extra
+      // probe.
+      if (prebuildDeclinedSpine.load(std::memory_order_relaxed) == target)
+        prebuildDeclinedSpine.store(-1, std::memory_order_relaxed);
       LOG_DBG("ERS", "Pre-inflated HTML for spine %d in %lums", target, millis() - t0);
       return true;
     case Section::HtmlInflate::TempOnly:
@@ -1102,6 +1288,13 @@ void EpubReaderActivity::loop() {
       // in the previous chapter. startBuild() would then be inflating the same
       // zip entry into the same html cache from the other core.
       cancelBackgroundHtmlInflate();
+      // Second foreground build start, so the same one-live-build-context rule
+      // as the render site: drop a prebuild that is laying out a chapter of its
+      // own before this one takes the Epub's CssParser. Reachable only via an
+      // adopted partial (a prebuild is armed only while the current section is
+      // complete and non-partial), which is exactly the pairing the cancel
+      // above exists for; the discard is a line and keeps the rule local.
+      discardPrebuiltSection();
 #endif
       const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
       if (!section->startBuild(buildSpec)) {
@@ -1561,6 +1754,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           nextPageNumber = section->currentPage;
         }
         section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+        // A Push does not stop this activity: the build task keeps pumping while
+        // the chapter list is up, and that list clears the font cache out from
+        // under the renderer a prebuild measures text through. Drop it here,
+        // under the lock already held. (See the header's discard-site list.)
+        discardPrebuiltSection();
+#endif
       }
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, spineIdx),
@@ -1612,6 +1812,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           nextPageNumber = section->currentPage;
         }
         section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+        // Same as SELECT_CHAPTER above, and more sharply: the settings screen
+        // loads and unloads SD fonts under the renderer this task measures text
+        // through, while the Push leaves the task running. Drop the prebuild
+        // under the lock already held.
+        discardPrebuiltSection();
+#endif
       }
       startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                     TextSettingsActivity::Tab::Family),
@@ -1670,6 +1877,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           uint16_t backupSpine = currentSpineIndex;
           uint16_t backupPage = section->currentPage;
           uint16_t backupPageCount = section->pageCount;
+          // abandonBuild() before the reset, for the reason the prebuild's own
+          // teardown below states: this section can be mid-build (a chapter
+          // still laying itself out, or a partial the reader's extension is
+          // resuming), and ~Section's default teardown is suspendBuild(), which
+          // commits the pages so far as a partial .bin into the directory the
+          // clearCache() below deletes. It is a no-op when no build is active.
+          section->abandonBuild();
           section.reset();
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
           // The tree about to be deleted is where a background pre-inflate
@@ -1682,6 +1896,23 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             onGoHome();
             return;
           }
+          // A prebuild that is BUILDING holds an open write handle on the next
+          // spine's .bin.tmp, in that same tree, so it has to go ahead of the
+          // removal for the reason the cancel above states. (A prebuild that is
+          // merely parked holds no handle at all: loadSectionFile() closes the
+          // .bin on every path it can return through.) Unlike the inflate it
+          // cannot fail to stop: it only ever runs under the lock held here.
+          //
+          // abandonBuild() FIRST, and only then the discard: ~Section's default
+          // teardown is suspendBuild(), which writes the pages laid out so far
+          // back out as a partial .bin — an SD commit into a directory the very
+          // next line deletes. abandonBuild drops the build context instead
+          // (closing and removing the tmp file), which both skips that commit
+          // and leaves the Section plainly destructible: with build_ cleared,
+          // the destructor's suspendBuild() returns immediately. It is a no-op
+          // on a prebuild that only loaded a cache and never started a build.
+          if (prebuiltSection) prebuiltSection->abandonBuild();
+          discardPrebuiltSection();
 #endif
           epub->clearCache();
           epub->setupCacheDir();
@@ -1777,9 +2008,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
     // parked prebuild is both a Section of its own and a shared_ptr keeping the
     // Epub alive past the reset below. Dropping it here also keeps the "heap
     // after" log honest.
-    prebuiltSection.reset();
-    prebuiltSpineIndex = -1;
-    prebuildDeclinedSpine = -1;
+    discardPrebuiltSection();
 #endif
     section.reset();
     epub.reset();
@@ -1819,6 +2048,12 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   appliedOrientation = orientation;
   section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+  // The viewport just changed, so the parked layout is for a spec nothing will
+  // use again. Drop it under the lock held here rather than leaving it to the
+  // task's own staleness check, which would let it keep building meanwhile.
+  discardPrebuiltSection();
+#endif
 }
 
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
@@ -1841,6 +2076,11 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
       nextPageNumber = section->currentPage;
     }
     section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+    // The status bar changed height, so the viewport did: same spec-abandon as
+    // applyOrientation above.
+    discardPrebuiltSection();
+#endif
   }
 }
 
@@ -1859,16 +2099,42 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
       RenderLock lock;
       nextPageNumber = 0;
       currentSpineIndex++;
+#ifdef CROSSPOINT_USAGE_LOG
+      // Without the prebuild compiled in, every forward boundary loads on
+      // demand; the arm below refines this when it is.
+      UsageLog::SectionSource chSource = UsageLog::SECTION_ON_DEMAND;
+#endif
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-      if (prebuiltSection && prebuiltSpineIndex == currentSpineIndex && lastRenderSpecValid &&
-          renderSpecEquals(prebuiltSpec, lastRenderSpec)) {
+      const bool adoptPrebuild = prebuiltSection && prebuiltSpineIndex == currentSpineIndex && lastRenderSpecValid &&
+                                 renderSpecEquals(prebuiltSpec, lastRenderSpec);
+#ifdef CROSSPOINT_USAGE_LOG
+      // Read before the adoption moves the state it describes. When the
+      // prebuild is not taken, this is the whole diagnosis of why -- which is
+      // what makes the hit rate readable off the log rather than guessable.
+      if (adoptPrebuild) {
+        // Three shapes of hit, and the difference matters: a live build finishes
+        // the pages the render needs, a finalized cache already has them all,
+        // and a parked PARTIAL has neither -- it stops at its watermark until
+        // loop()'s foreground extension resumes it.
+        chSource = prebuiltSection->isBuilding()  ? UsageLog::SECTION_PREBUILT_BUILDING
+                   : prebuiltSection->isPartial() ? UsageLog::SECTION_PREBUILT_PARTIAL
+                                                  : UsageLog::SECTION_PREBUILT;
+      } else if (!prebuiltSection) {
+        chSource = UsageLog::SECTION_ON_DEMAND;
+      } else if (prebuiltSpineIndex != currentSpineIndex) {
+        chSource = UsageLog::SECTION_SPINE_MISMATCH;
+      } else {
+        chSource = UsageLog::SECTION_SPEC_MISMATCH;
+      }
+#endif
+      if (adoptPrebuild) {
         // Swap the prebuilt Section in: renderBook() sees a loaded section and
         // skips the synchronous load-or-build entirely. Mirror the cache-hit
         // side effects of renderBook()'s construction path; a still-building
         // prebuild continues via the existing incremental machinery.
         section = std::move(prebuiltSection);
         prebuiltSpineIndex = -1;
-        prebuildDeclinedSpine = -1;
+        prebuildDeclinedSpine.store(-1, std::memory_order_relaxed);
         section->currentPage = 0;
         cachedChapterTotalPageCount = 0;
         cachedVisibleTextOffset.reset();
@@ -1884,19 +2150,17 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
         dropCachedPage();
 #endif
       } else {
-        prebuiltSection.reset();
-        prebuiltSpineIndex = -1;
-        prebuildDeclinedSpine = -1;
+        discardPrebuiltSection();
         section.reset();
       }
 #else
       section.reset();
 #endif
 #ifdef CROSSPOINT_USAGE_LOG
-      // Both arms above have run, so a surviving `section` IS the adopted
-      // prebuild and a null one means renderBook() will build/load on demand --
-      // the CH_START row can state the source without waiting for the render.
-      ulogNoteSectionStart(true, section != nullptr);
+      // Decided at the boundary itself, so the CH_START row can state the
+      // source (and, when it is not the prebuild, the reason) without waiting
+      // for the render.
+      ulogNoteSectionStart(true, chSource);
 #endif
       lastPageTurnTime = millis();
       return true;
@@ -1916,9 +2180,16 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
       pendingPageJump = std::numeric_limits<uint16_t>::max();
       currentSpineIndex--;
       section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+      // Backwards over a boundary: whatever is parked was armed for the spine
+      // AFTER the one being left, which the reader is now two away from. Drop it
+      // under the lock held here so it stops building immediately, rather than
+      // one bg pass later when the staleness check notices.
+      discardPrebuiltSection();
+#endif
 #ifdef CROSSPOINT_USAGE_LOG
       // There is no backward prebuild: a back-boundary turn always loads.
-      ulogNoteSectionStart(false, false);
+      ulogNoteSectionStart(false, UsageLog::SECTION_ON_DEMAND);
 #endif
       lastPageTurnTime = millis();
       return true;
@@ -1928,8 +2199,8 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
 }
 
 #ifdef CROSSPOINT_USAGE_LOG
-void EpubReaderActivity::ulogNoteSectionStart(const bool isForward, const bool prebuilt) {
-  usageLog.noteSectionStart(isForward, prebuilt);
+void EpubReaderActivity::ulogNoteSectionStart(const bool isForward, const UsageLog::SectionSource source) {
+  usageLog.noteSectionStart(isForward, source);
   ulogRenderMsAtLoad = lastRenderCompleteMs.load(std::memory_order_relaxed);
   ulogPendingReady = isForward ? 2 : 3;
   ulogPendingStartMs = millis();
@@ -1976,7 +2247,8 @@ bool EpubReaderActivity::skipLoopDelay() {
   // back to loop pacing if the task failed to start. Builds may then run at the
   // idle CPU clock — slower per page but still seconds per chapter, off-core.
   // The short-circuit also keeps buildHeapPaused a single-writer field: with the
-  // task alive, only the task calls buildTickHeapGate().
+  // task alive, only that task calls buildTickHeapGate() — its active-section
+  // ticks and its prebuild ticks alike, both on the same thread.
   if (bgBuildTaskHandle != nullptr) return false;
 #endif
   return section && section->isBuilding() && !buildHeapPaused &&
@@ -2097,6 +2369,18 @@ void EpubReaderActivity::renderBook() {
     // turns that happen while a pre-inflate is running, and a cancelled inflate
     // has to start over from zero.
     cancelBackgroundHtmlInflate();
+    // And the same one-live-build-context rule the header states: this branch
+    // is the reader's own build start, so a prebuild laying out its chapter has
+    // to go first — both would otherwise hold the Epub's single CssParser. No
+    // wait is needed (unlike the inflate above): prebuild ticks run only under
+    // the RenderLock this render holds, so holding it is proof none is in
+    // flight. The pages it did lay out are suspended to a partial .bin that the
+    // eventual visit to that spine resumes from. The other foreground build
+    // start — the partial-extension loop further down — needs no discard of its
+    // own: it requires section->isPartial(), which is fixed when a Section
+    // loads its file, and a prebuild is only ever armed while the current
+    // section is complete and NON-partial.
+    discardPrebuiltSection();
 #endif
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 #ifdef CROSSPOINT_PAGE_CACHE
@@ -3310,6 +3594,12 @@ void EpubReaderActivity::handleOverlayInput() {
             nextPageNumber = section->currentPage;
           }
           section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+          // Same as the classic menu's TEXT_SETTINGS branch: the Push leaves
+          // this activity's build task running while the picker loads and
+          // unloads SD fonts under the shared renderer.
+          discardPrebuiltSection();
+#endif
         }
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
@@ -3476,11 +3766,21 @@ void EpubReaderActivity::paintOverlayPopup() {
 
 void EpubReaderActivity::applyReaderTextSettings() {
   SETTINGS.saveToFile();
+  RenderLock lock;
   // (Re)load or unload the selected SD-card font for the current family/size.
   // The reader otherwise only loads SD fonts on book open, so without this an
   // in-reader font change wouldn't take effect until re-opening the book.
+  //
+  // INSIDE the lock, not before it: this swaps fonts on the shared renderer, and
+  // both the render task and the background build task measure text through it.
+  // That was already a live hazard on the applyTextSettingLive() path, where the
+  // reader stays on screen with a section resident and a render can be in
+  // flight; the background prebuild only widened it. This function is reached
+  // from result handlers and from panel callbacks, both of which run after
+  // ActivityManager has released its own lock (see the unlock() before the
+  // handler dispatch), and the blocking acquire below was already unconditional
+  // here -- so no caller can be holding it, and there is no new deadlock edge.
   sdFontSystem.ensureLoaded(renderer);
-  RenderLock lock;
   if (section) {
     rememberCurrentContentOffset();
     cachedSpineIndex = currentSpineIndex;
@@ -3488,6 +3788,14 @@ void EpubReaderActivity::applyReaderTextSettings() {
     nextPageNumber = section->currentPage;
   }
   section.reset();  // force re-pagination with the new settings
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+  // The spec the prebuild was armed for is the one just abandoned, and the
+  // fonts it measures text through were swapped above. Both push sites already
+  // discard before opening their picker, but this function is also reached
+  // straight from the Text panel's callbacks (no push at all), and it is the one
+  // return path they all share -- so drop it here too, under the lock held.
+  discardPrebuiltSection();
+#endif
 }
 
 // The More panel carries everything the classic list menu offers except the

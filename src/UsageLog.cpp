@@ -143,8 +143,8 @@ void UsageLog::noteBookOpen(const BookCache state) { record(EV_BOOK_OPEN, static
 
 void UsageLog::noteBookReady() { record(EV_BOOK_RDY, 0); }
 
-void UsageLog::noteSectionStart(const bool isForward, const bool prebuilt) {
-  record(EV_CH_START, isForward ? 1 : 2, prebuilt ? 1 : 2);
+void UsageLog::noteSectionStart(const bool isForward, const SectionSource source) {
+  record(EV_CH_START, isForward ? 1 : 2, static_cast<uint32_t>(source));
 }
 
 void UsageLog::noteSectionReady(const bool isForward) { record(EV_CH_RDY, isForward ? 1 : 2); }
