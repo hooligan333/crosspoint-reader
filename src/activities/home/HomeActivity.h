@@ -61,6 +61,10 @@ class HomeActivity final : public Activity {
     if (item == HomeMenuItem::RSS_SYNC) return i;
     ++i;
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+    if (item == HomeMenuItem::FLASHCARD_SYNC) return i;
+    ++i;
+#endif
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -75,6 +79,9 @@ class HomeActivity final : public Activity {
 #ifdef CROSSPOINT_RSS_SYNC
     if (idx == i++) return HomeMenuItem::RSS_SYNC;
 #endif
+#ifdef CROSSPOINT_FLASHCARDS
+    if (idx == i++) return HomeMenuItem::FLASHCARD_SYNC;
+#endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -85,6 +92,9 @@ class HomeActivity final : public Activity {
   void onFileTransferOpen();
 #ifdef CROSSPOINT_RSS_SYNC
   void onRssSyncOpen();
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+  void onFlashcardSyncOpen();
 #endif
   void onOpdsBrowserOpen();
   void onPluginsOpen();
