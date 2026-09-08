@@ -127,6 +127,15 @@ class ActivityManager {
   void goToCrashReport();
   void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE, bool cleanInitialRefresh = false);
 
+  // True when `activity` is the one on top -- the activity being rendered and
+  // given input -- rather than one parked on the stack under a pushed
+  // sub-activity. Deliberately NOT isReaderActivity(), which walks the whole
+  // stack and so stays true for a reader sitting under its own menu. The
+  // caller in EpubReaderActivity is the background build task, which reads this
+  // under the RenderLock: every currentActivity swap in loop() happens under
+  // that same lock, so the pointer it compares is never a torn or stale read.
+  bool isCurrentActivity(const Activity* activity) const { return currentActivity.get() == activity; }
+
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);
 
