@@ -10,6 +10,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string_view>
 
@@ -90,6 +91,153 @@ void forEachDelimitedToken(std::string_view s, Pred isDelimiter, F&& fn) {
   }
 }
 
+// --- Decimal float parsing -------------------------------------------------
+//
+// std::from_chars(..., float&) links the whole of libstdc++'s
+// floating_from_chars.o -- fast_float, its hex-float and inf/nan readers and a
+// 10KB power-of-five table, about 9KB of it IROM -- for the one call in
+// tryInterpretLength(). newlib's strtof() is in the image already, so the
+// conversion runs through that instead. See the IROM lever notes in
+// platformio.ini.
+//
+// strtof() on its own is not a drop-in: it skips leading whitespace, accepts
+// '+', hex floats ("0x1p3"), "inf" and "nan", and reports range errors through
+// errno -- so caller text never reaches it. parseDecimalFloat() scans the
+// number itself and hands strtof() a rebuilt, NUL-terminated copy of just the
+// digits, of the form  '-'? digit+ ('.' digit+)?  -- none of the extensions can
+// fire on that, and the C locale newlib starts in (nothing in this tree calls
+// setlocale) makes '.' the decimal point. Range errors are read back off the
+// converted value rather than off errno, because newlib raises ERANGE for
+// subnormal results too while from_chars() reports those as success; errno
+// itself is left however strtof() leaves it, which no CSS caller reads.
+//
+// Exponents ("1e3") are deliberately NOT accepted, which is the one place this
+// diverges from from_chars(). They cannot reach here: the only caller,
+// tryInterpretLength(), splits the value at the first character that is not a
+// digit, '.', '-' or '+', so 'e' always lands in the unit half of the split.
+// Were one to arrive anyway the number would end at the 'e', tryParseNumber()
+// would see an unconsumed tail and report failure -- the property is dropped,
+// never mis-scaled.
+
+constexpr bool isAsciiDigit(const char c) { return c >= '0' && c <= '9'; }
+
+// 10^39 is past FLT_MAX (3.4e38), so this many significant integer digits
+// always overflows.
+constexpr size_t OVERFLOW_INTEGER_DIGITS = 40;
+
+// 0.<this many zeros>... is below 1e-46. The smallest binary32 subnormal is
+// 1.4e-45 and everything under half of it (7.0e-46) rounds to zero, which
+// from_chars() reports as out of range.
+constexpr size_t UNDERFLOW_FRACTION_ZEROS = 46;
+
+// Significant digits handed to strtof(); the rest of the tail collapses into a
+// single non-zero "sticky" digit. Every binary32 rounding boundary has at most
+// 150 significant decimal digits (the longest is 2^-150), so a value and its
+// sticky truncation at 160 digits can never straddle one and both convert to
+// the same float.
+constexpr size_t MAX_SIGNIFICANT_DIGITS = 160;
+
+// Widest rebuilt number: sign, integer digits (40 would have been rejected as
+// an overflow), '.', the fraction's leading zeros (46 would have been rejected
+// as an underflow), the significant digits, the sticky digit and the NUL.
+constexpr size_t NUMBER_BUFFER_SIZE =
+    1 + (OVERFLOW_INTEGER_DIGITS - 1) + 1 + (UNDERFLOW_FRACTION_ZEROS - 1) + MAX_SIGNIFICANT_DIGITS + 1 + 1;
+
+// What std::from_chars_result carries, minus the distinction between its two
+// error codes: `ptr` is still the first character not consumed, which is
+// `first` when nothing parsed (invalid_argument) and the end of the number
+// when it did parse but does not fit a float (result_out_of_range).
+struct DecimalFloatParse {
+  const char* ptr;
+  bool ok;
+};
+
+// Parse the leading  '-'? digit* ('.' digit*)?  of [first, last) into `out`,
+// matching std::from_chars(first, last, out) for that grammar. `out` is left
+// alone unless the parse succeeds.
+DecimalFloatParse parseDecimalFloat(const char* first, const char* last, float& out) {
+  const char* p = first;
+  const bool negative = p != last && *p == '-';
+  if (negative) ++p;
+
+  const char* const integerBegin = p;
+  while (p != last && isAsciiDigit(*p)) ++p;
+  const char* const integerEnd = p;
+
+  // from_chars consumes a trailing '.' with no digits behind it ("12." parses
+  // as 12), so the point is stepped over before the fraction is measured.
+  const char* fractionBegin = p;
+  const char* fractionEnd = p;
+  if (p != last && *p == '.') {
+    ++p;
+    fractionBegin = p;
+    while (p != last && isAsciiDigit(*p)) ++p;
+    fractionEnd = p;
+  }
+
+  if (integerBegin == integerEnd && fractionBegin == fractionEnd) {
+    return {first, false};  // No digits at all: from_chars' invalid_argument.
+  }
+  const char* const numberEnd = p;
+
+  const char* integerSignificant = integerBegin;
+  while (integerSignificant != integerEnd && *integerSignificant == '0') ++integerSignificant;
+  const size_t integerDigits = static_cast<size_t>(integerEnd - integerSignificant);
+  if (integerDigits >= OVERFLOW_INTEGER_DIGITS) {
+    return {numberEnd, false};
+  }
+
+  if (integerDigits == 0) {
+    const char* fractionSignificant = fractionBegin;
+    while (fractionSignificant != fractionEnd && *fractionSignificant == '0') ++fractionSignificant;
+    if (fractionSignificant == fractionEnd) {
+      out = negative ? -0.0f : 0.0f;  // Every digit is a zero: an exact zero.
+      return {numberEnd, true};
+    }
+    if (static_cast<size_t>(fractionSignificant - fractionBegin) >= UNDERFLOW_FRACTION_ZEROS) {
+      return {numberEnd, false};
+    }
+  }
+
+  // Rebuild the number with its redundant leading zeros dropped and its tail
+  // made sticky, which is what bounds the buffer. Digit positions are otherwise
+  // preserved, so the value is unchanged.
+  char digits[NUMBER_BUFFER_SIZE];
+  size_t length = 0;
+  if (negative) digits[length++] = '-';
+  if (integerDigits == 0) {
+    digits[length++] = '0';
+  } else {
+    for (const char* d = integerSignificant; d != integerEnd; ++d) digits[length++] = *d;
+  }
+
+  size_t significant = integerDigits;
+  if (fractionBegin != fractionEnd) {
+    digits[length++] = '.';
+    for (const char* d = fractionBegin; d != fractionEnd; ++d) {
+      if (significant >= MAX_SIGNIFICANT_DIGITS) {
+        // The tail only has to stay non-zero to keep the value on the side of
+        // the rounding boundary it was already on.
+        if (std::any_of(d, fractionEnd, [](const char c) { return c != '0'; })) digits[length++] = '1';
+        break;
+      }
+      digits[length++] = *d;
+      if (significant > 0 || *d != '0') ++significant;
+    }
+  }
+  digits[length] = '\0';
+
+  const float value = std::strtof(digits, nullptr);
+  // The exact-zero significand returned above, so a zero here can only be an
+  // underflow; the grammar cannot spell an infinity, so one can only be an
+  // overflow. from_chars calls both out of range and leaves `out` untouched.
+  if (value == 0.0f || std::isinf(value)) {
+    return {numberEnd, false};
+  }
+  out = value;
+  return {numberEnd, true};
+}
+
 // Parse the entirety of s as a number into `out`. Accepts an optional leading
 // '+' (which std::from_chars rejects by spec) so callers can pass CSS-style
 // signed numbers without manual trimming. Returns false on empty input, a
@@ -101,6 +249,16 @@ bool tryParseNumber(std::string_view s, T& out) {
   if (begin < end && *begin == '+') ++begin;
   const auto r = std::from_chars(begin, end, out);
   return r.ec == std::errc{} && r.ptr == end;
+}
+
+// Same contract for float, off strtof() rather than std::from_chars(); see
+// parseDecimalFloat above for what that buys and what it costs.
+bool tryParseNumber(std::string_view s, float& out) {
+  const char* begin = s.data();
+  const char* const end = s.data() + s.size();
+  if (begin < end && *begin == '+') ++begin;
+  const DecimalFloatParse r = parseDecimalFloat(begin, end, out);
+  return r.ok && r.ptr == end;
 }
 
 // Collect up to 4 whitespace-separated tokens for a CSS edge-value shorthand
