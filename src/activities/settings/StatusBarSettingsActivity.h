@@ -23,7 +23,9 @@ class StatusBarSettingsActivity final : public UiListActivity {
  private:
   OptionPopup optionPopup;
 
-  // Decided in onEnter() based on halClock.isAvailable(), so clock entries are hidden on RTC-less devices.
+  // Decided in onEnter(): clock entries are hidden on devices with no clock at
+  // all. On the CROSSPOINT_SOFT_CLOCK backend every device has one, so they are
+  // always shown — see the note there.
   int visibleItemCount = 0;
 
   int listCount() const override { return visibleItemCount; }

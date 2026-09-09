@@ -45,6 +45,16 @@
  * buildSession() returns false when one does not fit. Per §5, CramAll must also
  * be treated as read-only for scheduling by the caller — nothing here writes
  * state.
+ *
+ * **Under CROSSPOINT_FLASHCARDS_C3** (FLASHCARD_SPEC.md §7b.3) the deck cap is
+ * 2000, so that same CramAll buffer is 4 KB rather than 80 KB and the scheduled
+ * modes are unchanged at 840 bytes; nothing here needed a different shape, only
+ * a smaller `recordCount()`. What the flag DOES add is a largest-free-block
+ * gate in front of each of those allocations — 4 KB is not much, but it is one
+ * contiguous block on a heap a reading session leaves near 50 KB and
+ * fragmented, and the gate turns "the reader panicked" into "the study screen
+ * said it was out of memory". The refusal surfaces exactly as it already did:
+ * buildSession() returns false.
  */
 namespace flashcards {
 

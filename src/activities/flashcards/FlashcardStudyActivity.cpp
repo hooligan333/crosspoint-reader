@@ -169,7 +169,19 @@ void FlashcardStudyActivity::openSelectedDeck() {
   const flashcards::DeckError deckError = deck.open(flashcards::deckPathFor(destFolder, leaf));
   if (deckError != flashcards::DeckError::Ok) {
     LOG_ERR("DECK", "Deck open failed (%s): %s", flashcards::deckErrorName(deckError), leaf.c_str());
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    // FLASHCARD_SPEC.md §7b.3 pin b. On this build the cap is 2000 cards, and a
+    // deck above it is an ordinary thing to meet — one built for the Pro,
+    // copied across by USB, past the sync screen that would have refused it. It
+    // is not a broken file and must not be reported as one: "too large for this
+    // device" tells the reader to fetch a smaller deck, where "could not be
+    // opened" sends them looking for a corruption that is not there.
+    // BadCardCount also covers a 0-card deck, which the deck server and the
+    // sync screen both refuse upstream and which nobody can act on either way.
+    fail(deckError == flashcards::DeckError::BadCardCount ? StrId::STR_DECK_TOO_LARGE : StrId::STR_DECK_OPEN_FAILED);
+#else
     fail(StrId::STR_DECK_OPEN_FAILED);
+#endif
     return;
   }
 
