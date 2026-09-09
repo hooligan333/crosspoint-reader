@@ -24,6 +24,7 @@
 
 #include "CivilDate.h"
 #include "CrossPointSettings.h"
+#include "RtcClock.h"
 
 UsageLog usageLog;  // Singleton instance
 
@@ -48,15 +49,12 @@ const BatteryMonitor& monitor() {
   return battery;
 }
 
-constexpr uint32_t SECONDS_PER_DAY = 86400;
+constexpr uint32_t SECONDS_PER_DAY = rtcclock::SECONDS_PER_DAY;
 
 // Epoch seconds for the RTC's current time, or 0 when it is missing or unset.
-uint32_t readWallClock() {
-  Rtc::DateTime dt;
-  if (!halClock.getDateTime(dt) || dt.year < 2020) return 0;
-  return civil::daysFromCivil(dt.year, dt.month, dt.day) * SECONDS_PER_DAY + dt.hour * 3600u + dt.minute * 60u +
-         dt.second;
-}
+// The read itself lives in RtcClock.h, shared with the flashcard study clock
+// rather than kept as two identical copies.
+uint32_t readWallClock() { return rtcclock::rtcUnixSecs(); }
 
 }  // namespace
 
