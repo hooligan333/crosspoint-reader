@@ -489,11 +489,15 @@ void testC0Sanitize() {
 
   std::vector<TestCard> cards = makeCards(3);
   // The reviewer's slice: 61 01 02 62.
-  cards[0].front = std::string("a\x01\x02"
-                               "b",
-                               4);
+  cards[0].front = std::string(
+      "a\x01\x02"
+      "b",
+      4);
   // Every C0 byte except '\n', plus a DEL (0x7F, not C0 — it stays).
-  cards[1].front = std::string("x\ty\rz\n\x1B" "w\x7F", 9);
+  cards[1].front = std::string(
+      "x\ty\rz\n\x1B"
+      "w\x7F",
+      9);
   cards[2].back = std::string("\x00\x1F", 2);
 
   DeckFile deck;
@@ -1042,7 +1046,7 @@ void testMaximumDeck() {
   EXPECT(flashcards::buildSession(store, SessionMode::Due, now, session));
   EXPECT_EQ_U(session.summary.dueAvailable, 1);
   EXPECT_EQ_U(session.summary.reviews, 1);
-  EXPECT_EQ_U(session.summary.newCards, 20);   // the daily allowance, not 39999
+  EXPECT_EQ_U(session.summary.newCards, 20);  // the daily allowance, not 39999
   EXPECT_EQ_U(session.summary.newAvailable, count - 1);
   EXPECT_EQ_U(session.cards.size(), 21);
   store.close();
@@ -1261,13 +1265,13 @@ void testLearnAheadAtDrain() {
   const uint32_t nowUnix = 1700000000u;
   QueueFixture fixture;
   EXPECT(fixture.build(6, 900));
-  EXPECT(fixture.store.writeRecord(0, reviewCard(899, 890)));            // a due review, not intraday
-  EXPECT(fixture.store.writeRecord(1, learningCard(nowUnix + 1500)));    // 25 min out
-  EXPECT(fixture.store.writeRecord(2, learningCard(nowUnix + 900)));     // 15 min out
-  CardState suspended = learningCard(nowUnix + 60);                      // 1 min out, but suspended
+  EXPECT(fixture.store.writeRecord(0, reviewCard(899, 890)));          // a due review, not intraday
+  EXPECT(fixture.store.writeRecord(1, learningCard(nowUnix + 1500)));  // 25 min out
+  EXPECT(fixture.store.writeRecord(2, learningCard(nowUnix + 900)));   // 15 min out
+  CardState suspended = learningCard(nowUnix + 60);                    // 1 min out, but suspended
   suspended.flags = fsrs::FLAG_SUSPENDED;
   EXPECT(fixture.store.writeRecord(3, suspended));
-  CardState relearn = learningCard(nowUnix + 900);                       // ties with ordinal 2
+  CardState relearn = learningCard(nowUnix + 900);  // ties with ordinal 2
   relearn.state = CardPhase::Relearning;
   EXPECT(fixture.store.writeRecord(4, relearn));
   // ordinal 5 stays New.
@@ -1337,14 +1341,14 @@ void testUtcOffsetComposition() {
 
   using flashcards::utcOffsetSecsFromQuarters;
 
-  EXPECT_EQ_U(utcOffsetSecsFromQuarters(48), 0);              // UTC+0, the default
-  EXPECT(utcOffsetSecsFromQuarters(52) == 3600);              // UTC+1
-  EXPECT(utcOffsetSecsFromQuarters(44) == -3600);             // UTC-1
-  EXPECT(utcOffsetSecsFromQuarters(49) == 900);               // a quarter-hour step is 900 s
-  EXPECT(utcOffsetSecsFromQuarters(0) == -48 * 15 * 60);      // UTC-12, the low end
-  EXPECT(utcOffsetSecsFromQuarters(70) == 5 * 3600 + 1800);   // UTC+5:30, India
-  EXPECT(utcOffsetSecsFromQuarters(51) == 2700);              // UTC+0:45, Nepal-style quarter
-  EXPECT(utcOffsetSecsFromQuarters(104) == 14 * 3600);        // UTC+14, the high end
+  EXPECT_EQ_U(utcOffsetSecsFromQuarters(48), 0);             // UTC+0, the default
+  EXPECT(utcOffsetSecsFromQuarters(52) == 3600);             // UTC+1
+  EXPECT(utcOffsetSecsFromQuarters(44) == -3600);            // UTC-1
+  EXPECT(utcOffsetSecsFromQuarters(49) == 900);              // a quarter-hour step is 900 s
+  EXPECT(utcOffsetSecsFromQuarters(0) == -48 * 15 * 60);     // UTC-12, the low end
+  EXPECT(utcOffsetSecsFromQuarters(70) == 5 * 3600 + 1800);  // UTC+5:30, India
+  EXPECT(utcOffsetSecsFromQuarters(51) == 2700);             // UTC+0:45, Nepal-style quarter
+  EXPECT(utcOffsetSecsFromQuarters(104) == 14 * 3600);       // UTC+14, the high end
 
   // A corrupt persisted byte clamps to UTC+14 rather than composing a wild
   // offset that would move the day number by days.
