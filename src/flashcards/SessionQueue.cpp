@@ -166,10 +166,10 @@ bool visitRecord(Ordinal ordinal, const fsrs::CardState& state, void* ctx) {
 
 /** Shared context for the two single-purpose scans below. */
 struct DueScan {
-  uint32_t after = 0;      // strictly-after bound (nextIntradayDue)
-  uint32_t notAfter = 0;   // inclusive upper bound (nextLearnAheadOrdinal)
-  uint32_t earliest = 0;   // best due found so far, 0 = none
-  Ordinal ordinal = 0;     // its ordinal
+  uint32_t after = 0;     // strictly-after bound (nextIntradayDue)
+  uint32_t notAfter = 0;  // inclusive upper bound (nextLearnAheadOrdinal)
+  uint32_t earliest = 0;  // best due found so far, 0 = none
+  Ordinal ordinal = 0;    // its ordinal
   bool found = false;
 };
 
