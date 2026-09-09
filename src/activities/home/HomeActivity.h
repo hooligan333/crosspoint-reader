@@ -50,6 +50,8 @@ class HomeActivity final : public Activity {
     ++i;
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+    if (item == HomeMenuItem::FLASHCARD_STUDY) return i;
+    ++i;
     if (item == HomeMenuItem::FLASHCARD_SYNC) return i;
     ++i;
 #endif
@@ -68,6 +70,7 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::RSS_SYNC;
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+    if (idx == i++) return HomeMenuItem::FLASHCARD_STUDY;
     if (idx == i++) return HomeMenuItem::FLASHCARD_SYNC;
 #endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
@@ -82,6 +85,7 @@ class HomeActivity final : public Activity {
   void onRssSyncOpen();
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+  void onFlashcardStudyOpen();
   void onFlashcardSyncOpen();
 #endif
   void onOpdsBrowserOpen();
