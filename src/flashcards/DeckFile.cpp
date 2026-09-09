@@ -44,6 +44,16 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "CPDK fields are little
 // something an SD driver is happy with.
 constexpr size_t INDEX_READ_CHUNK_BYTES = 16 * 1024;
 
+#ifdef CROSSPOINT_FLASHCARDS_C3
+// Index entries validated per read on the C3, where nothing is held resident
+// (FLASHCARD_SPEC.md §7b.3 caps this at 4 KB). 128 entries is 2560 bytes in a
+// leaf frame that lives only for the length of open(), and validates a
+// 2000-card index in 16 reads.
+constexpr uint32_t C3_VALIDATE_CHUNK_ENTRIES = 128;
+constexpr size_t C3_VALIDATE_CHUNK_BYTES = C3_VALIDATE_CHUNK_ENTRIES * CPDK_INDEX_ENTRY_BYTES;
+static_assert(C3_VALIDATE_CHUNK_BYTES <= 4096, "the C3 index validator must stream in 4 KB or less");
+#endif
+
 uint16_t readU16(const uint8_t* bytes, size_t offset) {
   uint16_t value = 0;
   memcpy(&value, bytes + offset, sizeof(value));
@@ -96,7 +106,13 @@ const char* deckErrorName(DeckError error) {
 
 void DeckFile::close() {
   file = HalFile();
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  windowFirst = C3_WINDOW_EMPTY;
+  windowCount = 0;
+  indexFileOffset = 0;
+#else
   index.reset();
+#endif
   cardCountValue = 0;
   contentHashValue = 0;
   blobStart = 0;
@@ -187,6 +203,66 @@ DeckError DeckFile::open(const std::string& path) {
     return DeckError::ShortFile;
   }
 
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // No resident index and no allocation: the index stays on the card and is
+  // walked here once, in chunks, purely to validate it. Everything keyAt() and
+  // loadSide() need afterwards is re-read on demand (FLASHCARD_SPEC.md §7b.3).
+  cardCountValue = cards;
+  indexFileOffset = static_cast<uint32_t>(indexStart);
+  blobStart = static_cast<uint32_t>(blobStartValue);
+  blobBytes = static_cast<uint32_t>(fileSize - blobStartValue);
+  windowFirst = C3_WINDOW_EMPTY;
+  windowCount = 0;
+
+  // Slice integrity, streamed. Same rule as the resident path below — every
+  // front and back must land inside the blob and stay inside the 4096-byte cap,
+  // with the subtraction ordered so no sum can wrap — but read a chunk at a
+  // time, so a 2000-card index is checked in full without ever holding it.
+  {
+    uint8_t chunk[C3_VALIDATE_CHUNK_BYTES];
+    if (!file.seek(indexFileOffset)) {
+      close();
+      return DeckError::ReadFailed;
+    }
+    for (uint32_t first = 0; first < cards; first += C3_VALIDATE_CHUNK_ENTRIES) {
+      uint32_t count = cards - first;
+      if (count > C3_VALIDATE_CHUNK_ENTRIES) count = C3_VALIDATE_CHUNK_ENTRIES;
+      const size_t bytes = static_cast<size_t>(count) * CPDK_INDEX_ENTRY_BYTES;
+      if (file.read(chunk, bytes) != static_cast<int>(bytes)) {
+        close();
+        return DeckError::ReadFailed;
+      }
+      for (uint32_t i = 0; i < count; i++) {
+        const uint8_t* entry = chunk + static_cast<size_t>(i) * CPDK_INDEX_ENTRY_BYTES;
+        const uint32_t frontOff = readU32(entry, ENTRY_OFF_FRONT_OFF);
+        const uint16_t frontLen = readU16(entry, ENTRY_OFF_FRONT_LEN);
+        const uint32_t backOff = readU32(entry, ENTRY_OFF_BACK_OFF);
+        const uint16_t backLen = readU16(entry, ENTRY_OFF_BACK_LEN);
+        const bool frontOk =
+            frontLen <= DECK_MAX_SLICE_BYTES && frontOff <= blobBytes && blobBytes - frontOff >= frontLen;
+        const bool backOk = backLen <= DECK_MAX_SLICE_BYTES && backOff <= blobBytes && blobBytes - backOff >= backLen;
+        if (!frontOk || !backOk) {
+          LOG_ERR("DECK", "Card %u slice out of range (blob %u B): %s", static_cast<unsigned>(first + i),
+                  static_cast<unsigned>(blobBytes), path.c_str());
+          close();
+          return DeckError::SliceOutOfRange;
+        }
+      }
+    }
+  }
+
+  // The duplicate-key pass is SKIPPED here — the one behavioural divergence
+  // between the two builds, and a deliberate trust boundary. Its cost is a
+  // sorted copy of every key in one contiguous block (16 KB at this build's
+  // 2000-card cap, on a heap that is routinely ~50 KB and fragmented); what it
+  // catches is already refused twice upstream, by convert_deck.py when it
+  // derives the keys and by read_deck.py when the server verifies the published
+  // file. The residual exposure is bounded and is spelled out in full on the
+  // DeckFile class comment: records are addressed by ordinal, the CPST
+  // per-record key echo still guards every ordinal at read time, and the worst
+  // case is one card's history being COPIED onto a twin rather than any card
+  // reading the wrong state. See FLASHCARD_SPEC.md §7b.3.
+#else
   // 800 KB at the 40000-card cap; PSRAM on this feature's S3-only builds.
   index = makeUniqueNoThrow<uint8_t[]>(indexBytes);
   if (!index) {
@@ -252,12 +328,82 @@ DeckError DeckFile::open(const std::string& path) {
     }
   }
   scratch.reset();
+#endif  // CROSSPOINT_FLASHCARDS_C3
 
   LOG_INF("DECK", "Opened %s: %u cards, hash 0x%08lx%08lx%s", path.c_str(), static_cast<unsigned>(cards),
           static_cast<unsigned long>(contentHashValue >> 32),
           static_cast<unsigned long>(contentHashValue & 0xFFFFFFFFu), deckSuppliedParams ? ", deck params" : "");
   return DeckError::Ok;
 }
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+
+bool DeckFile::entryFor(Ordinal ordinal, const uint8_t*& entryOut) const {
+  entryOut = nullptr;
+  if (ordinal >= cardCountValue) return false;
+
+  // Windows are aligned to their own size, so a walk in ordinal order refills
+  // once every C3_INDEX_WINDOW_ENTRIES cards and a repeat visit to the card the
+  // study screen is showing costs nothing at all.
+  const uint32_t first = (static_cast<uint32_t>(ordinal) / C3_INDEX_WINDOW_ENTRIES) * C3_INDEX_WINDOW_ENTRIES;
+  if (windowFirst != first || windowCount == 0) {
+    uint32_t count = cardCountValue - first;
+    if (count > C3_INDEX_WINDOW_ENTRIES) count = C3_INDEX_WINDOW_ENTRIES;
+    const size_t bytes = static_cast<size_t>(count) * C3_INDEX_ENTRY_BYTES;
+    windowFirst = C3_WINDOW_EMPTY;
+    windowCount = 0;
+    if (!file.seek(indexFileOffset + static_cast<size_t>(first) * C3_INDEX_ENTRY_BYTES)) return false;
+    if (file.read(window, bytes) != static_cast<int>(bytes)) {
+      LOG_ERR("DECK", "Index read failed at ordinal %u", static_cast<unsigned>(first));
+      return false;
+    }
+    windowFirst = first;
+    windowCount = count;
+  }
+  // The returned pointer is bounded by what was actually READ, not by the
+  // window's capacity: windowCount is short at the deck's last window, and this
+  // bound is what makes an overrun structurally impossible rather than merely
+  // unreachable. Defensive and untestable from outside — `ordinal` is already
+  // known to be below cardCountValue and the refill above loads every entry up
+  // to it, so nothing drives this return.
+  const uint32_t offsetInWindow = static_cast<uint32_t>(ordinal) - first;
+  if (offsetInWindow >= windowCount) return false;
+  entryOut = window + static_cast<size_t>(offsetInWindow) * C3_INDEX_ENTRY_BYTES;
+  return true;
+}
+
+bool DeckFile::keyAtChecked(Ordinal ordinal, uint64_t& keyOut) const {
+  const uint8_t* entry = nullptr;
+  if (!entryFor(ordinal, entry)) return false;
+  keyOut = readU64(entry, ENTRY_OFF_KEY);
+  return true;
+}
+
+uint64_t DeckFile::keyAt(Ordinal ordinal) const {
+  // Kept for the callers that have no error path of their own. Anything that
+  // COMPARES this against a stored key must use keyAtChecked() instead — a 0
+  // here is indistinguishable from a real key of 0 (header note on that call).
+  uint64_t key = 0;
+  return keyAtChecked(ordinal, key) ? key : 0;
+}
+
+bool DeckFile::sliceAt(Ordinal ordinal, CardSide side, uint32_t& offsetOut, uint16_t& lengthOut) const {
+  const uint8_t* entry = nullptr;
+  if (!entryFor(ordinal, entry)) return false;
+  switch (side) {
+    case CardSide::Front:
+      offsetOut = readU32(entry, ENTRY_OFF_FRONT_OFF);
+      lengthOut = readU16(entry, ENTRY_OFF_FRONT_LEN);
+      return true;
+    case CardSide::Back:
+      offsetOut = readU32(entry, ENTRY_OFF_BACK_OFF);
+      lengthOut = readU16(entry, ENTRY_OFF_BACK_LEN);
+      return true;
+  }
+  return false;
+}
+
+#else
 
 uint64_t DeckFile::keyAt(Ordinal ordinal) const {
   if (ordinal >= cardCountValue) return 0;
@@ -281,6 +427,8 @@ bool DeckFile::sliceAt(Ordinal ordinal, CardSide side, uint32_t& offsetOut, uint
   }
   return false;
 }
+
+#endif  // CROSSPOINT_FLASHCARDS_C3
 
 bool DeckFile::loadSide(Ordinal ordinal, CardSide side, char* buffer, size_t bufferBytes, uint16_t& lengthOut) {
   lengthOut = 0;
