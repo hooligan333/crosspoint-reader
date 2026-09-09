@@ -328,7 +328,7 @@ void FlashcardStudyActivity::decayPending() {
   }
 }
 
-void FlashcardStudyActivity::requeueCurrent() {
+void FlashcardStudyActivity::requeueCurrent(const uint32_t dueUnix) {
   // A full list drops the card rather than growing: its new due is minutes
   // away, so the drain-time learn-ahead pull picks it up again once the list
   // has room, and in cram nothing was persisted to lose. The drop is counted
@@ -338,6 +338,7 @@ void FlashcardStudyActivity::requeueCurrent() {
     if (droppedRequeues != UINT16_MAX) droppedRequeues++;
     return;
   }
+  pending[pendingCount].dueUnix = dueUnix;
   pending[pendingCount].ordinal = currentOrdinal;
   pending[pendingCount].showAfter = REQUEUE_GAP;
   pendingCount++;
@@ -354,16 +355,33 @@ void FlashcardStudyActivity::dropFromPending(const flashcards::Ordinal ordinal) 
 
 /**
  * Picks the next card, in the order §5 asks for: a resurfaced card that has
- * waited its turn, then the built queue, then whatever is still waiting (the
- * "at end if fewer remain" half of the requeue rule), and only when all of that
- * is empty does it go back to the state file for a learn-ahead card.
+ * waited its turn AND come due, then the built queue, then whatever is still
+ * waiting (the "at end if fewer remain" half of the requeue rule, which is also
+ * this session's learn-ahead pull), and only when all of that is empty does it
+ * go back to the state file for a learn-ahead card.
+ *
+ * `now` is refreshed by the callers that can reach a due comparison --
+ * answerCurrent() and suspendCurrent() both read the clock before handing over
+ * -- so the comparisons below run against a time no older than the action that
+ * got us here, and the hot path needs no clock read of its own. startReview()
+ * is the one caller that does not refresh, and harmlessly so: it enters with an
+ * EMPTY pending list, so there is no parked due to compare, and by the time
+ * there is one an answer has been through refreshNow().
  */
 void FlashcardStudyActivity::advanceToNextCard() {
   flashcards::Ordinal next = 0;
   bool found = false;
+  // Cram schedules nothing and may be running without a clock at all, so its
+  // resurfaces are governed by the card gap alone (§5 pin b).
+  const bool timedRequeue = mode != flashcards::SessionMode::CramAll && clockAvailable;
 
   for (uint8_t i = 0; i < pendingCount && !found; i++) {
     if (pending[i].showAfter != 0) continue;
+    // A learning step is a TIMER, not a card count: a card whose 10-minute step
+    // has not expired stays parked even once three cards have gone past. It
+    // still comes back inside this session -- through the drain branch below,
+    // which is where Anki's learn-ahead lives.
+    if (timedRequeue && pending[i].dueUnix > now.unixSecs) continue;
     next = pending[i].ordinal;
     for (uint8_t j = i + 1; j < pendingCount; j++) pending[j - 1] = pending[j];
     pendingCount--;
@@ -374,9 +392,31 @@ void FlashcardStudyActivity::advanceToNextCard() {
     found = true;
   }
   if (!found && pendingCount > 0) {
-    // Insertion order with equal decrements means [0] is the longest-waiting.
-    next = pending[0].ordinal;
-    for (uint8_t j = 1; j < pendingCount; j++) pending[j - 1] = pending[j];
+    // Nothing else left to show, so the wait ends here rather than the session
+    // does: every entry was parked with a due inside the learn-ahead window, so
+    // pulling one forward is the same thing nextLearnAheadOrdinal() does for
+    // the cards on disk.
+    //
+    // The ORDER is §5 pin (g), verbatim: "the one that has WAITED THE MOST
+    // CARDS, earliest-due among equals -- a card answered Again is never the
+    // immediate next card while another parked card is available". `showAfter`
+    // counts the cards an entry is STILL waiting for, so the LOWEST showAfter
+    // has waited longest and due only breaks ties. Ordering on due alone would
+    // hand the drain straight back to the card just answered Again -- its
+    // 1-minute step is the earliest due there is -- which is the back-to-back
+    // repeat this change exists to stop. With showAfter and dues equal (cram,
+    // or a no-clock session, where every due is 0) this is insertion order,
+    // the longest-waiting card, as before.
+    uint8_t pick = 0;
+    for (uint8_t j = 1; j < pendingCount; j++) {
+      if (pending[j].showAfter != pending[pick].showAfter) {
+        if (pending[j].showAfter < pending[pick].showAfter) pick = j;
+      } else if (pending[j].dueUnix < pending[pick].dueUnix) {
+        pick = j;
+      }
+    }
+    next = pending[pick].ordinal;
+    for (uint8_t j = static_cast<uint8_t>(pick + 1); j < pendingCount; j++) pending[j - 1] = pending[j];
     pendingCount--;
     found = true;
   }
@@ -645,7 +685,8 @@ void FlashcardStudyActivity::answerCurrent(const fsrs::Grade grade) {
       RenderLock lock(*this);
       undo.valid = false;  // there is no answer on disk to undo
     }
-    if (grade == fsrs::Grade::Again) requeueCurrent();
+    // No due to carry: cram's resurfaces are gap-only (see advanceToNextCard).
+    if (grade == fsrs::Grade::Again) requeueCurrent(0);
     advanceToNextCard();
     return;
   }
@@ -721,7 +762,7 @@ void FlashcardStudyActivity::answerCurrent(const fsrs::Grade grade) {
   // A card that is still intraday and comes due inside the learn-ahead window
   // belongs to this session, not the next one.
   const bool intraday = after.state == fsrs::CardPhase::Learning || after.state == fsrs::CardPhase::Relearning;
-  if (intraday && after.due <= now.unixSecs + flashcards::LEARN_AHEAD_SECS) requeueCurrent();
+  if (intraday && after.due <= now.unixSecs + flashcards::LEARN_AHEAD_SECS) requeueCurrent(after.due);
 
   advanceToNextCard();
 }
@@ -775,6 +816,12 @@ void FlashcardStudyActivity::suspendCurrent() {
     undo.valid = false;  // the undo record would restore a different answer
   }
   dropFromPending(currentOrdinal);
+  // advanceToNextCard() compares every parked due against `now`, so refresh it
+  // here the way answerCurrent() does rather than advancing on the clock of
+  // whatever came before. Unlike an answer this cannot end the session on a
+  // failure: nothing scheduling-bearing was written, and a stale `now` can only
+  // hold a card parked slightly longer.
+  (void)refreshNow();
   advanceToNextCard();
 }
 
@@ -1042,13 +1089,42 @@ void FlashcardStudyActivity::loopReview() {
       }
     }
 
-    const auto& metrics = UITheme::getInstance().getMetrics();
+    // The grade columns run from the boxes to the bottom of the panel instead
+    // of stopping one menuRowHeight down. That is about the TARGET, not about
+    // labels: every theme's drawButtonHints() early-returns on gpio.hasTouch(),
+    // so on a touch board (the X4 Pro) the hint band under the boxes is left
+    // BLANK -- there is nothing down there to compete with, and running the
+    // four columns over it buys a taller target on the one screen where a
+    // mis-tap costs an answer. A button-only board does get the four grade
+    // names printed there, but colTouch() never fires without touch, so this
+    // read is simply dead on those boards rather than a second control.
     const int rowTop = gradeRowTop();
     const int columnWidth = renderer.getScreenWidth() / fsrs::GRADE_COUNT;
     int column = -1;
-    if (mappedInput.colTouch(column, 0, columnWidth, fsrs::GRADE_COUNT, rowTop, rowTop + metrics.menuRowHeight) ==
+    if (mappedInput.colTouch(column, 0, columnWidth, fsrs::GRADE_COUNT, rowTop, renderer.getScreenHeight()) ==
         MappedInputManager::RowTouch::Tap) {
       answerCurrent(static_cast<fsrs::Grade>(column));
+      return;
+    }
+
+    // Paged answers turn in the card body's outer quarters, the same gesture
+    // the question side uses. Read AFTER the grade columns and bounded to the
+    // body, so the band's own outer columns (Again / Easy) stay grades and a
+    // tap that means "answer" can never mean "page": on a card whose front,
+    // rule and back span more than one page the back is otherwise unreachable
+    // -- there is no other page gesture here, and the front buttons are all
+    // four spoken for by the grades.
+    int tapX = 0;
+    int tapY = 0;
+    if (totalPages > 1 && mappedInput.wasScreenTapped(tapX, tapY)) {
+      const BodyArea body = bodyArea();
+      if (tapY >= body.y && tapY < body.y + body.height) {
+        if (tapX < renderer.getScreenWidth() / 4) {
+          turnPage(-1);
+        } else if (tapX > renderer.getScreenWidth() * 3 / 4) {
+          turnPage(1);
+        }
+      }
     }
     return;
   }
