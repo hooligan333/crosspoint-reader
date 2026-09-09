@@ -5,8 +5,38 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#ifdef CROSSPOINT_FLASHCARDS_C3
+#include <HalHeapGauge.h>  // gateMaxAllocHeap() for the session buffers' pre-alloc guard
+#endif
+
 namespace flashcards {
 namespace {
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+/**
+ * Slack a session buffer must leave behind, matching DictZip and
+ * RssSyncActivity. The three asks here are small even at the C3's 2000-card
+ * cap — 4 KB for a Cram-all ordinal list, 1600 B for the review picker (200
+ * picks x 8 B) and 160 B for the learning picker — but "small" is not the same
+ * as "available" on a heap a reading session leaves near 50 KB and fragmented,
+ * and the point of the gate is that the study screen gets a refusal it can
+ * render instead of a session that half-builds.
+ *
+ * Each of the three is gated for ITS OWN size at the moment it is claimed
+ * (FLASHCARD_SPEC.md §7b.3 pin e), never once for the largest: the claims are
+ * sequential, so every one of them faces a heap the previous claim has already
+ * changed.
+ */
+constexpr size_t SESSION_HEAP_HEADROOM_BYTES = 1024;
+
+/** True when `bytes` looks claimable right now; logs and returns false when it does not. */
+bool sessionHeapAllows(size_t bytes, const char* what) {
+  if (gateMaxAllocHeap() >= bytes + SESSION_HEAP_HEADROOM_BYTES) return true;
+  LOG_ERR("DECK", "Low heap for the session %s: %u max block (need %u)", what,
+          static_cast<unsigned>(gateMaxAllocHeap()), static_cast<unsigned>(bytes + SESSION_HEAP_HEADROOM_BYTES));
+  return false;
+}
+#endif
 
 /** One selected card, ordered by (sortKey, ordinal) — due day for reviews, unix due for learning. */
 struct Pick {
@@ -37,6 +67,12 @@ class BoundedPicker {
     count = 0;
     picks.reset();
     if (capacity == 0) return true;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    if (!sessionHeapAllows(static_cast<size_t>(capacity) * sizeof(Pick), "picker")) {
+      limit = 0;
+      return false;
+    }
+#endif
     picks = makeUniqueNoThrow<Pick[]>(capacity);
     if (!picks) {
       LOG_ERR("DECK", "Session picker alloc failed for %u picks", static_cast<unsigned>(capacity));
@@ -219,6 +255,13 @@ uint16_t remaining(uint16_t limit, uint16_t used) { return used >= limit ? 0 : s
 bool OrdinalBuffer::reserve(uint32_t capacity) {
   countValue = 0;
   if (capacity <= capacityValue) return true;  // an existing block that is big enough is kept
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  if (!sessionHeapAllows(static_cast<size_t>(capacity) * sizeof(Ordinal), "ordinal buffer")) {
+    capacityValue = 0;
+    ordinals.reset();
+    return false;
+  }
+#endif
   ordinals = makeUniqueNoThrow<Ordinal[]>(capacity);
   if (!ordinals) {
     capacityValue = 0;
@@ -260,7 +303,8 @@ bool buildSession(StateStore& store, SessionMode mode, fsrs::Now now, Session& o
   uint32_t capacity = 0;
   switch (mode) {
     case SessionMode::CramAll:
-      capacity = store.recordCount();  // 40000 ordinals = 80 KB at the deck cap
+      // 80 KB at the Pro's 40000-card cap; 4 KB at the C3's 2000 (§7b.3).
+      capacity = store.recordCount();
       break;
     case SessionMode::NewOnly:
       capacity = builder.newLimit;
