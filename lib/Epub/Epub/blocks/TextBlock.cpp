@@ -1,4 +1,3 @@
-#include <cstddef>
 #include "TextBlock.h"
 
 #include <BidiUtils.h>
@@ -7,6 +6,7 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include <cstddef>
 #include <cstring>
 
 #include "../../../../src/fontIds.h"

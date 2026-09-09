@@ -297,9 +297,17 @@ std::string_view stripTrailingImportant(std::string_view value) {
 }
 
 constexpr std::array STYLE_LENGTH_FIELDS = {
-    &CssStyle::textIndent,   &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
-    &CssStyle::marginRight,  &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
-    &CssStyle::paddingRight, &CssStyle::imageHeight, &CssStyle::imageWidth,
+    &CssStyle::textIndent,
+    &CssStyle::marginTop,
+    &CssStyle::marginBottom,
+    &CssStyle::marginLeft,
+    &CssStyle::marginRight,
+    &CssStyle::paddingTop,
+    &CssStyle::paddingBottom,
+    &CssStyle::paddingLeft,
+    &CssStyle::paddingRight,
+    &CssStyle::imageHeight,
+    &CssStyle::imageWidth,
 #ifdef CROSSPOINT_CSS_CLASS_RULES
     // Appended, never inserted: the wire layout is positional and the cache
     // version (CssParser::CSS_CACHE_VERSION) is bumped inside the same flag.

@@ -117,7 +117,8 @@ struct CssPropertyFlags {
 #ifdef CROSSPOINT_CSS_CLASS_RULES
         borderLeft(0),
 #endif
-        verticalAlign(0) {}
+        verticalAlign(0) {
+  }
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
