@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalHeapGauge.h>  // gate*Heap() for the pre-reserve guard in fetchFeed()
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -38,6 +39,28 @@ constexpr size_t MAX_FILENAME_CHARS = 80;
 // e-ink refreshes cost more than the progress they show.
 constexpr int PROGRESS_STEP_PERCENT = 5;
 constexpr unsigned long PROGRESS_MIN_UPDATE_MS = 5000;
+
+// THE TWO reserve() CALLS ON THE FETCH PATH CANNOT FAIL SOFTLY. Under
+// -fno-exceptions an allocation failure inside std::vector::reserve() does not
+// return an error, it goes __throw_bad_alloc -> __cxa_throw ->
+// _Unwind_RaiseException with no handler in range -> std::terminate() ->
+// abort(): a panic and a reboot, mid-sync. (Verified by disassembling the
+// linked [env:default] image; the same hazard is already documented in-tree at
+// src/util/DictZip.cpp:183.) Both are gated below the way DictZip guards its
+// chunk table — a largest-free-block check against the exact block the reserve
+// is about to ask for.
+//
+// Slack required above that block, matching DictZip's
+// CHUNK_TABLE_HEAP_HEADROOM_BYTES.
+constexpr size_t RESERVE_HEAP_HEADROOM_BYTES = 1024;
+// Free heap the rest of the fetch needs behind those two reserves: expat's
+// parser and buffers, the HTTP client's response headers, and the per-item
+// title/url/guid/pubDate/filename strings. Deliberately a FLAT floor and not
+// one scaled by the item cap: the cap is what bounds the string total (see
+// CROSSPOINT_RSS_MAX_ITEMS in RssParser.h), and a cap-scaled floor would refuse
+// a three-item feed on the 100-item combo envs for want of memory that a
+// three-item feed never asks for.
+constexpr size_t FETCH_MIN_FREE_HEAP = 24 * 1024;
 
 bool startsWithNoCase(const std::string& value, const char* prefix) {
   return strncasecmp(value.c_str(), prefix, strlen(prefix)) == 0;
@@ -153,6 +176,23 @@ bool RssSyncActivity::fetchFeed() {
     failWith(tr(STR_RSS_HTTPS_UNSUPPORTED));
     return false;
   }
+  // RssParser's constructor reserves the whole item vector in ONE block, up
+  // front, whatever the feed turns out to hold — so the ask is known here.
+  // reserve() aborts rather than fails; see RESERVE_HEAP_HEADROOM_BYTES.
+  // Checked after the URL validation above so a misconfigured feed still gets
+  // its own specific message.
+  const size_t itemsBlock = RssParser::MAX_ITEMS * sizeof(RssItem) + RESERVE_HEAP_HEADROOM_BYTES;
+  if (gateMaxAllocHeap() < itemsBlock || gateFreeHeap() < FETCH_MIN_FREE_HEAP) {
+    LOG_ERR("RSS", "Low heap for a %u-item feed: %u free (need %u), %u max block (need %u)",
+            (unsigned)RssParser::MAX_ITEMS, (unsigned)gateFreeHeap(), (unsigned)FETCH_MIN_FREE_HEAP,
+            (unsigned)gateMaxAllocHeap(), (unsigned)itemsBlock);
+    // "Not enough memory" — generic despite the DICT key name, and reused
+    // deliberately: a new key would grow the string tables of all 30 languages
+    // on every env for a message that should almost never be seen.
+    failWith(tr(STR_DICT_LOW_MEMORY));
+    return false;
+  }
+
   const std::string url = UrlUtils::ensureProtocol(configured);
   LOG_DBG("RSS", "Fetching feed: %s", url.c_str());
 
@@ -178,6 +218,19 @@ bool RssSyncActivity::fetchFeed() {
 }
 
 bool RssSyncActivity::buildRows(std::vector<RssItem>&& items) {
+  // Second of the two aborting reserve() calls (see RESERVE_HEAP_HEADROOM_BYTES
+  // above), gated against the count the feed actually delivered rather than the
+  // cap. rowItems is NOT gated separately: rebuildRowItems() runs immediately
+  // after this on the heap just checked here, its block is smaller than this
+  // one, and clear() keeps the capacity so every later call is a no-op.
+  const size_t rowsBlock = items.size() * sizeof(Row) + RESERVE_HEAP_HEADROOM_BYTES;
+  if (gateMaxAllocHeap() < rowsBlock) {
+    LOG_ERR("RSS", "Low heap for %u rows: %u max block (need %u)", (unsigned)items.size(), (unsigned)gateMaxAllocHeap(),
+            (unsigned)rowsBlock);
+    failWith(tr(STR_DICT_LOW_MEMORY));
+    return false;
+  }
+
   rows.clear();
   rows.reserve(items.size());
 
@@ -430,6 +483,18 @@ void RssSyncActivity::runSync() {
 }
 
 bool RssSyncActivity::downloadRow(const Row& row) {
+  // Plain http is the server contract, and fetchFeed() already refuses an https
+  // FEED url for it: a LAN host has no verifiable certificate. An https
+  // enclosure is the same contract violation arriving one level down, so refuse
+  // it here too rather than let it reach the client. It is also the one place
+  // this feature can pull in the whole wolfSSL TLS 1.3 handshake, and it would
+  // do so with the row list already resident — the worst moment for it on a C3.
+  // Fails this ITEM (the caller counts it in failedCount), not the run.
+  if (startsWithNoCase(row.url, "https://")) {
+    LOG_ERR("RSS", "Refusing https enclosure: %s", row.url.c_str());
+    return false;
+  }
+
   const std::string tmpPath = destFolder + TMP_LEAF;
   const std::string destPath = pathFor(row);
   // Enclosure URLs come off the wire raw: a space or other unsafe character in
