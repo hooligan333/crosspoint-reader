@@ -10,6 +10,22 @@
 //                           mutated one field at a time
 //   * StateStore         -- CPST create / adopt / counter rules / merge
 //   * SessionQueue       -- queue composition, ordering, caps, learn-ahead
+//   * gated allocations  -- C3 only: every gate driven into refusing
+//   * cross-variant      -- the two builds reading each other's files
+//
+// BOTH CONFIGURATIONS. build.sh compiles and runs this file twice, with and
+// without -DCROSSPOINT_FLASHCARDS_C3 (FLASHCARD_SPEC.md §7b.4), and everything
+// below must pass in both. The C3 variant is an in-RAM change -- no resident
+// card index, a merge that holds only (key, ordinal) pairs -- so the behavioural
+// groups are written once and simply run twice. Only TWO divergences are
+// documented and both are asserted per configuration rather than skipped:
+//
+//   * DECK_MAX_CARDS is 2000 rather than 40000 (deck/cap, state/max deck);
+//   * the duplicate-key check is skipped on the C3 (deck/duplicate key), where
+//     the group instead pins what the trust boundary actually costs.
+//
+// Anything else that came out differently between the two runs would be a bug,
+// which is the whole point of not having a second suite.
 //
 // The fixture is the byte-for-byte output of deck-server/convert_deck.py for the
 // synthetic 9-card package (x4pro-program/deck-server/decks/), so a converter
@@ -29,6 +45,12 @@
 // StudyClock.cpp itself needs an RTC and the settings blob, so it is not linked
 // here; only its pure, header-inline offset composition is tested.
 #include "StudyClock.h"
+#ifdef CROSSPOINT_FLASHCARDS_C3
+// Only the C3 paths gate their allocations, and only this configuration can
+// therefore drive a gate into refusing. stubs/HalHeapGauge.h makes the figure
+// settable; the device header it stands in for is two esp_heap_caps calls.
+#include "HalHeapGauge.h"
+#endif
 
 using flashcards::CardSide;
 using flashcards::DeckError;
@@ -150,6 +172,37 @@ std::vector<uint8_t> buildDeck(const std::vector<TestCard>& cards, const float* 
   return out;
 }
 
+/**
+ * Cards whose keys are deliberately NOT ascending with their ordinals.
+ *
+ * makeCards() below hands out keys in ordinal order, which quietly makes the
+ * merge's sorted key array the identity permutation: `oldSlots[found] == found`
+ * for every card, so a merge that dropped the oldSlots indirection entirely
+ * would still pass. splitmix64's finaliser over a bijective input is itself a
+ * bijection on 64 bits, so the keys stay unique — the deck reader's duplicate
+ * check would say so on the default build — while their sorted order has
+ * nothing whatever to do with the ordinal order (FLASHCARD_SPEC.md §7b.4 asks
+ * for exactly this).
+ */
+std::vector<TestCard> makeShuffledCards(size_t count, uint64_t salt = 0) {
+  std::vector<TestCard> cards;
+  cards.reserve(count);
+  for (size_t i = 0; i < count; i++) {
+    char text[32];
+    snprintf(text, sizeof(text), "front %u", static_cast<unsigned>(i));
+    std::string front(text);
+    snprintf(text, sizeof(text), "back %u", static_cast<unsigned>(i));
+    uint64_t key = 0x9E3779B97F4A7C15ULL * (static_cast<uint64_t>(i) + 1) + salt;
+    key ^= key >> 30;
+    key *= 0xBF58476D1CE4E5B9ULL;
+    key ^= key >> 27;
+    key *= 0x94D049BB133111EBULL;
+    key ^= key >> 31;
+    cards.push_back(TestCard{key, front, std::string(text)});
+  }
+  return cards;
+}
+
 std::vector<TestCard> makeCards(size_t count) {
   std::vector<TestCard> cards;
   cards.reserve(count);
@@ -219,8 +272,27 @@ bool copyFile(const std::string& from, const std::string& to) {
   return writeBytes(to, bytes);
 }
 
+/** Disarms any injected I/O fault and zeroes the op counters (stubs/HalStorage.h). */
+void resetIo() {
+  hostIoFaults().reset();
+  hostIoCounters().zero();
+}
+
+/**
+ * Arms a short read AND a refused seek on the deck file, i.e. the card going
+ * bad underneath an open deck. `allow` operations of each kind get through
+ * first, so a test can let a deck open and validate and only then break it.
+ */
+void failDeckIo(int allow = 0) {
+  hostIoFaults().reset();
+  hostIoFaults().pathSuffix = DECK_LEAF;
+  hostIoFaults().allowReads = allow;
+  hostIoFaults().allowSeeks = allow;
+}
+
 /** Wipes the deck, its state and any stray temp so each group starts clean. */
 void resetCard() {
+  resetIo();
   remove(statePath().c_str());
   remove((statePath() + ".tmp").c_str());
   remove(deckPath().c_str());
@@ -381,7 +453,11 @@ void testDeckValidation() {
       {"version 2", DeckError::BadVersion, [](std::vector<uint8_t>& b) { putU16(b, 4, 2); }},
       {"reserved flag", DeckError::UnknownFlags, [](std::vector<uint8_t>& b) { putU16(b, 6, 0x0002); }},
       {"zero cards", DeckError::BadCardCount, [](std::vector<uint8_t>& b) { putU32(b, 8, 0); }},
-      {"over the cap", DeckError::BadCardCount, [](std::vector<uint8_t>& b) { putU32(b, 8, 40001); }},
+      // One past whatever this build's cap is: 40001 by default, 2001 on the C3
+      // (FLASHCARD_SPEC.md §7b.3). The dedicated cap group below pins the
+      // boundary itself from both sides.
+      {"over the cap", DeckError::BadCardCount,
+       [](std::vector<uint8_t>& b) { putU32(b, 8, flashcards::DECK_MAX_CARDS + 1); }},
       {"header only", DeckError::ShortFile, [](std::vector<uint8_t>& b) { b.resize(32); }},
       {"index cut short", DeckError::ShortFile, [](std::vector<uint8_t>& b) { b.resize(64 + 3 * 20); }},
       {"slice past the blob", DeckError::SliceOutOfRange, [](std::vector<uint8_t>& b) { putU32(b, 64 + 8, 100000); }},
@@ -394,7 +470,6 @@ void testDeckValidation() {
          b.resize(b.size() + 8000, 'x');  // a blob big enough that only the cap refuses it
          putU16(b, 64 + 12, 5000);
        }},
-      {"duplicate key", DeckError::DuplicateKey, [](std::vector<uint8_t>& b) { putU64(b, 64 + 60, getU64(b, 64)); }},
   };
 
   for (const Case& testCase : cases) {
@@ -410,6 +485,278 @@ void testDeckValidation() {
     EXPECT(!deck.isOpen());
     EXPECT_EQ_U(deck.cardCount(), 0);
   }
+  deck.close();
+}
+
+/**
+ * The duplicate-key check: the ONE behavioural divergence between the two
+ * builds (FLASHCARD_SPEC.md §7b.3). The default build refuses the deck; the C3
+ * build skips the check and opens it, because the sorted key copy the check
+ * needs is a contiguous 16 KB block and both upstream stages (convert_deck.py,
+ * read_deck.py) already refuse a repeated key.
+ *
+ * What matters is that the C3 side is not merely "opens anyway": the state file
+ * still keys every RECORD by ordinal, so the two twins get their own records
+ * and their own schedules, and neither reads the other's. That is what is
+ * asserted here — the trust boundary's actual blast radius, not just its
+ * existence.
+ */
+void testDuplicateKeyPolicy() {
+  beginGroup("deck/duplicate key");
+  resetCard();
+  makeDirs();
+
+  std::vector<TestCard> cards = makeCards(4);
+  cards[3].key = cards[0].key;  // ordinals 0 and 3 are now twins
+  std::vector<uint8_t> bytes = buildDeck(cards);
+
+  DeckFile deck;
+  const DeckError error = installDeck(deck, bytes);
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  EXPECT_EQ_U(static_cast<int>(error), static_cast<int>(DeckError::Ok));
+  EXPECT(deck.isOpen());
+  EXPECT_EQ_U(deck.keyAt(0), cards[0].key);
+  EXPECT_EQ_U(deck.keyAt(3), cards[0].key);
+
+  // Records are addressed by ordinal, so the twins do NOT share a schedule.
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 500)), static_cast<int>(StateError::Ok));
+  EXPECT(store.writeRecord(0, reviewCard(400, 390)));
+  EXPECT(store.writeRecord(3, reviewCard(450, 440)));
+  CardState back{};
+  EXPECT_EQ_U(static_cast<int>(store.readRecord(0, back)), static_cast<int>(RecordStatus::Ok));
+  EXPECT_EQ_U(back.due, 400);
+  EXPECT_EQ_U(static_cast<int>(store.readRecord(3, back)), static_cast<int>(RecordStatus::Ok));
+  EXPECT_EQ_U(back.due, 450);
+  // And the per-record key echo still guards each ordinal: a record carrying
+  // the twin key is accepted (it IS this ordinal's key), one carrying anything
+  // else is healed, exactly as on the Pro.
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+#else
+  EXPECT_EQ_U(static_cast<int>(error), static_cast<int>(DeckError::DuplicateKey));
+  EXPECT(!deck.isOpen());
+  EXPECT_EQ_U(deck.cardCount(), 0);
+#endif
+  deck.close();
+  resetCard();
+}
+
+/**
+ * The card-count cap from both sides. Exactly at the cap must open; one past it
+ * must be refused with BadCardCount, and no other error -- the study screen
+ * distinguishes "this deck is too big for this reader" from "this file is
+ * broken" only by that value.
+ *
+ * The deck built here is a header + index with a card count only; the blob is
+ * empty and every slice is zero-length, which is legal (DECK_SERVER_SPEC §3.6.5)
+ * and keeps a 40000-card default-config case from costing megabytes of fixture.
+ */
+void testCardCountCap() {
+  beginGroup("deck/cap");
+  resetCard();
+  makeDirs();
+
+  const uint32_t cap = flashcards::DECK_MAX_CARDS;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  EXPECT_EQ_U(cap, 2000);
+#else
+  EXPECT_EQ_U(cap, 40000);
+#endif
+
+  // Empty-sided cards, so the file is 64 + 20*count bytes and nothing more.
+  std::vector<TestCard> atCap;
+  atCap.reserve(cap);
+  for (uint32_t i = 0; i < cap; i++) atCap.push_back(TestCard{0x2000000000000000ULL + i, "", ""});
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(atCap))), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(deck.cardCount(), cap);
+  EXPECT_EQ_U(deck.keyAt(static_cast<Ordinal>(cap - 1)), atCap[cap - 1].key);
+  deck.close();
+
+  // One past the cap, as a genuine file rather than a doctored header, so the
+  // refusal cannot be coming from a size check.
+  std::vector<TestCard> overCap = atCap;
+  overCap.push_back(TestCard{0x2000000000000000ULL + cap, "", ""});
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(overCap))), static_cast<int>(DeckError::BadCardCount));
+  EXPECT(!deck.isOpen());
+  deck.close();
+  resetCard();
+}
+
+/**
+ * Index validation must cover the WHOLE index, including whatever falls in the
+ * final, short read. The C3 build streams the index in 128-entry chunks, so a
+ * 300-card deck gives two full chunks and a 44-entry tail; corrupting an entry
+ * in that tail is the case a "validate the first chunk and stop" bug survives.
+ * The last card, the last card of the first chunk and the first of the second
+ * are all probed. Runs in both configurations: the default build validates the
+ * same entries out of the resident index and must agree.
+ */
+void testIndexValidationAcrossChunks() {
+  beginGroup("deck/index chunks");
+  resetCard();
+  makeDirs();
+
+  const size_t count = 300;
+  const std::vector<TestCard> cards = makeCards(count);
+  const std::vector<uint8_t> good = buildDeck(cards);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, good)), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(deck.cardCount(), count);
+  deck.close();
+
+  // Ordinals at, either side of, and well past the 128-entry chunk boundary.
+  const size_t probes[] = {0, 127, 128, 129, 255, 256, count - 2, count - 1};
+  for (size_t ordinal : probes) {
+    std::vector<uint8_t> bytes = good;
+    // front_off far outside the blob: the slice check must catch it wherever
+    // the entry happens to sit in the stream.
+    putU32(bytes, 64 + ordinal * 20 + 8, 0x40000000u);
+    const DeckError error = installDeck(deck, bytes);
+    if (error != DeckError::SliceOutOfRange) {
+      ++g_failures;
+      printf("FAIL [%s] ordinal %u: got %s, want %s\n", g_group, static_cast<unsigned>(ordinal),
+             flashcards::deckErrorName(error), flashcards::deckErrorName(DeckError::SliceOutOfRange));
+    }
+    ++g_checks;
+    EXPECT(!deck.isOpen());
+
+    // Same ordinal, this time only the LENGTH is over the 4096-byte cap.
+    bytes = good;
+    putU16(bytes, 64 + ordinal * 20 + 12, 5000);
+    ++g_checks;
+    if (installDeck(deck, bytes) != DeckError::SliceOutOfRange) {
+      ++g_failures;
+      printf("FAIL [%s] ordinal %u length cap not caught\n", g_group, static_cast<unsigned>(ordinal));
+    }
+  }
+  deck.close();
+
+  // A truncated index (the file stops mid-chunk) must read as ShortFile rather
+  // than being validated out of whatever the last read left in the buffer.
+  std::vector<uint8_t> truncated = good;
+  truncated.resize(64 + 200 * 20);
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, truncated)), static_cast<int>(DeckError::ShortFile));
+  deck.close();
+  resetCard();
+}
+
+/**
+ * The window cache behind the C3 build's keyAt()/loadSide(). Every ordinal in a
+ * 300-card deck must resolve to the right key and the right text, walked
+ * forwards, backwards and at random, because a stale window would only show up
+ * as the WRONG card rather than as an error. Cheap and correct on the default
+ * build too, where it just re-checks the resident index.
+ */
+void testOnDemandIndexAccess() {
+  beginGroup("deck/index access");
+  resetCard();
+  makeDirs();
+
+  const size_t count = 300;
+  const std::vector<TestCard> cards = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+
+  char text[flashcards::DECK_MAX_SLICE_BYTES + 1];
+  uint16_t length = 0;
+  bool forwardOk = true;
+  for (size_t i = 0; i < count; i++) {
+    if (deck.keyAt(static_cast<Ordinal>(i)) != cards[i].key) forwardOk = false;
+  }
+  EXPECT(forwardOk);
+
+  bool backwardOk = true;
+  for (size_t i = count; i > 0; i--) {
+    if (deck.keyAt(static_cast<Ordinal>(i - 1)) != cards[i - 1].key) backwardOk = false;
+  }
+  EXPECT(backwardOk);
+
+  // A deliberately window-hostile walk: every step crosses a 32-entry boundary.
+  bool scatterOk = true;
+  for (size_t step = 0; step < count; step++) {
+    const size_t i = (step * 37) % count;
+    if (deck.keyAt(static_cast<Ordinal>(i)) != cards[i].key) scatterOk = false;
+    if (!deck.loadSide(static_cast<Ordinal>(i), CardSide::Front, text, sizeof(text), length)) scatterOk = false;
+    if (cards[i].front != text) scatterOk = false;
+    if (!deck.loadSide(static_cast<Ordinal>(i), CardSide::Back, text, sizeof(text), length)) scatterOk = false;
+    if (cards[i].back != text) scatterOk = false;
+  }
+  EXPECT(scatterOk);
+
+  // Out of range stays out of range however the entry is fetched.
+  EXPECT_EQ_U(deck.keyAt(static_cast<Ordinal>(count)), 0);
+  EXPECT(!deck.loadSide(static_cast<Ordinal>(count), CardSide::Front, text, sizeof(text), length));
+  EXPECT_EQ_U(length, 0);
+  deck.close();
+  resetCard();
+}
+
+/**
+ * C3b CRITICAL-1, at the reader's end of it: `keyAtChecked()` is the accessor
+ * with an error channel (FLASHCARD_SPEC.md §7b.3 pin a). keyAt()'s "0 on
+ * failure" cannot tell a real key of 0 from a card that would not read, and the
+ * state layer treats a key that disagrees as a TORN record and heals it — so on
+ * the C3, where a key IS a disk read, the difference between the two accessors
+ * is the difference between one refused session and a wiped deck.
+ *
+ * The contract is asserted in both configurations; only the failing-read half
+ * is C3-specific, because the Pro's index is resident and cannot fail.
+ */
+void testKeyAtChecked() {
+  beginGroup("deck/keyAtChecked");
+  resetCard();
+  makeDirs();
+
+  // 40 cards spans two of the C3's 32-entry index windows, so the walk below
+  // crosses a refill.
+  const size_t count = 40;
+  const std::vector<TestCard> cards = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+
+  bool everyKeyOk = true;
+  for (size_t i = 0; i < count; i++) {
+    uint64_t key = 0;
+    if (!deck.keyAtChecked(static_cast<Ordinal>(i), key)) everyKeyOk = false;
+    if (key != cards[i].key) everyKeyOk = false;
+  }
+  EXPECT(everyKeyOk);
+
+  // Out of range is a refusal in both builds, and leaves the caller's variable
+  // exactly as it was rather than zeroing it into a plausible-looking key.
+  uint64_t untouched = 0xD15EA5EDD15EA5EDULL;
+  EXPECT(!deck.keyAtChecked(static_cast<Ordinal>(count), untouched));
+  EXPECT_EQ_U(untouched, 0xD15EA5EDD15EA5EDULL);
+  EXPECT_EQ_U(deck.keyAt(static_cast<Ordinal>(count)), 0);
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // The window currently holds ordinals 32..39 (the walk ended there). Asking
+  // for ordinal 0 must refill, and with the card refusing every seek and read
+  // that refill fails: a REFUSAL, not a zero.
+  uint64_t key = 0xABCDULL;
+  failDeckIo();
+  EXPECT(!deck.keyAtChecked(0, key));
+  EXPECT_EQ_U(key, 0xABCDULL);
+  EXPECT(hostIoFaults().seekFailures + hostIoFaults().readFailures > 0);
+
+  // And the window is EMPTY afterwards, so the entries it used to hold are not
+  // served either: a refill that failed part-way may already have overwritten
+  // some of those bytes, and nothing in the buffer can be trusted until a read
+  // has completed. (Without this, ordinal 32 would come back happily from a
+  // window the failed refill left standing.)
+  EXPECT(!deck.keyAtChecked(32, key));
+  EXPECT_EQ_U(key, 0xABCDULL);
+
+  resetIo();
+  EXPECT(deck.keyAtChecked(0, key));  // the card comes back, and so does the deck
+  EXPECT_EQ_U(key, cards[0].key);
+#endif
+
+  deck.close();
+  resetCard();
 }
 
 void testDeckParameterBlock() {
@@ -837,6 +1184,106 @@ void testMergeEdgeCases() {
   EXPECT_EQ_U(static_cast<int>(state.state), static_cast<int>(CardPhase::New));
   EXPECT_EQ_U(static_cast<int>(merged.readRecord(1, state)), static_cast<int>(RecordStatus::Ok));
   EXPECT_EQ_U(state.due, 311);
+
+  // C3b NIT-13. The repair has to be ON DISK, not merely applied on the way
+  // back out: readRecord() normalizes too, so asserting only through it would
+  // pass just as happily if the merge had carried the 0x77 byte straight into
+  // the new file. This byte is what says the MERGE repaired the carried record
+  // (FLASHCARD_SPEC.md §4), and it is the same assertion in both builds.
+  merged.close();
+  EXPECT(readBytes(statePath(), raw));
+  EXPECT_EQ_U(raw.size(), stateBytes(7));
+  EXPECT_EQ_U(raw[recAt(0) + 8 + 14], static_cast<uint8_t>(CardPhase::New));
+}
+
+/**
+ * C3b MUST-3. Every other merge fixture here builds its keys with makeCards(),
+ * which hands them out in ascending ordinal order — and that quietly makes the
+ * merge's sorted key array the identity permutation, so `oldSlots[found]` and
+ * `found` are the same number and a merge that dropped the indirection
+ * altogether would pass. This one shuffles the keys, rotates the deck, drops a
+ * block from the middle and appends unseen cards, so nothing lines up with
+ * anything: the only thing that can carry a schedule to the right ordinal is
+ * the key.
+ */
+void testShuffledKeyMerge() {
+  beginGroup("state/merge shuffled keys");
+  resetCard();
+  makeDirs();
+
+  const size_t count = 300;
+  const std::vector<TestCard> v1 = makeShuffledCards(count);
+  // The fixture is worth nothing unless the keys really are out of order, so
+  // that is checked rather than assumed: neither sorted nor reverse-sorted.
+  size_t ascendingPairs = 0;
+  for (size_t i = 1; i < count; i++) {
+    if (v1[i].key > v1[i - 1].key) ascendingPairs++;
+  }
+  EXPECT(ascendingPairs > 30);
+  EXPECT(ascendingPairs < count - 31);
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+  bool seeded = true;
+  for (size_t i = 0; i < count; i++) {
+    if (!store.writeRecord(static_cast<Ordinal>(i),
+                           reviewCard(static_cast<uint16_t>(600 + i % 250), static_cast<uint16_t>(500 + i % 90)))) {
+      seeded = false;
+    }
+  }
+  EXPECT(seeded);
+  store.close();
+
+  // v2: rotate by 97 so no ordinal keeps its place, drop twenty from the
+  // middle, append fifteen the deck has never seen.
+  std::vector<TestCard> v2;
+  for (size_t k = 0; k < count; k++) {
+    const size_t i = (k + 97) % count;
+    if (i >= 140 && i < 160) continue;
+    v2.push_back(v1[i]);
+  }
+  const size_t kept = v2.size();
+  EXPECT_EQ_U(kept, count - 20);
+  for (size_t i = 0; i < 15; i++) {
+    v2.push_back(TestCard{0x9000000000000000ULL + i, "added front", "added back"});
+  }
+
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), v2.size());
+
+  bool carriedOk = true;
+  size_t carried = 0;
+  for (size_t o = 0; o < v2.size(); o++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(o), state) != RecordStatus::Ok) {
+      carriedOk = false;
+      continue;
+    }
+    size_t from = SIZE_MAX;  // which v1 ordinal owned this key
+    for (size_t i = 0; i < count; i++) {
+      if (v1[i].key == v2[o].key) {
+        from = i;
+        break;
+      }
+    }
+    if (from == SIZE_MAX) {
+      if (state.state != CardPhase::New || state.due != 0 || state.reps != 0) carriedOk = false;
+    } else {
+      carried++;
+      if (state.state != CardPhase::Review || state.due != 600 + from % 250 || state.lastReviewDay != 500 + from % 90) {
+        carriedOk = false;
+      }
+    }
+  }
+  EXPECT(carriedOk);
+  EXPECT_EQ_U(carried, kept);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+  deck.close();
+  resetCard();
 }
 
 /**
@@ -1003,19 +1450,176 @@ void testTornKeyHeals() {
   EXPECT_EQ_U(stale.reps, 0);
 }
 
-/** R3a NIT-16: a 40000-card deck, the cap, exercising both chunked readers. */
-void testMaximumDeck() {
-  beginGroup("state/40000 cards");
+/**
+ * C3b CRITICAL-1 regression. On the C3 a deck key is a DISK READ, so keyAt()'s
+ * "0 when it did not work" collides with the self-heal above: a record checked
+ * against a failed read looks torn, gets rewritten as a fresh New card, and one
+ * bad sector under the deck's index therefore wipes the schedule of every card
+ * in the deck while the session reports success. Measured before the fix: 100
+ * of 100 records overwritten.
+ *
+ * The rule (FLASHCARD_SPEC.md §7b.3 pin a) is that a failed key read is an I/O
+ * ERROR — it aborts the operation and heals NOTHING — and the assertion that
+ * matters is the same in both builds: after the fault, the state file has not
+ * moved by a byte.
+ */
+void testIoFaultsDoNotHeal() {
+  beginGroup("state/io faults");
   resetCard();
   makeDirs();
 
-  const size_t count = 40000;
+  // 200 cards is more than one C3 index window, so a scan cannot get through
+  // on whatever the window happened to be holding.
+  const size_t count = 200;
+  const std::vector<TestCard> cards = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(deck, decksDir(), DECK_LEAF, 800)), static_cast<int>(StateError::Ok));
+    bool seeded = true;
+    for (size_t i = 0; i < count; i++) {
+      if (!seed.writeRecord(static_cast<Ordinal>(i), reviewCard(790, 780))) seeded = false;
+    }
+    EXPECT(seeded);
+  }
+
+  std::vector<uint8_t> before;
+  EXPECT(readBytes(statePath(), before));
+
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 800)), static_cast<int>(StateError::Ok));
+
+  // --- the deck's index stops answering ---------------------------------------
+  fsrs::Now now{1700000000u, 800};
+  Session session;
+  failDeckIo();
+  const bool built = flashcards::buildSession(store, SessionMode::Due, now, session);
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  EXPECT(!built);
+  EXPECT_EQ_U(session.cards.size(), 0);
+  EXPECT(hostIoFaults().seekFailures + hostIoFaults().readFailures > 0);
+
+  // readRecord reports the I/O error rather than a key mismatch, so no caller
+  // can mistake it for a card that needs restarting...
+  CardState state = reviewCard(555, 550);
+  EXPECT_EQ_U(static_cast<int>(store.readRecord(0, state)), static_cast<int>(RecordStatus::IoError));
+  EXPECT_EQ_U(static_cast<int>(state.state), static_cast<int>(CardPhase::New));
+  // ...and a write refuses rather than stamping a 0 key onto a live record,
+  // which would leave it reading as torn for ever afterwards.
+  EXPECT(!store.writeRecord(1, reviewCard(700, 690)));
+#else
+  // The Pro holds the index in RAM, so a card that stopped answering is not
+  // even reached: the same fault is invisible on that build.
+  EXPECT(built);
+#endif
+  EXPECT(!store.keyMismatchSeen());
+
+  // --- the state file itself stops answering ----------------------------------
+  // Same rule, both builds: a scan that cannot read is a failed scan, never a
+  // deck full of torn records.
+  hostIoFaults().reset();
+  hostIoFaults().pathSuffix = ".state";
+  hostIoFaults().allowReads = 0;
+  EXPECT(!flashcards::buildSession(store, SessionMode::Due, now, session));
+  EXPECT_EQ_U(session.cards.size(), 0);
+  CardState unread = reviewCard(444, 440);
+  EXPECT_EQ_U(static_cast<int>(store.readRecord(0, unread)), static_cast<int>(RecordStatus::IoError));
+  EXPECT(hostIoFaults().readFailures > 0);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+
+  // THE assertion, and it holds in both builds: not one byte of the state file
+  // moved while the card was misbehaving.
+  resetIo();
+  std::vector<uint8_t> after;
+  EXPECT(readBytes(statePath(), after));
+  EXPECT(before == after);
+
+  // And with the card answering again, every schedule is still there.
+  StateStore again;
+  EXPECT_EQ_U(static_cast<int>(again.open(deck, decksDir(), DECK_LEAF, 800)), static_cast<int>(StateError::Ok));
+  EXPECT(flashcards::buildSession(again, SessionMode::Due, now, session));
+  EXPECT_EQ_U(session.summary.dueAvailable, count);
+  EXPECT(!again.keyMismatchSeen());
+  again.close();
+  deck.close();
+
+  // --- creation and the merge, with the deck's index unreadable ---------------
+  // Both of those lay down a whole file's worth of keys read from the deck, so
+  // both must refuse rather than write records carrying a 0 key — which every
+  // later session would judge torn and heal away.
+  resetCard();
+  makeDirs();
+  DeckFile writing;
+  EXPECT_EQ_U(static_cast<int>(installDeck(writing, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore creating;
+    failDeckIo();
+    const StateError created = creating.open(writing, decksDir(), DECK_LEAF, 800);
+    resetIo();
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    EXPECT_EQ_U(static_cast<int>(created), static_cast<int>(StateError::ReadFailed));
+    EXPECT(!creating.isOpen());
+#else
+    EXPECT_EQ_U(static_cast<int>(created), static_cast<int>(StateError::Ok));  // resident index, nothing to fail
+#endif
+  }
+
+  resetCard();
+  makeDirs();
+  EXPECT_EQ_U(static_cast<int>(installDeck(writing, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(writing, decksDir(), DECK_LEAF, 800)), static_cast<int>(StateError::Ok));
+    for (size_t i = 0; i < count; i++) seed.writeRecord(static_cast<Ordinal>(i), reviewCard(790, 780));
+  }
+  const std::vector<TestCard> reversed(cards.rbegin(), cards.rend());
+  EXPECT_EQ_U(static_cast<int>(installDeck(writing, buildDeck(reversed))), static_cast<int>(DeckError::Ok));
+  std::vector<uint8_t> beforeMerge;
+  EXPECT(readBytes(statePath(), beforeMerge));
+  {
+    StateStore merging;
+    failDeckIo();
+    const StateError result = merging.open(writing, decksDir(), DECK_LEAF, 800);
+    resetIo();
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    EXPECT_EQ_U(static_cast<int>(result), static_cast<int>(StateError::ReadFailed));
+    EXPECT(!merging.isOpen());
+    // The merge abandons before the remove→rename, so the old state is still
+    // the state — and the half-built temp is gone rather than waiting to be
+    // adopted as a complete file by the next open().
+    std::vector<uint8_t> afterMerge;
+    EXPECT(readBytes(statePath(), afterMerge));
+    EXPECT(beforeMerge == afterMerge);
+    EXPECT(!fileExists(statePath() + ".tmp"));
+#else
+    EXPECT_EQ_U(static_cast<int>(result), static_cast<int>(StateError::Ok));
+#endif
+  }
+
+  writing.close();
+  resetCard();
+}
+
+/**
+ * R3a NIT-16: a deck AT this build's cap — 40000 by default, 2000 on the C3 —
+ * exercising both chunked readers. Written against DECK_MAX_CARDS rather than a
+ * literal so it stays the cap test in both configurations; on the C3 it is also
+ * the merge-at-the-cap fixture that testMergeAtCap() below builds on.
+ */
+void testMaximumDeck() {
+  beginGroup("state/max deck");
+  resetCard();
+  makeDirs();
+
+  const size_t count = flashcards::DECK_MAX_CARDS;
   const std::vector<TestCard> cards = makeCards(count);
   DeckFile deck;
   EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
   EXPECT_EQ_U(deck.cardCount(), count);
-  // The index is read in 16 KB chunks (800 KB here) and the ordinals at both
-  // ends of it must still resolve.
+  // The index is read in chunks (16 KB resident reads by default, 2560-byte
+  // streamed ones on the C3) and the ordinals at both ends must still resolve.
   EXPECT_EQ_U(deck.keyAt(0), cards[0].key);
   EXPECT_EQ_U(deck.keyAt(static_cast<Ordinal>(count - 1)), cards[count - 1].key);
 
@@ -1026,10 +1630,10 @@ void testMaximumDeck() {
   std::vector<uint8_t> raw;
   EXPECT(readBytes(statePath(), raw));
   EXPECT_EQ_U(raw.size(), stateBytes(count));
-  // Record chunks are 128 records; check one at a chunk boundary, one mid-chunk
+  // Record chunks are 128 records; check one at a chunk boundary, one mid-deck
   // and the very last, so a short final chunk would show up here.
   EXPECT_EQ_U(getU64(raw, recAt(128)), cards[128].key);
-  EXPECT_EQ_U(getU64(raw, recAt(20001)), cards[20001].key);
+  EXPECT_EQ_U(getU64(raw, recAt(count / 2 + 1)), cards[count / 2 + 1].key);
   EXPECT_EQ_U(getU64(raw, recAt(count - 1)), cards[count - 1].key);
 
   // A scheduled card near the end proves the whole scan runs, not just the
@@ -1046,10 +1650,366 @@ void testMaximumDeck() {
   EXPECT(flashcards::buildSession(store, SessionMode::Due, now, session));
   EXPECT_EQ_U(session.summary.dueAvailable, 1);
   EXPECT_EQ_U(session.summary.reviews, 1);
-  EXPECT_EQ_U(session.summary.newCards, 20);  // the daily allowance, not 39999
+  EXPECT_EQ_U(session.summary.newCards, 20);  // the daily allowance, not every card in the deck
   EXPECT_EQ_U(session.summary.newAvailable, count - 1);
   EXPECT_EQ_U(session.cards.size(), 21);
   store.close();
+  resetCard();
+}
+
+/**
+ * A re-download merge at this build's cap, which is where the C3's merge shape
+ * is actually under load: (key, ordinal) pairs only — 20 KB at 2000 cards — and
+ * one seek+read into the OLD state file per matched card, 2000 of them. The
+ * default build runs the same assertions through its resident payload buffer.
+ *
+ * The v2 deck drops the first 50 cards, keeps the middle in a different order
+ * and appends 50 new ones, so a merge that quietly relied on ordinals lining up
+ * would carry the wrong schedules rather than none.
+ */
+void testMergeAtCap() {
+  beginGroup("state/merge at cap");
+  resetCard();
+  makeDirs();
+
+  const size_t count = flashcards::DECK_MAX_CARDS;
+  const std::vector<TestCard> v1 = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  // Every 7th card gets a schedule keyed to its ordinal, so a mismatch after the
+  // merge names the card it came from.
+  bool seeded = true;
+  for (size_t i = 0; i < count; i += 7) {
+    if (!store.writeRecord(static_cast<Ordinal>(i),
+                           reviewCard(static_cast<uint16_t>(600 + i % 300), static_cast<uint16_t>(500 + i % 100)))) {
+      seeded = false;
+    }
+  }
+  EXPECT(seeded);
+  store.close();
+
+  // v2: drop the first 50, reverse the survivors, append 50 unseen cards.
+  std::vector<TestCard> v2;
+  v2.reserve(count);
+  for (size_t i = count; i > 50; i--) v2.push_back(v1[i - 1]);
+  for (size_t i = 0; i < 50; i++) {
+    v2.push_back(TestCard{0x7000000000000000ULL + i, "new front", "new back"});
+  }
+  EXPECT_EQ_U(v2.size(), count);
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), count);
+
+  // Every v2 ordinal must carry exactly the schedule its KEY had in v1.
+  bool carriedOk = true;
+  bool freshOk = true;
+  size_t carried = 0;
+  for (size_t i = 0; i < count; i++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(i), state) != RecordStatus::Ok) {
+      carriedOk = false;
+      continue;
+    }
+    // Which v1 ordinal was this key?
+    size_t from = SIZE_MAX;
+    if (i < count - 50) from = count - 1 - i;  // the reversed survivors
+    if (from != SIZE_MAX && from % 7 == 0) {
+      carried++;
+      if (state.state != CardPhase::Review || state.due != 600 + from % 300 ||
+          state.lastReviewDay != 500 + from % 100) {
+        carriedOk = false;
+      }
+    } else if (state.state != CardPhase::New || state.due != 0 || state.reps != 0) {
+      freshOk = false;
+    }
+  }
+  EXPECT(carriedOk);
+  EXPECT(freshOk);
+  // The survivors are v1 ordinals 50..count-1; the seeded ones are those
+  // divisible by 7. Counted independently of the merge that is under test.
+  size_t expectedCarried = 0;
+  for (size_t o = 50; o < count; o++) {
+    if (o % 7 == 0) expectedCarried++;
+  }
+  EXPECT_EQ_U(carried, expectedCarried);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+  resetCard();
+}
+
+/** A well-formed CPST v1 file holding one record per entry of `keys`/`states`. */
+std::vector<uint8_t> buildStateFile(const std::vector<uint64_t>& keys, const std::vector<CardState>& states,
+                                    uint64_t contentHash, uint16_t day, uint16_t newToday, uint16_t revToday) {
+  std::vector<uint8_t> out(stateBytes(keys.size()), 0);
+  memcpy(out.data(), "CPST", 4);
+  putU16(out, 4, flashcards::CPST_VERSION);
+  putU32(out, 8, static_cast<uint32_t>(keys.size()));
+  putU64(out, 12, contentHash);
+  putU32(out, 20, day);  // counters_day
+  putU16(out, 24, newToday);
+  putU16(out, 26, revToday);
+  putU32(out, 28, day);  // last_seen_day
+  for (size_t i = 0; i < keys.size(); i++) {
+    putU64(out, recAt(i), keys[i]);
+    memcpy(out.data() + recAt(i) + 8, &states[i], 20);
+  }
+  return out;
+}
+
+/**
+ * C3b MUST-2, the merge's half. The C3 merge fetches each carried card out of
+ * the old file rather than out of RAM, so it re-checks the key echo of what
+ * came back against what the sorted key array promised. The fault that check
+ * exists for is not a read that FAILS — a failed read leaves nothing to copy
+ * and the card simply restarts — it is a seek that reports success and lands
+ * somewhere else, after which a full-length read hands back the wrong records.
+ *
+ * The rule it enforces is the one that matters to a person: a merge may cost a
+ * card its history, but it must NEVER give a card somebody else's. Every schedule
+ * here is distinct, so a foreign one is identifiable.
+ */
+void testMergeKeyEchoUnderMisseek() {
+  beginGroup("state/merge key echo");
+  resetCard();
+  makeDirs();
+
+  const size_t count = 300;
+  const std::vector<TestCard> v1 = makeShuffledCards(count, 0x3300);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+    bool seeded = true;
+    for (size_t i = 0; i < count; i++) {
+      // due is unique per v1 ordinal, so a payload that came from the wrong
+      // record names the record it came from.
+      if (!seed.writeRecord(static_cast<Ordinal>(i), reviewCard(static_cast<uint16_t>(1000 + i), 900))) seeded = false;
+    }
+    EXPECT(seeded);
+  }
+
+  std::vector<TestCard> v2;
+  v2.reserve(count);
+  for (size_t k = 0; k < count; k++) v2.push_back(v1[(k + 61) % count]);
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+
+  // Every seek into the old state after the first lands one record late. (The
+  // first is the sequential key pass, which must be allowed to load real keys —
+  // the point is a merge that KNOWS which key it wants and is handed the wrong
+  // record anyway.)
+  hostIoFaults().reset();
+  hostIoFaults().pathSuffix = ".state";
+  hostIoFaults().allowSeeksBeforeSkew = 1;
+  hostIoFaults().seekSkewBytes = static_cast<long>(REC);
+
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), count);
+  resetIo();
+
+  bool noForeignSchedule = true;
+  for (size_t o = 0; o < count; o++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(o), state) != RecordStatus::Ok) noForeignSchedule = false;
+    const size_t from = (o + 61) % count;  // the v1 ordinal this key came from
+    const bool restarted = state.state == CardPhase::New && state.due == 0;
+    const bool itsOwn = state.state == CardPhase::Review && state.due == 1000 + from;
+    if (!restarted && !itsOwn) noForeignSchedule = false;
+  }
+  EXPECT(noForeignSchedule);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+
+  // And with the card seeking straight again, the same merge carries every
+  // schedule to the right ordinal: the echo costs nothing when nothing is wrong.
+  resetCard();
+  makeDirs();
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+    for (size_t i = 0; i < count; i++) {
+      seed.writeRecord(static_cast<Ordinal>(i), reviewCard(static_cast<uint16_t>(1000 + i), 900));
+    }
+  }
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+  bool allItsOwn = true;
+  for (size_t o = 0; o < count; o++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(o), state) != RecordStatus::Ok) allItsOwn = false;
+    if (state.state != CardPhase::Review || state.due != 1000 + (o + 61) % count) allItsOwn = false;
+  }
+  EXPECT(allItsOwn);
+  store.close();
+  deck.close();
+  resetCard();
+}
+
+/**
+ * C3b SHOULD-7 (FLASHCARD_SPEC.md §7b.3 pin d). An SD card moves from a Pro to
+ * the C3 and brings a state file with MORE records than the C3's own 2000-card
+ * deck cap. Clamping the OLD side of the merge at the READING build's cap would
+ * drop every record past that quietly — a thousand cards losing their history
+ * with nothing said. The old side is bounded by the FORMAT's cap instead, and
+ * an old side too big for the heap is a typed refusal with the file untouched.
+ *
+ * The carrying half runs in both builds: 3000 old records are inside the Pro's
+ * cap too, so the two must agree about every schedule.
+ */
+void testOversizedOldState() {
+  beginGroup("state/oversized old state");
+  resetCard();
+  makeDirs();
+
+  constexpr size_t OLD_RECORDS = 3000;
+  constexpr size_t DECK_CARDS = 2000;
+  const std::vector<TestCard> cards = makeShuffledCards(DECK_CARDS, 0x5000);
+
+  // The deck's own keys sit in old slots 1000..2999, REVERSED — so the records
+  // a 2000-record clamp would have dropped are real cards, not filler.
+  std::vector<uint64_t> oldKeys(OLD_RECORDS, 0);
+  std::vector<CardState> oldStates(OLD_RECORDS);
+  for (size_t s = 0; s < OLD_RECORDS; s++) {
+    oldStates[s] = reviewCard(static_cast<uint16_t>(700 + s % 200), static_cast<uint16_t>(600 + s % 80));
+    oldKeys[s] = s < OLD_RECORDS - DECK_CARDS ? 0xF000000000000000ULL + s : cards[OLD_RECORDS - 1 - s].key;
+  }
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+  const std::vector<uint8_t> oldFile = buildStateFile(oldKeys, oldStates, deck.contentHash() ^ 0xFFFFULL, 900, 4, 9);
+  EXPECT(writeBytes(statePath(), oldFile));
+
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), DECK_CARDS);
+  // A merge is not a new day, however big the old file was.
+  EXPECT_EQ_U(store.newToday(), 4);
+  EXPECT_EQ_U(store.reviewsToday(), 9);
+
+  bool allCarried = true;
+  for (size_t o = 0; o < DECK_CARDS; o++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(o), state) != RecordStatus::Ok) {
+      allCarried = false;
+      continue;
+    }
+    const size_t slot = OLD_RECORDS - 1 - o;  // where this card's key sat in the old file
+    if (state.state != CardPhase::Review || state.due != 700 + slot % 200 || state.lastReviewDay != 600 + slot % 80) {
+      allCarried = false;
+    }
+  }
+  EXPECT(allCarried);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // The same file with a heap that cannot hold 3000 keys: a TYPED refusal, and
+  // the old file still byte for byte what it was. Never a quiet truncation to
+  // whatever would have fitted.
+  EXPECT(writeBytes(statePath(), oldFile));
+  hostHeapGauge().maxAlloc = OLD_RECORDS * sizeof(uint64_t) + 1024 - 1;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 900)),
+              static_cast<int>(StateError::OutOfMemory));
+  EXPECT(!store.isOpen());
+  hostHeapGauge().reset();
+  std::vector<uint8_t> after;
+  EXPECT(readBytes(statePath(), after));
+  EXPECT(oldFile == after);
+  EXPECT(!fileExists(statePath() + ".tmp"));
+#endif
+
+  deck.close();
+  resetCard();
+}
+
+/**
+ * C3b SHOULD-4 (FLASHCARD_SPEC.md §7b.3 pin c). The C3 merge does not hold the
+ * old payloads, so every carried card is a read out of the old file. One read
+ * per card is ~2000 random reads for a full deck — seconds on the loop task,
+ * against a 5 s task WDT — so the merge carries a read-ahead window aligned to
+ * its own size. This group is what says the window is actually there: it counts
+ * the operations the merge performs, through the same stub seam the fault
+ * injection uses, and prints the figures.
+ *
+ * Both builds run it. The Pro's number is the floor (its merge reads the old
+ * file exactly once, in chunks); the C3's has to stay in the same order of
+ * magnitude rather than the deck's card count.
+ */
+void testMergeReadAheadCounts() {
+  beginGroup("state/merge read-ahead");
+  const size_t count = 2000;
+
+  // --- the ordinary case: the re-export kept the card order -------------------
+  resetCard();
+  makeDirs();
+  const std::vector<TestCard> v1 = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  }
+  std::vector<TestCard> ordered(v1.begin(), v1.end() - 50);
+  for (size_t i = 0; i < 50; i++) {
+    ordered.push_back(TestCard{0x8000000000000000ULL + i, "added front", "added back"});
+  }
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(ordered))), static_cast<int>(DeckError::Ok));
+
+  StateStore store;
+  hostIoCounters().zero();
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  const long orderedReads = hostIoCounters().stateReads;
+  const long orderedSeeks = hostIoCounters().stateSeeks;
+  store.close();
+  printf("  [%s] merge of %u cards, old ordinals in order: %ld reads / %ld seeks on the old state\n", g_group,
+         static_cast<unsigned>(count), orderedReads, orderedSeeks);
+  // One read per matched card would be ~2000. The window has to keep this in
+  // the tens, which is where the Pro's chunked pass already is.
+  EXPECT(orderedReads < 200);
+  EXPECT(orderedSeeks < 200);
+
+  // --- the worst case: the re-export scattered them ---------------------------
+  resetCard();
+  makeDirs();
+  const std::vector<TestCard> s1 = makeShuffledCards(count, 0x7000);
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(s1))), static_cast<int>(DeckError::Ok));
+  {
+    StateStore seed;
+    EXPECT_EQ_U(static_cast<int>(seed.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  }
+  std::vector<TestCard> s2;
+  s2.reserve(count);
+  for (size_t k = 0; k < count; k++) s2.push_back(s1[(k * 37) % count]);  // 37 is coprime with 2000
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(s2))), static_cast<int>(DeckError::Ok));
+
+  hostIoCounters().zero();
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 1000)), static_cast<int>(StateError::Ok));
+  const long shuffledReads = hostIoCounters().stateReads;
+  const long shuffledSeeks = hostIoCounters().stateSeeks;
+  printf("  [%s] merge of %u cards, old ordinals scattered: %ld reads / %ld seeks on the old state\n", g_group,
+         static_cast<unsigned>(count), shuffledReads, shuffledSeeks);
+  // Every step here crosses a window, so this is the floor the read-ahead can
+  // fall back to and not a regression: it must not EXCEED one read per card.
+  EXPECT(shuffledReads <= static_cast<long>(count) + 100);
+  EXPECT(shuffledSeeks <= static_cast<long>(count) + 100);
+
+  // The scattering must not have cost a single schedule, whatever it cost in
+  // reads: the numbers above are only meaningful if the merge was correct.
+  bool carriedOk = true;
+  for (size_t o = 0; o < count; o++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(o), state) != RecordStatus::Ok) carriedOk = false;
+    if (state.state != CardPhase::New) carriedOk = false;  // the seed left every card New
+  }
+  EXPECT(carriedOk);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+  deck.close();
   resetCard();
 }
 
@@ -1368,6 +2328,406 @@ void testUtcOffsetComposition() {
   EXPECT_EQ_U(fsrs::dayNumber(local0400, indiaOffset), fsrs::dayNumber(local0359, indiaOffset) + 1);
 }
 
+// --- gated allocations (C3 only) ---------------------------------------------
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+/**
+ * FLASHCARD_SPEC.md §7b.3: every allocation on the C3 paths is gated on the
+ * largest free block and reports a typed error rather than aborting. A gate
+ * nobody has watched refuse is a gate nobody has tested, so stubs/HalHeapGauge.h
+ * makes the figure settable and this group drives each gate into its refusal.
+ *
+ * Two things are asserted every time: the failure is the TYPED one the study
+ * screen can render, and the store/queue is left in a state a retry recovers
+ * from once the heap figure comes back.
+ */
+void testGatedAllocationFailures() {
+  beginGroup("c3/gated allocs");
+  resetCard();
+  makeDirs();
+
+  // 1000 cards, chosen so the Cram-all ordinal buffer (2000 B) is LARGER than
+  // the review picker (200 picks x 8 B = 1600 B). Below about 800 cards it is
+  // the smaller of the two, and a gauge low enough to refuse it would refuse
+  // the picker first — the cram gate would then never be what is under test.
+  const std::vector<TestCard> v1 = makeCards(1000);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)), static_cast<int>(StateError::Ok));
+  EXPECT(store.writeRecord(5, reviewCard(650, 640)));
+  store.close();
+
+  // --- the merge's (key, ordinal) pairs -------------------------------------
+  // A v2 deck with a different content hash, so open() takes the merge path.
+  std::vector<TestCard> v2(v1.rbegin(), v1.rend());
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+
+  std::vector<uint8_t> before;
+  EXPECT(readBytes(statePath(), before));
+
+  hostHeapGauge().maxAlloc = 512;  // far below the 8000 B key array for 1000 cards
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)),
+              static_cast<int>(StateError::OutOfMemory));
+  EXPECT(!store.isOpen());
+  EXPECT_EQ_U(store.recordCount(), 0);
+  // The refusal happens before a byte is written: the old state is intact and
+  // no half-built temp is left behind for the next open() to adopt.
+  std::vector<uint8_t> after;
+  EXPECT(readBytes(statePath(), after));
+  EXPECT(before == after);
+  EXPECT(!fileExists(statePath() + ".tmp"));
+
+  // With room again, the same call merges — nothing was poisoned by the refusal.
+  hostHeapGauge().reset();
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), v1.size());
+  CardState carried{};
+  // v1 ordinal 5 is v2 ordinal (count - 1 - 5) after the reversal.
+  EXPECT_EQ_U(static_cast<int>(store.readRecord(static_cast<Ordinal>(v1.size() - 1 - 5), carried)),
+              static_cast<int>(RecordStatus::Ok));
+  EXPECT_EQ_U(carried.due, 650);
+
+  // --- the session buffers ---------------------------------------------------
+  fsrs::Now now{1700000000u, 700};
+  Session session;
+
+  // A gauge BETWEEN the two asks: enough for the pickers (1600 B + 1 KB
+  // headroom = 2624), not enough for the Cram-all ordinal buffer (2000 B + 1 KB
+  // = 3024). So Cram must be refused for exactly the buffer this round is
+  // about, while a Due session over the same store still builds — which is what
+  // proves the refusal was the ordinal buffer and not a blanket failure.
+  hostHeapGauge().maxAlloc = 2800;
+  EXPECT(!flashcards::buildSession(store, SessionMode::CramAll, now, session));
+  EXPECT_EQ_U(session.cards.size(), 0);
+  EXPECT(flashcards::buildSession(store, SessionMode::Due, now, session));
+  EXPECT_EQ_U(session.summary.reviews, 1);
+
+  // Lower still: now the review picker itself is refused, and every scheduled
+  // mode fails with it (NewOnly resets the pickers too, even though it will not
+  // use them).
+  hostHeapGauge().maxAlloc = 1200;  // < 200 picks * 8 B + 1 KB headroom
+  EXPECT(!flashcards::buildSession(store, SessionMode::Due, now, session));
+  EXPECT(!flashcards::buildSession(store, SessionMode::NewOnly, now, session));
+  EXPECT(!flashcards::buildSession(store, SessionMode::CramAll, now, session));
+
+  hostHeapGauge().reset();
+  EXPECT(flashcards::buildSession(store, SessionMode::CramAll, now, session));
+  EXPECT_EQ_U(session.cards.size(), v1.size());
+  EXPECT(flashcards::buildSession(store, SessionMode::Due, now, session));
+  EXPECT_EQ_U(session.summary.reviews, 1);
+
+  // DeckFile::open() has NO allocation to gate on this build — the index is
+  // never held — so a gauge pinned at zero must not stop a deck opening.
+  hostHeapGauge().maxAlloc = 0;
+  DeckFile starved;
+  EXPECT_EQ_U(static_cast<int>(starved.open(deckPath())), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(starved.keyAt(0), v2[0].key);
+  char text[64];
+  uint16_t length = 0;
+  EXPECT(starved.loadSide(0, CardSide::Front, text, sizeof(text), length));
+  EXPECT_STR(text, v2[0].front.c_str());
+  starved.close();
+
+  hostHeapGauge().reset();
+  store.close();
+  resetCard();
+}
+
+/**
+ * C3b SHOULD-6. The group above drives each gate into refusing from far away;
+ * this one stands on the edge of every gate. Each allocation is checked at
+ * EXACTLY what it needs (which must succeed) and at one byte less (which must
+ * not), so the arithmetic in the gate itself — the block's own size, plus the
+ * 1 KB of slack, compared with >= and not > — is pinned rather than inferred.
+ * FLASHCARD_SPEC.md §7b.3 pin e: each block is gated for its own size.
+ */
+void testGateBoundaries() {
+  beginGroup("c3/gate boundaries");
+  resetCard();
+  makeDirs();
+
+  const size_t count = 1000;
+  const std::vector<TestCard> v1 = makeCards(count);
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v1))), static_cast<int>(DeckError::Ok));
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)), static_cast<int>(StateError::Ok));
+  EXPECT(store.writeRecord(5, reviewCard(650, 640)));
+  store.close();
+
+  // A v2 with a different content hash, so open() takes the merge path.
+  const std::vector<TestCard> v2(v1.rbegin(), v1.rend());
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(v2))), static_cast<int>(DeckError::Ok));
+
+  // --- the merge's key array: 1000 keys plus the mandatory slack --------------
+  // The need-1 case has to come first: the exactly-enough case MERGES, and a
+  // merged file has the deck's hash, so a second open() would only adopt.
+  const size_t mergeNeed = count * sizeof(uint64_t) + 1024;
+  hostHeapGauge().maxAlloc = mergeNeed - 1;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)),
+              static_cast<int>(StateError::OutOfMemory));
+  EXPECT(!fileExists(statePath() + ".tmp"));
+  hostHeapGauge().maxAlloc = mergeNeed;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, decksDir(), DECK_LEAF, 700)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), count);
+  hostHeapGauge().reset();
+
+  // --- the session's three blocks --------------------------------------------
+  // A fresh Session each time: OrdinalBuffer::reserve keeps a block that is
+  // already big enough, which would take the gate out of the picture.
+  fsrs::Now now{1700000000u, 700};
+  const size_t pickerNeed = flashcards::DAILY_REVIEW_LIMIT * 8 + 1024;  // Pick is {u32, u16} = 8 B
+  const size_t cramNeed = count * sizeof(Ordinal) + 1024;
+
+  {
+    Session session;
+    hostHeapGauge().maxAlloc = pickerNeed - 1;
+    EXPECT(!flashcards::buildSession(store, SessionMode::Due, now, session));
+  }
+  {
+    Session session;
+    hostHeapGauge().maxAlloc = pickerNeed;
+    EXPECT(flashcards::buildSession(store, SessionMode::Due, now, session));
+    EXPECT_EQ_U(session.summary.reviews, 1);
+  }
+  {
+    Session session;
+    hostHeapGauge().maxAlloc = cramNeed - 1;
+    EXPECT(!flashcards::buildSession(store, SessionMode::CramAll, now, session));
+    EXPECT_EQ_U(session.cards.size(), 0);
+  }
+  {
+    Session session;
+    hostHeapGauge().maxAlloc = cramNeed;
+    EXPECT(flashcards::buildSession(store, SessionMode::CramAll, now, session));
+    EXPECT_EQ_U(session.cards.size(), count);
+  }
+
+  hostHeapGauge().reset();
+  store.close();
+  deck.close();
+  resetCard();
+}
+#endif  // CROSSPOINT_FLASHCARDS_C3
+
+// --- cross-variant compatibility ---------------------------------------------
+
+/**
+ * FLASHCARD_SPEC.md §7b.3: the on-disk formats are IDENTICAL between the two
+ * builds; only the in-RAM strategy differs. A deck and state written by one must
+ * be fully usable by the other, including through a re-download merge.
+ *
+ * That cannot be shown inside one process, so build.sh runs each binary once
+ * with `--produce` (writing a deck, a v2 deck and a state file with known
+ * schedules under build/card/xvariant/) before either runs its suite, and the
+ * suite then consumes the OTHER configuration's artifacts. Both directions are
+ * therefore covered by the pair of runs.
+ */
+
+#ifdef CROSSPOINT_FLASHCARDS_C3
+constexpr const char* THIS_VARIANT = "c3";
+constexpr const char* OTHER_VARIANT = "std";
+#else
+constexpr const char* THIS_VARIANT = "std";
+constexpr const char* OTHER_VARIANT = "c3";
+#endif
+
+constexpr size_t CROSS_CARDS = 12;
+constexpr uint16_t CROSS_DAY = 4321;
+constexpr uint16_t CROSS_NEW_TODAY = 3;
+constexpr uint16_t CROSS_REV_TODAY = 11;
+/** v2 keeps v1's cards 3..11 in reverse and appends three unseen ones. */
+constexpr size_t CROSS_DROPPED = 3;
+
+std::string xDir() { return g_root + "/xvariant"; }
+std::string xStatePath(const std::string& leaf) { return xDir() + "/.state/" + leaf + ".state"; }
+
+/** The deck both variants write, byte for byte: same keys, same text, same order. */
+std::vector<TestCard> crossCardsV1() {
+  std::vector<TestCard> cards;
+  cards.reserve(CROSS_CARDS);
+  for (size_t i = 0; i < CROSS_CARDS; i++) {
+    char text[40];
+    snprintf(text, sizeof(text), "x front %u", static_cast<unsigned>(i));
+    std::string front(text);
+    snprintf(text, sizeof(text), "x back %u", static_cast<unsigned>(i));
+    cards.push_back(TestCard{0x5A5A000000000000ULL + i * 0x0101ULL, front, std::string(text)});
+  }
+  return cards;
+}
+
+std::vector<TestCard> crossCardsV2() {
+  const std::vector<TestCard> v1 = crossCardsV1();
+  std::vector<TestCard> v2;
+  v2.reserve(CROSS_CARDS);
+  for (size_t i = CROSS_CARDS; i > CROSS_DROPPED; i--) v2.push_back(v1[i - 1]);
+  for (size_t i = 0; i < CROSS_DROPPED; i++) {
+    v2.push_back(TestCard{0x6B6B000000000000ULL + i, "fresh front", "fresh back"});
+  }
+  return v2;
+}
+
+/** Which v1 ordinal a v2 ordinal came from, or SIZE_MAX for a card v2 added. */
+size_t crossV1OrdinalOf(size_t v2Ordinal) {
+  if (v2Ordinal >= CROSS_CARDS - CROSS_DROPPED) return SIZE_MAX;
+  return CROSS_CARDS - 1 - v2Ordinal;
+}
+
+/**
+ * The schedule ordinal `i` is written with. Every float is an exact binary
+ * fraction, so the records compare bit for bit across the two builds rather
+ * than approximately.
+ */
+CardState crossExpectedState(size_t i) {
+  CardState card{};
+  switch (i % 4) {
+    case 0:
+      return card;  // left New
+    case 1:
+      card.state = CardPhase::Review;
+      card.due = static_cast<uint32_t>(4000 + i);
+      card.lastReviewDay = static_cast<uint16_t>(3900 + i);
+      card.stability = 1.25f * static_cast<float>(i + 1);
+      card.difficulty = 2.5f + 0.125f * static_cast<float>(i);
+      card.reps = static_cast<uint16_t>(i + 2);
+      card.lapses = static_cast<uint8_t>(i % 3);
+      return card;
+    case 2:
+      card.state = CardPhase::Learning;
+      card.due = 1700000000u + static_cast<uint32_t>(i) * 60u;
+      card.step = static_cast<uint8_t>(i % 2);
+      card.stability = 0.5f;
+      card.difficulty = 5.0f;
+      card.reps = 1;
+      return card;
+    default:
+      card.state = CardPhase::Review;
+      card.due = static_cast<uint32_t>(4200 + i);
+      card.lastReviewDay = static_cast<uint16_t>(4100 + i);
+      card.stability = 30.0f;
+      card.difficulty = 7.75f;
+      card.reps = 9;
+      card.lapses = 2;
+      card.flags = fsrs::FLAG_SUSPENDED;
+      return card;
+  }
+}
+
+bool sameState(const CardState& a, const CardState& b) {
+  return a.state == b.state && a.due == b.due && a.lastReviewDay == b.lastReviewDay && a.stability == b.stability &&
+         a.difficulty == b.difficulty && a.step == b.step && a.reps == b.reps && a.lapses == b.lapses &&
+         a.flags == b.flags;
+}
+
+/** `--produce`: lay down this configuration's artifacts for the other one to read. */
+bool produceCrossVariantArtifacts() {
+  Storage.ensureDirectoryExists(xDir().c_str());
+  Storage.ensureDirectoryExists((xDir() + "/.state").c_str());
+
+  const std::string leaf = std::string(THIS_VARIANT) + ".deck";
+  const std::string v2Leaf = std::string(THIS_VARIANT) + "-v2.deck";
+  if (!writeBytes(xDir() + "/" + leaf, buildDeck(crossCardsV1()))) return false;
+  if (!writeBytes(xDir() + "/" + v2Leaf, buildDeck(crossCardsV2()))) return false;
+
+  DeckFile deck;
+  if (deck.open(xDir() + "/" + leaf) != DeckError::Ok) return false;
+  StateStore store;
+  if (store.open(deck, xDir(), leaf, CROSS_DAY) != StateError::Ok) return false;
+  for (size_t i = 0; i < CROSS_CARDS; i++) {
+    if (!store.writeRecord(static_cast<Ordinal>(i), crossExpectedState(i))) return false;
+  }
+  if (!store.writeCounters(CROSS_NEW_TODAY, CROSS_REV_TODAY)) return false;
+  store.close();
+  printf("produced cross-variant artifacts for \"%s\"\n", THIS_VARIANT);
+  return true;
+}
+
+void testCrossVariantCompatibility() {
+  beginGroup("cross-variant");
+
+  const std::string otherDeck = xDir() + "/" + OTHER_VARIANT + ".deck";
+  const std::string otherV2 = xDir() + "/" + OTHER_VARIANT + "-v2.deck";
+  const std::string otherState = xStatePath(std::string(OTHER_VARIANT) + ".deck");
+  if (!fileExists(otherDeck) || !fileExists(otherV2) || !fileExists(otherState)) {
+    printf("SKIP [%s]: no \"%s\" artifacts under %s (run build.sh, which produces both first)\n", g_group,
+           OTHER_VARIANT, xDir().c_str());
+    return;
+  }
+
+  // The strongest single assertion available: the two builds, given the same
+  // deck and the same writes, produced BYTE-IDENTICAL state files. Anything
+  // that had drifted in the CPST layout, the 448-byte reserved gap, the header
+  // counters or the record packing shows up here first.
+  std::vector<uint8_t> mine;
+  std::vector<uint8_t> theirs;
+  EXPECT(readBytes(xStatePath(std::string(THIS_VARIANT) + ".deck"), mine));
+  EXPECT(readBytes(otherState, theirs));
+  EXPECT_EQ_U(mine.size(), stateBytes(CROSS_CARDS));
+  EXPECT(mine == theirs);
+
+  // Work copies, so the artifacts stay pristine for whichever run comes after.
+  const std::string workLeaf = std::string(THIS_VARIANT) + "-work.deck";
+  EXPECT(copyFile(otherDeck, xDir() + "/" + workLeaf));
+  EXPECT(copyFile(otherState, xStatePath(workLeaf)));
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(deck.open(xDir() + "/" + workLeaf)), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(deck.cardCount(), CROSS_CARDS);
+
+  // Same content hash: this must ADOPT, not merge, and must carry the other
+  // build's daily counters across untouched.
+  StateStore store;
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, xDir(), workLeaf, CROSS_DAY)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), CROSS_CARDS);
+  EXPECT_EQ_U(store.newToday(), CROSS_NEW_TODAY);
+  EXPECT_EQ_U(store.reviewsToday(), CROSS_REV_TODAY);
+  EXPECT_EQ_U(store.countersDay(), CROSS_DAY);
+
+  bool adoptedOk = true;
+  for (size_t i = 0; i < CROSS_CARDS; i++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(i), state) != RecordStatus::Ok) adoptedOk = false;
+    if (!sameState(state, crossExpectedState(i))) adoptedOk = false;
+  }
+  EXPECT(adoptedOk);
+  EXPECT(!store.keyMismatchSeen());  // every record's key echo matched the other build's deck
+  store.close();
+
+  // Now the re-download merge, over a v2 deck the OTHER build wrote.
+  EXPECT(copyFile(otherV2, xDir() + "/" + workLeaf));
+  EXPECT_EQ_U(static_cast<int>(deck.open(xDir() + "/" + workLeaf)), static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(static_cast<int>(store.open(deck, xDir(), workLeaf, CROSS_DAY)), static_cast<int>(StateError::Ok));
+  EXPECT_EQ_U(store.recordCount(), CROSS_CARDS);
+  // A merge is not a new day: the counters survive it.
+  EXPECT_EQ_U(store.newToday(), CROSS_NEW_TODAY);
+  EXPECT_EQ_U(store.reviewsToday(), CROSS_REV_TODAY);
+
+  bool mergedOk = true;
+  size_t carried = 0;
+  for (size_t i = 0; i < CROSS_CARDS; i++) {
+    CardState state{};
+    if (store.readRecord(static_cast<Ordinal>(i), state) != RecordStatus::Ok) mergedOk = false;
+    const size_t from = crossV1OrdinalOf(i);
+    if (from == SIZE_MAX) {
+      if (!sameState(state, CardState{})) mergedOk = false;
+    } else {
+      if (!sameState(state, crossExpectedState(from))) mergedOk = false;
+      carried++;
+    }
+  }
+  EXPECT(mergedOk);
+  EXPECT_EQ_U(carried, CROSS_CARDS - CROSS_DROPPED);
+  EXPECT(!store.keyMismatchSeen());
+  store.close();
+  deck.close();
+
+  remove((xDir() + "/" + workLeaf).c_str());
+  remove(xStatePath(workLeaf).c_str());
+  remove((xStatePath(workLeaf) + ".tmp").c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1375,9 +2735,25 @@ int main(int argc, char** argv) {
   Storage.ensureDirectoryExists(g_root.c_str());
   makeDirs();
 
+  // build.sh runs each configuration once in this mode, before either runs its
+  // suite, so that each suite has the OTHER one's files to read (see
+  // testCrossVariantCompatibility).
+  if (argc > 2 && strcmp(argv[2], "--produce") == 0) {
+    if (produceCrossVariantArtifacts()) return 0;
+    printf("FAILED to produce cross-variant artifacts for \"%s\"\n", THIS_VARIANT);
+    return 1;
+  }
+
+  printf("configuration: %s\n", THIS_VARIANT);
+
   testKeySort();
   testRealFixture();
   testDeckValidation();
+  testDuplicateKeyPolicy();
+  testCardCountCap();
+  testIndexValidationAcrossChunks();
+  testOnDemandIndexAccess();
+  testKeyAtChecked();
   testDeckParameterBlock();
   testEmptyBack();
   testC0Sanitize();
@@ -1386,9 +2762,15 @@ int main(int argc, char** argv) {
   testStateRebuildsFromRubbish();
   testMerge();
   testMergeEdgeCases();
+  testShuffledKeyMerge();
   testMergeCrashWindow();
   testTornKeyHeals();
+  testIoFaultsDoNotHeal();
   testMaximumDeck();
+  testMergeAtCap();
+  testMergeKeyEchoUnderMisseek();
+  testOversizedOldState();
+  testMergeReadAheadCounts();
   testQueueBasics();
   testQueueInterleaveIsDeterministic();
   testQueueDailyLimits();
@@ -1397,6 +2779,11 @@ int main(int argc, char** argv) {
   testQueueModes();
   testQueueEmptyDeck();
   testUtcOffsetComposition();
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  testGatedAllocationFailures();
+  testGateBoundaries();
+#endif
+  testCrossVariantCompatibility();
 
   resetCard();
   printf("\n%d checks, %d failures\n", g_checks, g_failures);

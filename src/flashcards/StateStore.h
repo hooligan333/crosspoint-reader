@@ -58,6 +58,15 @@ constexpr size_t CPST_HEADER_BYTES = 64;
 constexpr size_t CPST_RECORDS_OFFSET = 512;
 constexpr size_t CPST_RECORD_BYTES = 28;
 constexpr uint16_t CPST_VERSION = 1;
+/**
+ * The FORMAT's record cap, which is not the same thing as a build's deck cap.
+ * The CPST file the C3 finds on the card may have been written by a Pro — an SD
+ * moved between devices is the ordinary case — and it can then hold up to the
+ * Pro's 40000 records. The reading build's own deck cap bounds the records it
+ * WRITES; this bounds the ones it is willing to READ on the old side of a merge
+ * (FLASHCARD_SPEC.md §7b.3 pin d). One ordinal per record still fits a u16.
+ */
+constexpr uint32_t CPST_MAX_RECORDS = 40000;
 
 static_assert(CPST_RECORDS_OFFSET >= CPST_HEADER_BYTES, "records must start after the header");
 
@@ -115,6 +124,23 @@ class StateStore {
    * a vector. DeckFile's own 1.12 MB open-time peak (index + duplicate-key
    * scratch) does NOT overlap this one: the scratch is freed before open()
    * returns, long before a store is opened against the deck.
+   *
+   * **Under CROSSPOINT_FLASHCARDS_C3 the composed peak is ~24 KB** (§7b.3).
+   * DeckFile holds nothing, so the only heap here is the merge's (key, ordinal)
+   * pairs — 10 B/record, 20 KB for 2000 records, largest single block the key
+   * array. The 20-byte payloads are NOT held: each matched card's old record
+   * comes out of an 896-byte read-ahead window over the still-open old file
+   * (§7b.3 pin c), which sits on the merge's frame beside the 3584-byte output
+   * chunk. Each array is gated on gateMaxAllocHeap() for its OWN size,
+   * immediately before it is claimed (pin e, the pattern DictZip and
+   * RssSyncActivity use), and fails as StateError::OutOfMemory, never as an
+   * abort. Note that the OLD side is bounded by CPST_MAX_RECORDS and not by
+   * this build's deck cap (pin d): a state file written by a Pro is merged
+   * whole when its pair buffers fit, and refused with the file untouched when
+   * they do not. 40000 old records would want 400 KB and are refused here;
+   * what the C3 actually meets is a few thousand. Creation, adoption and the
+   * orphan-adopt path allocate nothing at all in either build: they stream
+   * through the same 3584-byte stack chunk.
    */
   StateError open(const DeckFile& deck, const std::string& destFolder, const std::string& deckLeaf, uint16_t today);
   void close();

@@ -4,6 +4,9 @@
 
 #include <Logging.h>
 #include <Memory.h>
+#ifdef CROSSPOINT_FLASHCARDS_C3
+#include <HalHeapGauge.h>  // gateMaxAllocHeap() for the merge's pre-alloc guards
+#endif
 
 #include <cstring>
 
@@ -87,11 +90,65 @@ void normalizeState(uint8_t* payload) {
   }
 }
 
-/** Card count a file of `fileSize` bytes can actually hold, capped at the deck limit. */
+#ifdef CROSSPOINT_FLASHCARDS_C3
+/**
+ * Slack each merge block must leave behind, matching the guards in DictZip and
+ * RssSyncActivity. The gate is belt and braces — every allocation below is a
+ * null-checked makeUniqueNoThrow and cannot abort — but an ask that is going to
+ * fail should fail BEFORE the file is touched, and on a C3 the largest free
+ * block, not the free total, is what runs out first.
+ */
+constexpr size_t MERGE_HEAP_HEADROOM_BYTES = 1024;
+
+/** True when `bytes` looks claimable right now; logs and returns false when it does not. */
+bool mergeHeapAllows(size_t bytes, const char* what, uint32_t records) {
+  if (gateMaxAllocHeap() >= bytes + MERGE_HEAP_HEADROOM_BYTES) return true;
+  LOG_ERR("DECK", "Low heap for a %u-record merge (%s): %u max block (need %u)", static_cast<unsigned>(records), what,
+          static_cast<unsigned>(gateMaxAllocHeap()), static_cast<unsigned>(bytes + MERGE_HEAP_HEADROOM_BYTES));
+  return false;
+}
+
+/**
+ * Old-state records the merge's read-ahead cache holds (FLASHCARD_SPEC.md §7b.3
+ * pin c). Without it the C3 merge is one seek+read per matched card — ~2080
+ * random reads for a 2000-card deck, seconds of them, on the loop task against
+ * a 5 s task WDT. The cache is ALIGNED to its own size, so any locally
+ * sequential walk of the old ordinals — ascending (a deck that only gained
+ * cards) or descending (a re-export that reversed them) — refills once per 32
+ * cards instead of once per card.
+ *
+ * 32 and not 128: this buffer is live for the whole write loop, alongside the
+ * 3584-byte output chunk on the same frame, so its size is stack this device
+ * does not have much of. 896 bytes takes the ordered 2000-card merge from ~2016
+ * reads to ~79 — the WDT problem solved with an order of magnitude to spare —
+ * where 128 entries would reach ~32 reads for 3584 more bytes of frame. A fully
+ * shuffled old side degrades back toward one read per card in either sizing;
+ * that is the case the on-device timing check at integration is for.
+ */
+constexpr uint32_t MERGE_CACHE_RECORDS = 32;
+constexpr size_t MERGE_CACHE_BYTES = MERGE_CACHE_RECORDS * CPST_RECORD_BYTES;
+#endif
+
+/**
+ * Card count a file of `fileSize` bytes can actually hold, capped at what this
+ * build is willing to read.
+ *
+ * On the C3 that cap is the FORMAT's, not the build's own 2000-card deck limit:
+ * the file may have been written by a Pro on an SD card that then moved
+ * (FLASHCARD_SPEC.md §7b.3 pin d). Clamping it here would silently drop the
+ * tail of such a file's records from the merge — every card past 2000 losing
+ * its schedule with nothing said. The pair buffers those extra records need are
+ * gated like every other allocation, so an old side too big for the heap is a
+ * typed OutOfMemory with the file untouched, never a quiet truncation.
+ */
 uint32_t recordsThatFit(size_t fileSize) {
   if (fileSize < CPST_RECORDS_OFFSET) return 0;
   const size_t fits = (fileSize - CPST_RECORDS_OFFSET) / CPST_RECORD_BYTES;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  return fits > CPST_MAX_RECORDS ? CPST_MAX_RECORDS : static_cast<uint32_t>(fits);
+#else
   return fits > DECK_MAX_CARDS ? DECK_MAX_CARDS : static_cast<uint32_t>(fits);
+#endif
 }
 
 }  // namespace
@@ -253,7 +310,19 @@ StateError StateStore::createFresh(const std::string& path, uint16_t today) {
     uint32_t count = cards - first;
     if (count > RECORDS_PER_CHUNK) count = RECORDS_PER_CHUNK;
     for (uint32_t i = 0; i < count; i++) {
+#ifdef CROSSPOINT_FLASHCARDS_C3
+      // A failed index read would write a 0 key into a record that the deck
+      // does not have a 0 key for, i.e. a record born torn (pin a). Fail the
+      // creation instead; the caller closes and the next open() rebuilds.
+      uint64_t deckKey = 0;
+      if (!deck->keyAtChecked(static_cast<Ordinal>(first + i), deckKey)) {
+        LOG_ERR("DECK", "Deck index read failed at ordinal %u; state not created", static_cast<unsigned>(first + i));
+        return StateError::ReadFailed;
+      }
+      writeU64(chunk, i * CPST_RECORD_BYTES, deckKey);
+#else
       writeU64(chunk, i * CPST_RECORD_BYTES, deck->keyAt(static_cast<Ordinal>(first + i)));
+#endif
       memset(chunk + i * CPST_RECORD_BYTES + RECORD_KEY_BYTES, 0, RECORD_PAYLOAD_BYTES);
     }
     const size_t bytes = count * CPST_RECORD_BYTES;
@@ -269,13 +338,66 @@ StateError StateStore::createFresh(const std::string& path, uint16_t today) {
 
 StateError StateStore::mergeFromExisting(const std::string& path, uint32_t oldCount) {
   // The old state, sorted by card key, so the new deck's index can be walked
-  // once against it (FLASHCARD_SPEC.md §3). Three allocations rather than one
+  // once against it (FLASHCARD_SPEC.md §3). Separate arrays rather than one
   // array of structs: a {u64, u16, u8[20]} would pad to 32 bytes per card.
+  //
+  // Under CROSSPOINT_FLASHCARDS_C3 only the first two are held (§7b.3) — see the
+  // note on the HalFile below.
   std::unique_ptr<uint64_t[]> oldKeys;
   std::unique_ptr<uint16_t[]> oldSlots;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // Only the (key, ordinal) PAIRS are held — 10 B/card, 20 KB at the C3's
+  // 2000-card cap, largest single block 16 KB (FLASHCARD_SPEC.md §7b.3). The
+  // 20-byte payloads stay on the card and are fetched one at a time below, so
+  // the old file has to stay open across the whole write loop.
+  HalFile oldFile;
+#else
   std::unique_ptr<uint8_t[]> oldPayloads;
   uint8_t* payloadBase = nullptr;
+#endif
   if (oldCount > 0) {
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    // Each block is gated for ITS OWN size, immediately before it is claimed
+    // (FLASHCARD_SPEC.md §7b.3 pin e). One check over the larger of the two
+    // would be wrong twice: by the time the ordinals are asked for, the keys are
+    // already in hand and the largest free block has moved — a heap that could
+    // hand out 16 KB a moment ago need not have 4 KB left to give afterwards.
+    const size_t keyBytes = static_cast<size_t>(oldCount) * sizeof(uint64_t);
+    if (!mergeHeapAllows(keyBytes, "keys", oldCount)) return StateError::OutOfMemory;
+    oldKeys = makeUniqueNoThrow<uint64_t[]>(oldCount);
+    if (!oldKeys) {
+      LOG_ERR("DECK", "Merge key buffer alloc failed for %u records", static_cast<unsigned>(oldCount));
+      return StateError::OutOfMemory;
+    }
+
+    const size_t slotBytes = static_cast<size_t>(oldCount) * sizeof(uint16_t);
+    if (!mergeHeapAllows(slotBytes, "ordinals", oldCount)) return StateError::OutOfMemory;
+    oldSlots = makeUniqueNoThrow<uint16_t[]>(oldCount);
+    if (!oldSlots) {
+      LOG_ERR("DECK", "Merge ordinal buffer alloc failed for %u records", static_cast<unsigned>(oldCount));
+      return StateError::OutOfMemory;
+    }
+
+    if (!Storage.openFileForRead("DECK", path, oldFile)) return StateError::OpenFailed;
+    if (!oldFile.seek(CPST_RECORDS_OFFSET)) return StateError::ReadFailed;
+
+    uint8_t chunk[CHUNK_BYTES];
+    for (uint32_t first = 0; first < oldCount; first += RECORDS_PER_CHUNK) {
+      uint32_t count = oldCount - first;
+      if (count > RECORDS_PER_CHUNK) count = RECORDS_PER_CHUNK;
+      const size_t bytes = count * CPST_RECORD_BYTES;
+      if (oldFile.read(chunk, bytes) != static_cast<int>(bytes)) {
+        LOG_ERR("DECK", "Short read merging state: %s", path.c_str());
+        return StateError::ReadFailed;
+      }
+      for (uint32_t i = 0; i < count; i++) {
+        const uint32_t slot = first + i;
+        oldKeys[slot] = readU64(chunk + i * CPST_RECORD_BYTES, 0);
+        oldSlots[slot] = static_cast<uint16_t>(slot);
+      }
+    }
+    sortKeys(oldKeys.get(), oldSlots.get(), oldCount);
+#else
     oldKeys = makeUniqueNoThrow<uint64_t[]>(oldCount);
     oldSlots = makeUniqueNoThrow<uint16_t[]>(oldCount);
     oldPayloads = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(oldCount) * RECORD_PAYLOAD_BYTES);
@@ -309,6 +431,7 @@ StateError StateStore::mergeFromExisting(const std::string& path, uint32_t oldCo
       }
     }
     sortKeys(oldKeys.get(), oldSlots.get(), oldCount);
+#endif
   }
 
   // The merged file is built beside the old one and renamed over it. An
@@ -331,16 +454,78 @@ StateError StateStore::mergeFromExisting(const std::string& path, uint32_t oldCo
     if (!writeHeaderAndPadding()) return StateError::WriteFailed;
 
     uint8_t chunk[CHUNK_BYTES];
+#ifdef CROSSPOINT_FLASHCARDS_C3
+    // The read-ahead window over the OLD state file (pin c). Aligned to its own
+    // size, so consecutive new ordinals whose old slots are locally sequential —
+    // ascending or descending — share one read.
+    uint8_t oldCache[MERGE_CACHE_BYTES];
+    uint32_t cacheFirst = 0;
+    uint32_t cacheCount = 0;  // records actually loaded; 0 = the window holds nothing
+#endif
     const uint32_t cards = deck->cardCount();
     uint32_t carried = 0;
     for (uint32_t first = 0; first < cards; first += RECORDS_PER_CHUNK) {
       uint32_t count = cards - first;
       if (count > RECORDS_PER_CHUNK) count = RECORDS_PER_CHUNK;
       for (uint32_t i = 0; i < count; i++) {
+#ifdef CROSSPOINT_FLASHCARDS_C3
+        // The deck's key is a disk read here (pin a). A failed one must not be
+        // written into the record as a 0: that record would then read back as
+        // torn on every later session and be healed away. The merge abandons
+        // instead — the temp is dropped by dropTemp and the old state file has
+        // not been touched yet, so nothing is lost.
+        uint64_t key = 0;
+        if (!deck->keyAtChecked(static_cast<Ordinal>(first + i), key)) {
+          LOG_ERR("DECK", "Deck index read failed at ordinal %u; merge abandoned, old state kept",
+                  static_cast<unsigned>(first + i));
+          return StateError::ReadFailed;
+        }
+#else
         const uint64_t key = deck->keyAt(static_cast<Ordinal>(first + i));
+#endif
         uint8_t* record = chunk + i * CPST_RECORD_BYTES;
         writeU64(record, 0, key);
         const uint32_t found = oldCount > 0 ? findKey(oldKeys.get(), oldCount, key) : KEY_NOT_FOUND;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+        // The matched record is fetched from the old file through the window
+        // above rather than held in RAM: 896 bytes of stack instead of the whole
+        // old state. The key echo is re-checked against what the sorted array
+        // promised — a read that lands on the wrong record (a truncated file, a
+        // torn write) then costs that one card its history rather than giving it
+        // somebody else's.
+        bool carriedThis = false;
+        if (found != KEY_NOT_FOUND) {
+          const uint32_t slot = oldSlots[found];
+          const uint32_t base = (slot / MERGE_CACHE_RECORDS) * MERGE_CACHE_RECORDS;
+          if (cacheCount == 0 || cacheFirst != base) {
+            uint32_t want = oldCount - base;
+            if (want > MERGE_CACHE_RECORDS) want = MERGE_CACHE_RECORDS;
+            const size_t bytes = static_cast<size_t>(want) * CPST_RECORD_BYTES;
+            // Invalidated BEFORE the read, so a failed refill cannot leave the
+            // previous window's bytes standing in for the records asked for.
+            cacheCount = 0;
+            if (oldFile.seek(recordOffset(static_cast<Ordinal>(base))) &&
+                oldFile.read(oldCache, bytes) == static_cast<int>(bytes)) {
+              cacheFirst = base;
+              cacheCount = want;
+            }
+          }
+          const uint8_t* oldRecord =
+              slot - base < cacheCount ? oldCache + static_cast<size_t>(slot - base) * CPST_RECORD_BYTES : nullptr;
+          if (oldRecord != nullptr && readU64(oldRecord, 0) == key) {
+            memcpy(record + RECORD_KEY_BYTES, oldRecord + RECORD_KEY_BYTES, RECORD_PAYLOAD_BYTES);
+            normalizeState(record + RECORD_KEY_BYTES);
+            carried++;
+            carriedThis = true;
+          } else {
+            LOG_ERR("DECK", "Could not re-read old record %u while merging; that card restarts as new",
+                    static_cast<unsigned>(slot));
+          }
+        }
+        // A card the new deck added — or one whose old record would not come
+        // back — starts New, like any unseen card.
+        if (!carriedThis) memset(record + RECORD_KEY_BYTES, 0, RECORD_PAYLOAD_BYTES);
+#else
         if (found == KEY_NOT_FOUND) {
           // A card the new deck added: starts New, like any unseen card.
           memset(record + RECORD_KEY_BYTES, 0, RECORD_PAYLOAD_BYTES);
@@ -349,6 +534,7 @@ StateError StateStore::mergeFromExisting(const std::string& path, uint32_t oldCo
                  RECORD_PAYLOAD_BYTES);
           carried++;
         }
+#endif
       }
       const size_t bytes = count * CPST_RECORD_BYTES;
       if (file.write(chunk, bytes) != bytes) {
@@ -367,7 +553,13 @@ StateError StateStore::mergeFromExisting(const std::string& path, uint32_t oldCo
 
   oldKeys.reset();
   oldSlots.reset();
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // The old file was read from right up to the last card, and must be closed
+  // before the remove below: SdFat will not unlink a path with a live handle.
+  oldFile = HalFile();
+#else
   oldPayloads.reset();
+#endif
 
   Storage.remove(path.c_str());
   if (!Storage.rename(tmpPath.c_str(), path.c_str())) {
@@ -461,7 +653,19 @@ RecordStatus StateStore::readRecord(Ordinal ordinal, fsrs::CardState& stateOut) 
   if (!file.seek(recordOffset(ordinal))) return RecordStatus::IoError;
   if (file.read(record, sizeof(record)) != static_cast<int>(sizeof(record))) return RecordStatus::IoError;
 
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // The deck's key for this ordinal is a disk read (FLASHCARD_SPEC.md §7b.3 pin
+  // a). A FAILED read is an I/O error and must never reach the comparison
+  // below: keyAt()'s 0 would not match the stored key, the record would be
+  // judged torn, and the self-heal would rewrite a perfectly good schedule as a
+  // fresh New card. One bad sector under the deck's index would wipe the whole
+  // deck that way. Healing happens only on a SUCCESSFUL read that disagrees.
+  uint64_t deckKey = 0;
+  if (!deck->keyAtChecked(ordinal, deckKey)) return RecordStatus::IoError;
+  if (readU64(record, 0) != deckKey) {
+#else
   if (readU64(record, 0) != deck->keyAt(ordinal)) {
+#endif
     return healRecord(ordinal, stateOut) ? RecordStatus::KeyMismatch : RecordStatus::IoError;
   }
   normalizeState(record + RECORD_KEY_BYTES);
@@ -473,7 +677,15 @@ bool StateStore::writeRecordAt(Ordinal ordinal, const fsrs::CardState& state, bo
   if (!isOpen() || ordinal >= recordCountValue) return false;
 
   uint8_t record[CPST_RECORD_BYTES];
+#ifdef CROSSPOINT_FLASHCARDS_C3
+  // Same reasoning as readRecord(): a failed index read here would stamp a 0
+  // key onto a live record and make it read as torn for ever after (pin a).
+  uint64_t deckKey = 0;
+  if (!deck->keyAtChecked(ordinal, deckKey)) return false;
+  writeU64(record, 0, deckKey);
+#else
   writeU64(record, 0, deck->keyAt(ordinal));
+#endif
   memcpy(record + RECORD_KEY_BYTES, &state, RECORD_PAYLOAD_BYTES);
   normalizeState(record + RECORD_KEY_BYTES);
 
@@ -541,7 +753,21 @@ bool StateStore::scanRecords(RecordVisitor visit, void* ctx) {
     for (uint32_t i = 0; i < count; i++) {
       uint8_t* record = chunk + i * CPST_RECORD_BYTES;
       const Ordinal ordinal = static_cast<Ordinal>(first + i);
+#ifdef CROSSPOINT_FLASHCARDS_C3
+      // A failed deck-index read aborts the SCAN (pin a). It must not fall
+      // through to the heal below: a scan is how a session is built, so a bad
+      // sector under the index would otherwise rewrite every record in the deck
+      // as new — a whole deck's schedules gone, and the session reporting
+      // success. No session at all is the strictly smaller loss.
+      uint64_t deckKey = 0;
+      if (!deck->keyAtChecked(ordinal, deckKey)) {
+        LOG_ERR("DECK", "Deck index read failed at ordinal %u; scan abandoned", static_cast<unsigned>(ordinal));
+        return false;
+      }
+      if (readU64(record, 0) != deckKey) {
+#else
       if (readU64(record, 0) != deck->keyAt(ordinal)) {
+#endif
         // Healed and then visited — same contract as readRecord(). Skipping it
         // would take the card out of every session mode permanently.
         if (!healRecord(ordinal, state)) return false;
