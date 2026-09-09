@@ -27,6 +27,7 @@ enum class HomeMenuItem {
   RSS_SYNC,
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+  FLASHCARD_STUDY,
   FLASHCARD_SYNC,
 #endif
   SETTINGS_MENU
@@ -126,6 +127,7 @@ class ActivityManager {
   void goToRssSync();
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+  void goToFlashcardStudy();
   void goToFlashcardSync();
 #endif
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
