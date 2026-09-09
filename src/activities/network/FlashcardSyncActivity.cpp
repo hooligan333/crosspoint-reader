@@ -21,6 +21,7 @@
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+#include "flashcards/DeckPaths.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/DeckGuid.h"
@@ -35,10 +36,10 @@ namespace {
 // half file that the deck picker would offer.
 constexpr const char* TMP_LEAF = "/.tmp-deck";
 // Scheduling state lives beside the decks, one file per deck leaf
-// (FLASHCARD_SPEC.md §3). Created by the study session, deleted with the deck.
-constexpr const char* STATE_DIR_LEAF = "/.state/";
-constexpr const char* STATE_SUFFIX = ".state";
-constexpr const char* DECK_EXTENSION = ".deck";
+// (FLASHCARD_SPEC.md §3). Created by the study session, deleted with the deck;
+// both spellings of the path come from flashcards::statePathFor so this screen
+// and the study session cannot drift apart (util/../flashcards/DeckPaths.h).
+constexpr const char* DECK_EXTENSION = flashcards::DECK_EXTENSION;
 constexpr size_t MAX_FILENAME_CHARS = 80;
 // Same repaint throttle RssSyncActivity uses for its download bar: e-ink
 // refreshes cost more than the progress they show.
@@ -369,7 +370,7 @@ std::string FlashcardSyncActivity::pathFor(const Row& row) const { return destFo
 
 // The deck's scheduling state, which follows the deck file's own leaf name.
 std::string FlashcardSyncActivity::statePathFor(const Row& row) const {
-  return destFolder + STATE_DIR_LEAF + row.filename + STATE_SUFFIX;
+  return flashcards::statePathFor(destFolder, row.filename);
 }
 
 // The earlier row in this feed that already claimed the leaf name, or nullptr.
@@ -711,6 +712,15 @@ bool FlashcardSyncActivity::deleteRow(const Row& row) {
     // Not fatal: the deck itself is what the user asked to remove, and a stale
     // state file is rejected on content-hash mismatch at deck open.
     LOG_ERR("DECK", "State delete failed: %s", statePath.c_str());
+  }
+  // The merge temp counts as state and must go with it: StateStore::open()
+  // ADOPTS an orphaned `.tmp` (a merge that was interrupted between remove and
+  // rename left the only complete copy there, FLASHCARD_SPEC.md §3), so one
+  // left behind here would be picked up by whatever deck next takes this leaf
+  // name — the very thing the state delete above exists to prevent.
+  const std::string stateTemp = statePath + ".tmp";
+  if (Storage.exists(stateTemp.c_str()) && !Storage.remove(stateTemp.c_str())) {
+    LOG_ERR("DECK", "State temp delete failed: %s", stateTemp.c_str());
   }
   return true;
 }
