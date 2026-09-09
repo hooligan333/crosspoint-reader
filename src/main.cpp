@@ -434,6 +434,13 @@ void enterDeepSleep(bool fromTimeout = false) {
   // Ahead of prepareForDeepSleep(): the forced flush needs the card mounted.
   usageLog.noteSleep();
 #endif
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // Same window, same reason. On the soft-clock board startDeepSleep() below
+  // drops the battery MOSFET, so this is not a sleep — it is a power-off, and
+  // the last chance to write the time down before system time dies with the
+  // rail (FLASHCARD_SPEC.md §7b.2).
+  halClock.persistNow();
+#endif
   Storage.prepareForDeepSleep();
   LOG_DBG("MAIN", "Entering deep sleep");
 
@@ -598,6 +605,13 @@ void setup() {
   const bool restoreLightOn =
       isSilentReboot ? silentRebootLightOn : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // halClock.begin() ran before the SD mount, so the persisted epoch could not
+  // be read there. Restore it here — after the mount and ahead of the usage log
+  // below, which is the first thing that timestamps anything.
+  halClock.restoreFromStorage();
+#endif
 
 #ifdef CROSSPOINT_USAGE_LOG
   // After the SD mount, SETTINGS and the frontlight restore: the BOOT row and
@@ -877,6 +891,13 @@ void loop() {
   // rate-limits itself, so this costs a millis() compare on most passes. Below
   // the exclusive-storage return above: no SD work while USB Drive owns the card.
   usageLog.tick();
+#endif
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // Rewrites the persisted epoch at most every 6 h of uptime, for the device
+  // that goes flat without ever reaching the sleep path. Rate-limits itself the
+  // same way, and sits below the same exclusive-storage return.
+  halClock.tick();
 #endif
 
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());

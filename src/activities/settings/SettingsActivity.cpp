@@ -103,8 +103,14 @@ void SettingsActivity::rebuildSettingsLists() {
   }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   // Clock configuration only exists where the RTC probe found hardware; on
-  // clockless boards there is nothing to set.
+  // clockless boards there is nothing to set. CROSSPOINT_SOFT_CLOCK boards
+  // always have a clock; isAvailable() only says whether it has been SET yet,
+  // and hiding the entry while unset would hide "Sync clock now" with it.
+#ifdef CROSSPOINT_SOFT_CLOCK
+  {
+#else
   if (halClock.isAvailable()) {
+#endif
     systemSettings.push_back(SettingInfo::Action(StrId::STR_CLOCK, SettingAction::ClockSettings));
   }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));

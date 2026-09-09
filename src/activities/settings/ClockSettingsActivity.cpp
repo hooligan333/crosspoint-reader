@@ -98,10 +98,19 @@ void ClockSettingsActivity::buildScreen(UiScreen& screen) {
   rowItems_[ITEM_SHOW_ON_HOME].value = SETTINGS.clockShowInHeader ? tr(STR_SHOW) : tr(STR_HIDE);
   // The sync row's value is the current time itself: it confirms the sync,
   // previews format/zone changes, and reads "Not Set" until the first sync.
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // Live validity, never the persisted flag. clockHasBeenSynced survives a
+  // power cut and the soft clock does not, so after a flat battery the flag
+  // would still vouch for a clock that is unset or only restored-and-
+  // approximate. STALE deliberately reads the same as INVALID: both mean "this
+  // is not a time a server vouched for", which is what the row is asking.
+  const bool clockVouched = halClock.validity() == softclock::Validity::Valid;
+#else
+  const bool clockVouched = SETTINGS.clockHasBeenSynced;
+#endif
   rowItems_[ITEM_SYNC].value =
-      SETTINGS.clockHasBeenSynced && halClock.formatTime(syncTime_, sizeof(syncTime_), SETTINGS.clockFormat == 1)
-          ? syncTime_
-          : tr(STR_NOT_SET);
+      clockVouched && halClock.formatTime(syncTime_, sizeof(syncTime_), SETTINGS.clockFormat == 1) ? syncTime_
+                                                                                                   : tr(STR_NOT_SET);
 
   fui::ListProps props;
   props.items = rowItems_;
