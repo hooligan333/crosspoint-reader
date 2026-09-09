@@ -5,6 +5,9 @@
 #include <Arduino.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#ifdef CROSSPOINT_SOFT_CLOCK
+#include <HalClock.h>  // the soft clock's time-fix hook in startFetch()
+#endif
 #include <HalHeapGauge.h>  // gate*Heap() for the pre-reserve guard in fetchFeed()
 #include <HalStorage.h>
 #include <I18n.h>
@@ -151,6 +154,16 @@ void RssSyncActivity::startFetch() {
   requestUpdateAndWait();
 
   if (!fetchFeed()) return;  // fetchFeed() set the error state
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // The feed response's own Date header is the soft clock's primary time
+  // source: it just arrived, it cost nothing, and it works on a LAN with no
+  // route to an NTP server. NTP is the fallback for the server that sends no
+  // usable Date — WiFi is up and the "Fetching..." screen is still on the
+  // panel, the one moment in this flow where a few seconds cost the user
+  // nothing, and the HAL backs it off so a routeless device does not pay twice.
+  if (!halClock.applyServerDate(HttpDownloader::lastResponseDate())) halClock.maybeOpportunisticSync();
+#endif
 
   {
     RenderLock lock(*this);
