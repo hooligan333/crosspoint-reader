@@ -616,6 +616,18 @@ void FlashcardSyncActivity::runSync() {
 }
 
 FlashcardSyncActivity::ItemResult FlashcardSyncActivity::downloadRow(const Row& row) {
+  // Plain http is the server contract (DECK_SERVER_SPEC.md), and fetchFeed()
+  // already refuses an https FEED url for it: a LAN host has no verifiable
+  // certificate. An https enclosure is the same contract violation arriving one
+  // level down, so refuse it here too rather than let it reach the client. It is
+  // also the one place this feature can pull in the whole wolfSSL TLS 1.3
+  // handshake, and it would do so with the row list already resident. Fails this
+  // ITEM (the caller counts it in failedCount), not the run.
+  if (startsWithNoCase(row.url, "https://")) {
+    LOG_ERR("DECK", "Refusing https enclosure: %s", row.url.c_str());
+    return ItemResult::Failed;
+  }
+
   const std::string tmpPath = destFolder + TMP_LEAF;
   const std::string destPath = pathFor(row);
   // Enclosure URLs come off the wire raw: a space or other unsafe character in
