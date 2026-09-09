@@ -8,6 +8,20 @@
 #include <string>
 #include <vector>
 
+// Per-env item cap. The default is unchanged at 100, so every env that does not
+// define this builds exactly as it did before; only [env:x4-rss] overrides it.
+//
+// WHY IT IS OVERRIDABLE: the cap's cost is not the same on every device. The
+// combo (S3 + 8 MB PSRAM) envs can afford 100. The original X4 is an ESP32-C3
+// with ~380 KB RAM, no PSRAM and a heap a reading session leaves around 50 KB
+// free and fragmented — and the fetch cascade costs roughly 484 B per item with
+// typical field lengths (RssItem slot 100 + Row slot 88 + the title, URL, guid,
+// pubDate and filename strings), so 100 items would ask for more than the whole
+// free heap. See the comment on [env:x4-rss] in platformio.ini.
+#ifndef CROSSPOINT_RSS_MAX_ITEMS
+#define CROSSPOINT_RSS_MAX_ITEMS 100
+#endif
+
 /**
  * One <item> of an RSS 2.0 feed, reduced to the fields the sync screen needs.
  * Everything else in the document is ignored.
@@ -54,7 +68,8 @@ class RssParser final {
  public:
   // Feeds longer than this are truncated: the sync list is a hand-curated
   // selection, and 100 rows already costs a bounded ~25 KB of item strings.
-  static constexpr size_t MAX_ITEMS = 100;
+  // Overridden per env through CROSSPOINT_RSS_MAX_ITEMS above.
+  static constexpr size_t MAX_ITEMS = CROSSPOINT_RSS_MAX_ITEMS;
 
   RssParser();
   ~RssParser();
