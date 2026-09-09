@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "CardImage.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 #include "components/themes/BaseTheme.h"
@@ -67,8 +68,12 @@ class FlashcardStudyActivity final : public Activity {
   enum class Screen : uint8_t { Picker, Busy, Mode, Review, Done, Failed };
   /** What the Busy screen is about to do once its frame is on the panel. */
   enum class Work : uint8_t { None, OpenDeck, BuildSession };
-  /** Which buffer a wrapped line points into, plus the one line that is a rule. */
-  enum class LineKind : uint8_t { Front, Back, Rule };
+  /**
+   * Which buffer a wrapped line points into, plus the three line slots that
+   * point into no buffer at all: the reveal rule, a card image, and the blank
+   * filler an image occupies below its own first line.
+   */
+  enum class LineKind : uint8_t { Front, Back, Rule, Image, Blank };
   /** What the card menu offers; the rows it shows depend on the card's state. */
   enum class CardAction : uint8_t { Undo, Suspend };
 
@@ -97,7 +102,21 @@ class FlashcardStudyActivity final : public Activity {
   static constexpr unsigned long HOLD_MS = 700;  // undo / suspend long-press
   static constexpr uint8_t MAX_MENU_ACTIONS = 2;
 
-  /** A wrapped line as a span into `frontText` / `backText`; no per-line string. */
+  // A card side may carry at most four images (DECK_SERVER_SPEC.md §3.7), so a
+  // card carries at most eight. They live in one fixed member array — 8 x 16 B,
+  // read once per card load, never a heap block.
+  static constexpr uint8_t MAX_CARD_IMAGES = flashcards::DECK_MAX_IMAGES_PER_SIDE * 2;
+
+  /**
+   * A wrapped line as a span into `frontText` / `backText`; no per-line string.
+   *
+   * On a LineKind::Image line the two fields mean something else, and they are
+   * the only place they do: `start` is the slot in `cardImages`, and `length` is
+   * how many line slots the image block occupies (its own, plus that many minus
+   * one LineKind::Blank fillers behind it). Overloading them rather than growing
+   * the struct keeps a 256-line card at 1.5 KB — the array is allocated once per
+   * session and is one of the three buffers that make a session possible at all.
+   */
   struct CardLine {
     uint16_t start;
     uint16_t length;
@@ -193,12 +212,46 @@ class FlashcardStudyActivity final : public Activity {
     int width;
     int height;
   };
-  BodyArea bodyArea() const;
+  /**
+   * The card body as it is DRAWN right now: the grade band is subtracted only
+   * once the answer is showing, because only then is anything drawn there.
+   */
+  BodyArea bodyArea() const { return bodyArea(revealed); }
+  /**
+   * The card body with the grade band explicitly present or absent.
+   *
+   * `bodyArea(true)` is the PAGING geometry, and the wrap uses it in both
+   * states. Sizing pages by the visible body instead would give the question
+   * side taller pages than the answer side, so revealing would re-flow the front
+   * under the reader: the same front would occupy different pages, and a reader
+   * who had paged to the middle of a long question would be thrown somewhere
+   * else by the reveal. Laying both states out against the shorter (revealed)
+   * body costs the question screen a few rows of unused space at the bottom —
+   * where the grade band is about to appear anyway — and buys a front that pages
+   * identically either side of the reveal.
+   */
+  BodyArea bodyArea(bool withGradeBand) const;
   int gradeRowTop() const;
   int measureSpan(const char* text, size_t length) const;
-  /** Wraps one side into at most `lineLimit` total lines; sets `overflowed` if it did not fit. */
+  /**
+   * Wraps one side into at most `lineLimit` total lines; sets `overflowed` if it
+   * did not fit.
+   *
+   * `images` / `imageCount` are that side's placements, in text order, and
+   * `imageSlot` is where the first of them sits in `cardImages`. They are
+   * emitted as the wrap passes their `textOffset`, so an image counts against
+   * exactly the same line budget the text does.
+   */
   void appendWrapped(const char* text, uint16_t length, LineKind kind, int maxWidth, uint16_t lineLimit,
-                     bool& overflowed);
+                     bool& overflowed, const flashcards::DeckImagePlacement* images, uint8_t imageCount,
+                     uint8_t imageSlot);
+  /** Appends one line slot if the budget allows; sets `overflowed` when it does not. */
+  bool appendLine(const CardLine& line, uint16_t lineLimit, bool& overflowed);
+  /**
+   * Appends the image block for `slot`: page padding if it would straddle a page
+   * break, then its own line plus its blank fillers.
+   */
+  void appendImage(uint8_t slot, uint16_t lineLimit, bool& overflowed);
   void wrapForDisplay();
   const char* bufferFor(LineKind kind) const;
   /** "<1m" / "10m" / "3d" / "2mo", via the i18n unit formats. */
@@ -213,7 +266,16 @@ class FlashcardStudyActivity final : public Activity {
   // --- Render helpers, one per screen ---
   void renderPicker() const;
   void renderMode() const;
-  void renderReview() const;
+  /**
+   * Not const, unlike its three siblings: a card image is decoded WHEN THE PAGE
+   * CARRYING IT PAINTS (FLASHCARD_SPEC.md §2.2), which means reading its encoded
+   * bytes off the card and running the decoder from inside the render. Nothing
+   * here allocates — the buffer and the decoder were claimed at session start —
+   * but both are mutated, and saying so is better than a mutable member.
+   */
+  void renderReview();
+  /** Draws one image into its reserved box, or a placeholder if anything refuses. */
+  void drawCardImage(const CardLine& line, const BodyArea& body, int y, int lineHeight);
   void renderDone() const;
   void drawTwoLineMessage(const char* headline, const char* detail) const;
   /** Shared themed-list draw: `windowOffset >= 0` = deck rows from there, -1 = mode rows. */
@@ -247,6 +309,18 @@ class FlashcardStudyActivity final : public Activity {
   std::unique_ptr<char[]> frontText;
   std::unique_ptr<char[]> backText;
   std::unique_ptr<CardLine[]> lines;
+  // The current card's images: front placements first, then back. Filled by
+  // loadCurrentCard() while `haveCard` is false, so the render task never reads
+  // it half-written, and read again only by the wrap and the draw.
+  flashcards::DeckImagePlacement cardImages[MAX_CARD_IMAGES] = {};
+  uint8_t frontImageCount = 0;
+  uint8_t backImageCount = 0;
+  // One encoded-JPEG buffer for the whole session, sized to the deck's largest
+  // image (DeckFile::maxImageBytes()) and claimed only for a deck that has any.
+  // A deck without images pays nothing, and the render path never allocates.
+  std::unique_ptr<uint8_t[]> imageBytes;
+  uint32_t imageBytesCapacity = 0;
+  flashcards::CardImageDecoder imageDecoder;
   uint16_t frontLength = 0;
   uint16_t backLength = 0;
   uint16_t lineCount = 0;

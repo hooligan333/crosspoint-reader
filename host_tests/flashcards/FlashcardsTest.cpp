@@ -172,6 +172,238 @@ std::vector<uint8_t> buildDeck(const std::vector<TestCard>& cards, const float* 
   return out;
 }
 
+// --- v2 card images (CPDK v2, DECK_SERVER_SPEC.md §3.7) ----------------------
+//
+// Real JPEGs, not hand-rolled marker soup: the reader's open-time checks are
+// structural, but loadImage() walks an actual JPEG's marker segments to its
+// start-of-frame and refuses anything that is not the baseline single-component
+// frame of exactly the table's size that §3.7's encoding contract promises. The
+// three fixtures below are the three answers that walk can give, generated once
+// with Pillow at quality 80 (the converter's own setting) and checked in as
+// bytes so this suite stays a plain g++ build with no image toolchain.
+
+// Baseline 8-bit grayscale, 16x12 -- what the converter is contracted to emit.
+const uint8_t JPEG_GRAY_16x12[] = {
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x06, 0x04, 0x05, 0x06, 0x05, 0x04, 0x06, 0x06, 0x05, 0x06, 0x07, 0x07, 0x06,
+    0x08, 0x0a, 0x10, 0x0a, 0x0a, 0x09, 0x09, 0x0a, 0x14, 0x0e, 0x0f, 0x0c, 0x10, 0x17, 0x14, 0x18, 0x18, 0x17, 0x14,
+    0x16, 0x16, 0x1a, 0x1d, 0x25, 0x1f, 0x1a, 0x1b, 0x23, 0x1c, 0x16, 0x16, 0x20, 0x2c, 0x20, 0x23, 0x26, 0x27, 0x29,
+    0x2a, 0x29, 0x19, 0x1f, 0x2d, 0x30, 0x2d, 0x28, 0x30, 0x25, 0x28, 0x29, 0x28, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00,
+    0x0c, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x1f, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+    0x0a, 0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04,
+    0x00, 0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61,
+    0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33,
+    0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36,
+    0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84,
+    0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+    0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6,
+    0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6,
+    0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xff, 0xda, 0x00, 0x08, 0x01,
+    0x01, 0x00, 0x00, 0x3f, 0x00, 0x93, 0x4a, 0xf8, 0x6f, 0xa3, 0xf8, 0x5f, 0x4a, 0xfe, 0xd2, 0xf1, 0x0d, 0xc5, 0xb6,
+    0x9f, 0x64, 0x9c, 0x79, 0x93, 0x90, 0xbb, 0x98, 0x29, 0x6d, 0xaa, 0x3a, 0xb3, 0x10, 0xa7, 0x0a, 0xa0, 0x93, 0x8e,
+    0x01, 0xa8, 0xa5, 0xf8, 0x80, 0x90, 0x5d, 0x25, 0xb7, 0x80, 0xb4, 0x08, 0xae, 0x63, 0x8d, 0xf0, 0xd7, 0xda, 0x9a,
+    0x30, 0x49, 0x00, 0x2c, 0x0e, 0xc8, 0x94, 0x86, 0xc1, 0xf9, 0x18, 0x33, 0x30, 0x3d, 0x41, 0x41, 0xd6, 0xb9, 0x4f,
+    0x0c, 0x68, 0xd6, 0xfa, 0xbd, 0xf9, 0xbe, 0xd5, 0x65, 0xb9, 0xbe, 0xbd, 0x97, 0x6f, 0x99, 0x71, 0x73, 0x29, 0x96,
+    0x47, 0xc0, 0x00, 0x65, 0x9b, 0x24, 0xe0, 0x00, 0x3e, 0x80, 0x57, 0xb2, 0xc7, 0xa5, 0x58, 0x68, 0x3e, 0x0b, 0xd6,
+    0xf5, 0x7b, 0x3b, 0x58, 0x9e, 0xe7, 0x4f, 0xd3, 0xe7, 0xbb, 0x89, 0x65, 0x19, 0x46, 0x78, 0xe3, 0x66, 0x01, 0x80,
+    0xc1, 0xc6, 0x40, 0xce, 0x08, 0xaf, 0xff, 0xd9,
+};
+
+// Progressive grayscale, 16x12 -- SOF2. JPEGDEC decodes a progressive frame at
+// a DC-only eighth scale, so this would draw a quarter-sized smear inside a
+// full-sized reserved box; it is refused before the decoder ever sees it.
+const uint8_t JPEG_PROGRESSIVE_16x12[] = {
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x06, 0x04, 0x05, 0x06, 0x05, 0x04, 0x06, 0x06, 0x05, 0x06, 0x07, 0x07, 0x06,
+    0x08, 0x0a, 0x10, 0x0a, 0x0a, 0x09, 0x09, 0x0a, 0x14, 0x0e, 0x0f, 0x0c, 0x10, 0x17, 0x14, 0x18, 0x18, 0x17, 0x14,
+    0x16, 0x16, 0x1a, 0x1d, 0x25, 0x1f, 0x1a, 0x1b, 0x23, 0x1c, 0x16, 0x16, 0x20, 0x2c, 0x20, 0x23, 0x26, 0x27, 0x29,
+    0x2a, 0x29, 0x19, 0x1f, 0x2d, 0x30, 0x2d, 0x28, 0x30, 0x25, 0x28, 0x29, 0x28, 0xff, 0xc2, 0x00, 0x0b, 0x08, 0x00,
+    0x0c, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x16, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x05, 0x06, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x42, 0x56, 0xcb, 0xff, 0xc4, 0x00, 0x19, 0x10, 0x00, 0x02, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0x01, 0x04, 0x05, 0x11, 0xff, 0xda, 0x00, 0x08, 0x01,
+    0x01, 0x00, 0x01, 0x05, 0x02, 0x56, 0x6a, 0x6a, 0xaa, 0x74, 0x38, 0x55, 0x92, 0x2d, 0x38, 0x50, 0x22, 0x97, 0xff,
+    0xc4, 0x00, 0x21, 0x10, 0x00, 0x02, 0x02, 0x01, 0x02, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0x00, 0x03, 0x12, 0x04, 0x11, 0x13, 0x31, 0x41, 0x42, 0x51, 0x61, 0x81, 0xff, 0xda, 0x00, 0x08,
+    0x01, 0x01, 0x00, 0x06, 0x3f, 0x02, 0xe2, 0x6a, 0x19, 0x6b, 0x4f, 0x26, 0x63, 0xa0, 0xa0, 0x30, 0x1d, 0xf6, 0x75,
+    0xf9, 0x33, 0xb4, 0xb3, 0xb9, 0xe6, 0xcc, 0x77, 0x32, 0xeb, 0x51, 0x46, 0x55, 0xd6, 0x58, 0x6f, 0xe8, 0x4f, 0xff,
+    0xc4, 0x00, 0x1b, 0x10, 0x01, 0x00, 0x02, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x11, 0x21, 0x00, 0x31, 0x51, 0x81, 0x61, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x3f, 0x21,
+    0x80, 0x41, 0xf1, 0x96, 0x26, 0x0e, 0xb5, 0xa3, 0x00, 0xd2, 0x16, 0x6c, 0x6d, 0xa1, 0x7c, 0x65, 0x7c, 0xca, 0x9c,
+    0x4b, 0x03, 0xd7, 0x13, 0x68, 0x1b, 0x45, 0x46, 0xf3, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x10,
+    0x5f, 0xff, 0xc4, 0x00, 0x19, 0x10, 0x01, 0x01, 0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x11, 0x00, 0x21, 0x31, 0x71, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x3f, 0x10,
+    0xe4, 0x55, 0xd4, 0x81, 0x41, 0xd4, 0x14, 0x05, 0x66, 0x87, 0x25, 0xbf, 0x21, 0x88, 0x43, 0x71, 0x0e, 0xa0, 0x3d,
+    0x13, 0xdc, 0x77, 0xb7, 0x63, 0x94, 0x02, 0xd1, 0x60, 0x07, 0x81, 0x83, 0x33, 0x9d, 0xa5, 0x00, 0x11, 0x94, 0x2c,
+    0x4c, 0xff, 0xd9,
+};
+
+// Baseline COLOUR, 16x12 -- three components where the contract promises one.
+const uint8_t JPEG_RGB_16x12[] = {
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x06, 0x04, 0x05, 0x06, 0x05, 0x04, 0x06, 0x06, 0x05, 0x06, 0x07, 0x07, 0x06,
+    0x08, 0x0a, 0x10, 0x0a, 0x0a, 0x09, 0x09, 0x0a, 0x14, 0x0e, 0x0f, 0x0c, 0x10, 0x17, 0x14, 0x18, 0x18, 0x17, 0x14,
+    0x16, 0x16, 0x1a, 0x1d, 0x25, 0x1f, 0x1a, 0x1b, 0x23, 0x1c, 0x16, 0x16, 0x20, 0x2c, 0x20, 0x23, 0x26, 0x27, 0x29,
+    0x2a, 0x29, 0x19, 0x1f, 0x2d, 0x30, 0x2d, 0x28, 0x30, 0x25, 0x28, 0x29, 0x28, 0xff, 0xdb, 0x00, 0x43, 0x01, 0x07,
+    0x07, 0x07, 0x0a, 0x08, 0x0a, 0x13, 0x0a, 0x0a, 0x13, 0x28, 0x1a, 0x16, 0x1a, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28,
+    0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28,
+    0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28,
+    0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x0c, 0x00, 0x10, 0x03, 0x01, 0x22, 0x00,
+    0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xff, 0xc4, 0x00, 0x1f, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+    0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04, 0x00,
+    0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
+    0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62,
+    0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37,
+    0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a,
+    0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85,
+    0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
+    0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+    0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7,
+    0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xff, 0xc4, 0x00, 0x1f, 0x01, 0x00,
+    0x03, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+    0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x11, 0x00, 0x02, 0x01, 0x02, 0x04, 0x04,
+    0x03, 0x04, 0x07, 0x05, 0x04, 0x04, 0x00, 0x01, 0x02, 0x77, 0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31,
+    0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09,
+    0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a,
+    0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a,
+    0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+    0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
+    0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7,
+    0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8,
+    0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9,
+    0xfa, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0x6d, 0x86, 0x8f, 0x6d,
+    0x61, 0xa1, 0xb4, 0x97, 0x11, 0xc3, 0x67, 0x60, 0x89, 0xe5, 0x97, 0x11, 0x9b, 0x6b, 0x79, 0x4f, 0x96, 0xec, 0x40,
+    0xdc, 0x4c, 0xb2, 0x1c, 0x67, 0xf7, 0x40, 0x0d, 0xd8, 0x38, 0x19, 0x19, 0x28, 0xda, 0xa9, 0x86, 0xfa, 0x1b, 0x6b,
+    0x28, 0x23, 0xf2, 0x1d, 0x80, 0x65, 0xbb, 0x49, 0x04, 0x52, 0xa6, 0xe7, 0x38, 0x4b, 0x68, 0x88, 0x6d, 0xa7, 0x0a,
+    0x56, 0x47, 0x3b, 0xb8, 0xc1, 0x00, 0xe0, 0xd5, 0x4d, 0x2e, 0xcd, 0x24, 0xf1, 0x95, 0xd5, 0x99, 0x92, 0x5d, 0xc8,
+    0xa1, 0x5e, 0xe9, 0xdb, 0xcc, 0xb8, 0x94, 0x79, 0x49, 0x8d, 0xd2, 0x3e, 0x4e, 0x54, 0x70, 0x0a, 0xe0, 0x81, 0xdf,
+    0x81, 0x8d, 0xeb, 0x8b, 0x68, 0x61, 0xd3, 0x3c, 0x5b, 0x3c, 0x71, 0x85, 0x1a, 0x64, 0x57, 0x8e, 0xb1, 0x82, 0x40,
+    0xb8, 0x68, 0xd6, 0x46, 0x06, 0x52, 0x0e, 0xe6, 0x04, 0xfd, 0xe1, 0x90, 0x0f, 0xa6, 0x79, 0xaa, 0xaa, 0xb9, 0x1b,
+    0xe7, 0x6d, 0xdd, 0x27, 0xe5, 0xae, 0xdf, 0x35, 0xf7, 0x79, 0x15, 0x83, 0x52, 0xae, 0xbf, 0xd9, 0x92, 0xa7, 0x16,
+    0xaf, 0x7d, 0xe5, 0xf7, 0xda, 0xc9, 0xfa, 0x7d, 0xe7, 0xff, 0xd9,
+};
+
+/** One image-table entry, plus the encoded bytes that go in the image blob. */
+struct TestImage {
+  const uint8_t* jpeg;
+  size_t bytes;
+  uint16_t width;
+  uint16_t height;
+  uint32_t reserved = 0;
+  // Overrides for the malformed cases: when non-zero these replace what the
+  // builder would otherwise compute, so a test can point an entry past the blob
+  // or claim a size the JPEG does not have.
+  uint32_t forceBlobOff = 0;
+  uint32_t forceByteLen = 0;
+  bool useForcedOffsets = false;
+};
+
+/** One placement-table entry, verbatim. The builder does NOT sort them. */
+struct TestPlacement {
+  uint16_t ordinal;
+  uint8_t side;
+  uint32_t textOffset;
+  uint32_t imageIndex;
+  uint8_t reserved = 0;
+};
+
+TestImage grayImage() { return TestImage{JPEG_GRAY_16x12, sizeof(JPEG_GRAY_16x12), 16, 12, 0, 0, 0, false}; }
+
+/**
+ * A well-formed CPDK v2 file: header, optional FSRS block, image table,
+ * placement table, card index, text blob, image blob.
+ *
+ * Deliberately a separate builder rather than a flag on buildDeck(): v1 files
+ * must keep coming out of that one byte-identically, and every v1 assertion in
+ * this suite is written against it.
+ */
+std::vector<uint8_t> buildDeckV2(const std::vector<TestCard>& cards, const std::vector<TestImage>& images,
+                                 const std::vector<TestPlacement>& placements, const float* w = nullptr) {
+  const bool hasParams = w != nullptr;
+  const size_t imageTableStart = 64 + (hasParams ? 84u : 0u);
+  const size_t placementStart = imageTableStart + 4 + images.size() * 16;
+  const size_t indexStart = placementStart + 4 + placements.size() * 12;
+
+  std::vector<uint8_t> out;
+  out.resize(indexStart + cards.size() * 20, 0);
+  // An explicit size guard, and it is here for the COMPILER. `indexStart` is
+  // built from two container sizes, and g++ 11 loses the vector's allocation
+  // size across that: it then reports the 64-byte header's own writes as
+  // "writing 2 bytes into a region of size 0" and -Werror=stringop-overflow
+  // fails the build. Restating the invariant the arithmetic already guarantees
+  // (a CPDK file is at least its 64-byte header) hands the fact back.
+  if (out.size() < 64) return out;
+  memcpy(out.data(), "CPDK", 4);
+  putU16(out, 4, 2);
+  putU16(out, 6, static_cast<uint16_t>((hasParams ? 1 : 0) | 2));  // has_images is always set in v2
+  putU32(out, 8, static_cast<uint32_t>(cards.size()));
+  const char* title = "Test Deck";
+  out[20] = static_cast<uint8_t>(strlen(title));
+  memcpy(out.data() + 21, title, strlen(title));
+  if (hasParams) memcpy(out.data() + 64, w, 84);
+
+  // The image blob is written densely, and the table records where each image
+  // landed in it. Density is part of the CONTRACT (§2.2 I1 pins), not merely
+  // what the converter happens to do: the reader validates the tiling at open,
+  // and that is what lets it trust the blob's derived start. A table that does
+  // NOT tile is written by a test, either through TestImage's forced offsets or
+  // by patching an entry's blob_off after the fact.
+  std::vector<uint8_t> imageBlob;
+  putU32(out, imageTableStart, static_cast<uint32_t>(images.size()));
+  for (size_t i = 0; i < images.size(); i++) {
+    const size_t entry = imageTableStart + 4 + i * 16;
+    const uint32_t blobOff = static_cast<uint32_t>(imageBlob.size());
+    const uint32_t byteLen = static_cast<uint32_t>(images[i].bytes);
+    putU32(out, entry, images[i].useForcedOffsets ? images[i].forceBlobOff : blobOff);
+    putU32(out, entry + 4, images[i].useForcedOffsets ? images[i].forceByteLen : byteLen);
+    putU16(out, entry + 8, images[i].width);
+    putU16(out, entry + 10, images[i].height);
+    putU32(out, entry + 12, images[i].reserved);
+    imageBlob.insert(imageBlob.end(), images[i].jpeg, images[i].jpeg + images[i].bytes);
+  }
+
+  putU32(out, placementStart, static_cast<uint32_t>(placements.size()));
+  for (size_t i = 0; i < placements.size(); i++) {
+    const size_t entry = placementStart + 4 + i * 12;
+    putU16(out, entry, placements[i].ordinal);
+    out[entry + 2] = placements[i].side;
+    out[entry + 3] = placements[i].reserved;
+    putU32(out, entry + 4, placements[i].textOffset);
+    putU32(out, entry + 8, placements[i].imageIndex);
+  }
+
+  std::vector<uint8_t> blob;
+  for (size_t i = 0; i < cards.size(); i++) {
+    const size_t entry = indexStart + i * 20;
+    putU64(out, entry, cards[i].key);
+    putU32(out, entry + 8, static_cast<uint32_t>(blob.size()));
+    putU16(out, entry + 12, static_cast<uint16_t>(cards[i].front.size()));
+    blob.insert(blob.end(), cards[i].front.begin(), cards[i].front.end());
+    putU32(out, entry + 14, static_cast<uint32_t>(blob.size()));
+    putU16(out, entry + 18, static_cast<uint16_t>(cards[i].back.size()));
+    blob.insert(blob.end(), cards[i].back.begin(), cards[i].back.end());
+  }
+  out.insert(out.end(), blob.begin(), blob.end());
+  out.insert(out.end(), imageBlob.begin(), imageBlob.end());
+
+  // v2 folds the image table's (blob_off, byte_len) pairs into the same FNV
+  // pass as the card keys, so that an edit which only replaced a picture still
+  // changes the guid the feed compares (§3.7). With no images the second half
+  // is empty and v1 and v2 agree, which the group below asserts.
+  std::vector<uint8_t> hashInput(cards.size() * 8);
+  for (size_t i = 0; i < cards.size(); i++) memcpy(hashInput.data() + i * 8, &cards[i].key, 8);
+  for (size_t i = 0; i < images.size(); i++) {
+    const size_t entry = imageTableStart + 4 + i * 16;
+    hashInput.insert(hashInput.end(), out.begin() + static_cast<long>(entry),
+                     out.begin() + static_cast<long>(entry) + 8);
+  }
+  putU64(out, 12, fnv1a64(hashInput.data(), hashInput.size()));
+  return out;
+}
+
 /**
  * Cards whose keys are deliberately NOT ascending with their ordinals.
  *
@@ -450,8 +682,17 @@ void testDeckValidation() {
   };
   static const Case cases[] = {
       {"bad magic", DeckError::BadMagic, [](std::vector<uint8_t>& b) { b[0] = 'X'; }},
-      {"version 2", DeckError::BadVersion, [](std::vector<uint8_t>& b) { putU16(b, 4, 2); }},
-      {"reserved flag", DeckError::UnknownFlags, [](std::vector<uint8_t>& b) { putU16(b, 6, 0x0002); }},
+      {"version 3", DeckError::BadVersion, [](std::vector<uint8_t>& b) { putU16(b, 4, 3); }},
+      // v2 is READ by this build now (CPDK v2, FLASHCARD_SPEC.md §2.2), so the
+      // version alone is no longer a refusal -- but a v2 header that does not
+      // set has_images is a file nobody wrote (an --images run that embedded
+      // nothing is emitted as v1), and bit1 on a V1 header is still an unknown
+      // bit, because v1 is exactly the version that does not know what it
+      // means. Both directions are pinned here; the rest of the v2 matrix has
+      // its own group below.
+      {"version 2 without has_images", DeckError::BadImageTable, [](std::vector<uint8_t>& b) { putU16(b, 4, 2); }},
+      {"has_images on a v1 header", DeckError::UnknownFlags, [](std::vector<uint8_t>& b) { putU16(b, 6, 0x0002); }},
+      {"reserved flag", DeckError::UnknownFlags, [](std::vector<uint8_t>& b) { putU16(b, 6, 0x0004); }},
       {"zero cards", DeckError::BadCardCount, [](std::vector<uint8_t>& b) { putU32(b, 8, 0); }},
       // One past whatever this build's cap is: 40001 by default, 2001 on the C3
       // (FLASHCARD_SPEC.md §7b.3). The dedicated cap group below pins the
@@ -867,6 +1108,598 @@ void testC0Sanitize() {
   // Clean text is byte-identical, i.e. the sweep is not mangling anything else.
   EXPECT(deck.loadSide(2, CardSide::Front, text, sizeof(text), length));
   EXPECT_STR(text, "front 2");
+}
+
+// --- DeckFile: CPDK v2 card images -------------------------------------------
+
+/**
+ * The v2 open-time refusal matrix: one case per rejection `read_deck.py`'s
+ * `_validate_images()` raises, minus the four that are deliberately NOT open's
+ * job (see the end of this comment).
+ *
+ * Both configurations run every case. The two tables are streamed rather than
+ * held on BOTH builds -- the Pro's resident-index trick does not scale to a
+ * table the format lets grow to 6.4 MB (DeckFile.h's v2 note) -- so there is one
+ * code path here and "parity" is not a separate group: it is the fact that this
+ * group runs twice and has to give the same answers both times.
+ *
+ * Moved to loadImage(), and covered in testImageBytes(): the frame sniff
+ * (baseline / one component / dimensions agreeing with the table). Sniffing at
+ * open costs one SD seek per image -- minutes of them at the format's cap -- and
+ * buys a refused DECK where a refused PICTURE is the right answer.
+ */
+void testImageValidation() {
+  beginGroup("deck/v2 validation");
+  resetCard();
+  makeDirs();
+
+  const std::vector<TestCard> cards = makeCards(4);
+  const std::vector<TestImage> images = {grayImage(), grayImage()};
+  const std::vector<TestPlacement> placements = {
+      TestPlacement{0, 0, 0, 0},
+      TestPlacement{0, 1, 6, 1},
+      TestPlacement{2, 0, 3, 0},
+  };
+  const std::vector<uint8_t> good = buildDeckV2(cards, images, placements);
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, good)), static_cast<int>(DeckError::Ok));
+  EXPECT(deck.hasImages());
+  EXPECT_EQ_U(deck.cardCount(), 4);
+  EXPECT_EQ_U(deck.maxImageBytes(), sizeof(JPEG_GRAY_16x12));
+  // The text blob still reads correctly with an image blob sitting behind it.
+  // That boundary is DERIVED (file_size - the image table's total length), not
+  // stored, and getting it wrong would hand the text renderer JPEG bytes.
+  char text[flashcards::DECK_MAX_SLICE_BYTES + 1];
+  uint16_t length = 0;
+  EXPECT(deck.loadSide(3, CardSide::Back, text, sizeof(text), length));
+  EXPECT_STR(text, "back 3");
+  EXPECT(deck.loadSide(0, CardSide::Front, text, sizeof(text), length));
+  EXPECT_STR(text, "front 0");
+  deck.close();
+
+  // An image-free deck hashes identically under both versions (§3.7), so a
+  // converter switched to --images does not churn every guid it emits.
+  EXPECT_EQ_U(getU64(buildDeckV2(cards, {}, {}), 12), getU64(buildDeck(cards), 12));
+
+  struct Case {
+    const char* name;
+    DeckError expected;
+    std::vector<uint8_t> (*build)();
+  };
+  const Case cases[] = {
+      // -- the image table --
+      {"image_count 0", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 64, 0);
+         return b;
+       }},
+      // Four images per SIDE over two sides is eight per card, so 4 cards cap
+      // the table at 32 and 33 is the first refusal. The old 4x-total bound was
+      // unsatisfiable beside the per-side rule (FLASHCARD_SPEC.md §2.2 I1 pins),
+      // and 32 passing here is half of what this case pins.
+      {"image_count over 8x cards", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 64, 33);  // 2 x 4 per side x 4 cards is the cap
+         return b;
+       }},
+      // Cut inside the two-entry image table: the count is in range, the bytes
+      // it names are not in the file. Both sections have to be proved to FIT
+      // before a single entry of either is read (§3.7 device check 2).
+      {"image table cut short", DeckError::ShortFile,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         b.resize(64 + 4 + 20);  // image_count is read; its 32 bytes of entries are not there
+         return b;
+       }},
+      {"image byte_len 0", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68 + 4, 0);
+         return b;
+       }},
+      // Two byte_len cases, and the second is the one that means something.
+      // Patching the length on a 1 KB deck is refused by the 64 KB cap, but it
+      // would ALSO be refused by "this image runs past the file" -- so on its
+      // own it never proves the cap exists. The second builds a file that really
+      // does hold 70000 bytes of image, so every other check passes and only the
+      // cap can refuse it.
+      {"image byte_len over 64 KB", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68 + 4, 64 * 1024 + 1);
+         return b;
+       }},
+      {"image byte_len over 64 KB in a file long enough to hold it", DeckError::BadImageTable,
+       [] {
+         static const std::vector<uint8_t> oversized(64 * 1024 + 1, 0x5A);
+         const TestImage huge{oversized.data(), oversized.size(), 16, 12, 0, 0, 0, false};
+         return buildDeckV2(makeCards(1), {huge}, {TestPlacement{0, 0, 0, 0}});
+       }},
+      // A v2 header with has_images CLEARED, on a file whose image and placement
+      // sections are otherwise perfectly well formed -- so nothing downstream
+      // can refuse it and the flag check is the only thing standing between this
+      // file and an open deck. A v2 file always carries images (an --images run
+      // that embedded nothing is written as v1), so this is a file nobody wrote.
+      {"v2 header without has_images, sections intact", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()},
+                                              {TestPlacement{0, 0, 0, 0}, TestPlacement{1, 1, 2, 1}});
+         putU16(b, 6, 0);  // format_version stays 2; only the has_images bit goes
+         return b;
+       }},
+      {"image reserved non-zero", DeckError::BadImageTable,
+       [] {
+         std::vector<TestImage> bad = {grayImage(), grayImage()};
+         bad[1].reserved = 1;
+         return buildDeckV2(makeCards(4), bad, {TestPlacement{0, 0, 0, 0}});
+       }},
+      {"image width 0", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU16(b, 68 + 8, 0);
+         return b;
+       }},
+      {"image width over 440", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU16(b, 68 + 8, 441);
+         return b;
+       }},
+      {"image height 0", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU16(b, 68 + 10, 0);
+         return b;
+       }},
+      {"image height over 440", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU16(b, 68 + 10, 441);
+         return b;
+       }},
+      {"image end wraps past the file", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68, 0xFFFFFF00u);  // blob_off + byte_len must not fold back inside
+         return b;
+       }},
+      // -- the blob must TILE (§2.2 I1 pins) --------------------------------
+      //
+      // The image blob has no length field: it runs to EOF, so its start is
+      // derived and every blob_off is read against that derived start. Nothing
+      // inside an entry can notice the blob having shifted. Requiring the table
+      // to tile the blob exactly -- entry 0 at offset 0, each entry beginning
+      // where the last one ended -- is what turns "the pictures came out wrong"
+      // into a refusal. Four ways a table can fail to tile, and each is one
+      // patched u32 on an otherwise good two-image deck.
+      {"first image not at blob offset 0", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68, 1);
+         return b;
+       }},
+      {"gap between two images", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68 + 16, static_cast<uint32_t>(sizeof(JPEG_GRAY_16x12)) + 1);
+         return b;
+       }},
+      // Two entries naming the same bytes. Legal-looking (both ends are inside
+      // the file) and the reason "every end is in range" was never enough.
+      {"two images aliasing the same blob bytes", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68 + 16, 0);
+         return b;
+       }},
+      // Table order must BE blob order: the two entries swapped describe the
+      // same set of bytes and the same total, and only the tiling walk sees it.
+      {"table order does not match blob order", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68, static_cast<uint32_t>(sizeof(JPEG_GRAY_16x12)));
+         putU32(b, 68 + 16, 0);
+         return b;
+       }},
+      // THE one this closes. A single junk byte appended to the download slides
+      // the EOF-anchored image blob by one: before the boundary check every
+      // image read a byte off, every frame sniff failed, and the card drew a
+      // full set of placeholder boxes with nothing logged and nothing refused.
+      {"one stray byte appended after the image blob", DeckError::BadImageTable,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         b.push_back(0x00);
+         return b;
+       }},
+      // The blob's start is file_size - blob_length; stretching the only entry
+      // moves that start in front of the text blob, which is the one arrangement
+      // §3.7 refuses outright. ONE image on purpose: with a second entry behind
+      // it the stretch would break the dense tiling first and this would stop
+      // being a test of the blob/index overlap.
+      {"image blob overlaps the card index", DeckError::ShortFile,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 68 + 4, static_cast<uint32_t>(b.size()) - 4);
+         return b;
+       }},
+      // -- the placement table --
+      {"placement table cut short", DeckError::ShortFile,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         b.resize(64 + 4 + 32 + 4 + 6);  // placement_count is read; its 12 bytes are not there
+         return b;
+       }},
+      {"placement_count over 8x cards", DeckError::BadPlacement,
+       [] {
+         std::vector<uint8_t> b = buildDeckV2(makeCards(4), {grayImage(), grayImage()}, {TestPlacement{0, 0, 0, 0}});
+         putU32(b, 64 + 4 + 2 * 16, 33);
+         return b;
+       }},
+      {"placement reserved non-zero", DeckError::BadPlacement,
+       [] {
+         std::vector<TestPlacement> bad = {TestPlacement{0, 0, 0, 0, 1}};
+         return buildDeckV2(makeCards(4), {grayImage()}, bad);
+       }},
+      {"placement side 2", DeckError::BadPlacement,
+       [] { return buildDeckV2(makeCards(4), {grayImage()}, {TestPlacement{0, 2, 0, 0}}); }},
+      {"placement ordinal past the deck", DeckError::BadPlacement,
+       [] { return buildDeckV2(makeCards(4), {grayImage()}, {TestPlacement{4, 0, 0, 0}}); }},
+      {"placement image_index past the table", DeckError::BadPlacement,
+       [] { return buildDeckV2(makeCards(4), {grayImage()}, {TestPlacement{0, 0, 0, 1}}); }},
+      {"placement text_offset past the side", DeckError::BadPlacement,
+       [] { return buildDeckV2(makeCards(4), {grayImage()}, {TestPlacement{0, 0, 8, 0}}); }},
+      {"placements out of order by ordinal", DeckError::BadPlacement,
+       [] {
+         return buildDeckV2(makeCards(4), {grayImage(), grayImage()},
+                            {TestPlacement{2, 0, 0, 0}, TestPlacement{0, 0, 0, 1}});
+       }},
+      {"placements out of order by side", DeckError::BadPlacement,
+       [] {
+         return buildDeckV2(makeCards(4), {grayImage(), grayImage()},
+                            {TestPlacement{0, 1, 0, 0}, TestPlacement{0, 0, 0, 1}});
+       }},
+      {"placements out of order by offset", DeckError::BadPlacement,
+       [] {
+         return buildDeckV2(makeCards(4), {grayImage(), grayImage()},
+                            {TestPlacement{0, 0, 5, 0}, TestPlacement{0, 0, 4, 1}});
+       }},
+      {"five placements on one side", DeckError::BadPlacement,
+       [] {
+         std::vector<TestPlacement> bad;
+         for (int i = 0; i < 5; i++) bad.push_back(TestPlacement{0, 0, 0, 0});
+         return buildDeckV2(makeCards(4), {grayImage()}, bad);
+       }},
+  };
+
+  for (const Case& testCase : cases) {
+    const DeckError error = installDeck(deck, testCase.build());
+    if (error != testCase.expected) {
+      ++g_failures;
+      printf("FAIL [%s] case \"%s\": got %s, want %s\n", g_group, testCase.name, flashcards::deckErrorName(error),
+             flashcards::deckErrorName(testCase.expected));
+    }
+    ++g_checks;
+    EXPECT(!deck.isOpen());
+  }
+
+  // The ACCEPT side of both section caps, and the half that pins the number.
+  // "33 is refused" is equally true of a 4x cap; only "32 is accepted" says the
+  // bound is 2 x DECK_MAX_IMAGES_PER_SIDE x cards. 4 cards, four images a side
+  // on both sides of every one of them: 32 placements naming 32 images, which
+  // is the largest v2 file 4 cards can legally describe.
+  {
+    std::vector<TestImage> full;
+    std::vector<TestPlacement> everySlot;
+    for (uint16_t ordinal = 0; ordinal < 4; ordinal++) {
+      for (uint8_t side = 0; side < 2; side++) {
+        for (uint32_t slot = 0; slot < flashcards::DECK_MAX_IMAGES_PER_SIDE; slot++) {
+          everySlot.push_back(TestPlacement{ordinal, side, slot, static_cast<uint32_t>(full.size())});
+          full.push_back(grayImage());
+        }
+      }
+    }
+    EXPECT_EQ_U(full.size(), 32u);
+    EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, full, everySlot))),
+                static_cast<int>(DeckError::Ok));
+    flashcards::DeckImagePlacement capFound[flashcards::DECK_MAX_IMAGES_PER_SIDE];
+    EXPECT_EQ_U(deck.imagesForSide(3, CardSide::Back, capFound, 4), 4);
+    deck.close();
+  }
+
+  // 64 KB EXACTLY is the cap, not one byte over it -- the other half of the
+  // oversized case above, and what makes that one a boundary rather than a
+  // blanket refusal of large pictures.
+  {
+    const std::vector<uint8_t> atCap(64 * 1024, 0x5A);
+    const TestImage large{atCap.data(), atCap.size(), 16, 12, 0, 0, 0, false};
+    EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(makeCards(1), {large}, {TestPlacement{0, 0, 0, 0}}))),
+                static_cast<int>(DeckError::Ok));
+    EXPECT_EQ_U(deck.maxImageBytes(), 64u * 1024u);
+    deck.close();
+  }
+
+  // Legal-but-odd, and read_deck.py only WARNS about it: an image no placement
+  // names. The converter never writes one, but a deck carrying one still opens.
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, {TestPlacement{0, 0, 0, 0}}))),
+              static_cast<int>(DeckError::Ok));
+  // A tie is legal too: two images at one (ordinal, side, text_offset).
+  EXPECT_EQ_U(static_cast<int>(installDeck(
+                  deck, buildDeckV2(cards, images, {TestPlacement{1, 0, 2, 0}, TestPlacement{1, 0, 2, 1}}))),
+              static_cast<int>(DeckError::Ok));
+  // Four on one side is the cap, not one over it.
+  {
+    std::vector<TestPlacement> four;
+    for (int i = 0; i < 4; i++) four.push_back(TestPlacement{1, 0, 2, 0});
+    EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, four))), static_cast<int>(DeckError::Ok));
+  }
+  // Four on the front AND four on the back of the same card: eight placements
+  // that share an ordinal are eight, not a per-card cap of four.
+  {
+    std::vector<TestPlacement> eight;
+    for (int i = 0; i < 4; i++) eight.push_back(TestPlacement{1, 0, 2, 0});
+    for (int i = 0; i < 4; i++) eight.push_back(TestPlacement{1, 1, 2, 1});
+    EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, eight))),
+                static_cast<int>(DeckError::Ok));
+  }
+  deck.close();
+}
+
+/** The per-card placement query: counts, order, boundaries, and the v1 no-op. */
+void testImageQueries() {
+  beginGroup("deck/v2 placements");
+  resetCard();
+  makeDirs();
+
+  std::vector<TestCard> cards = makeCards(6);
+  cards[4].front.clear();  // an image-only front: length 0 with a placement at 0
+  const std::vector<TestImage> images = {grayImage(), grayImage(), grayImage(), grayImage(),
+                                         grayImage(), grayImage(), grayImage()};
+  // Sorted by (ordinal, side, text_offset), ties included, exactly as the
+  // converter writes them.
+  const std::vector<TestPlacement> placements = {
+      TestPlacement{1, 0, 0, 0},                                                        // above all the text
+      TestPlacement{2, 0, 0, 1}, TestPlacement{2, 0, 3, 2}, TestPlacement{2, 0, 3, 3},  // a tie
+      TestPlacement{2, 0, 7, 4},                                                        // four on one side
+      TestPlacement{3, 1, 6, 5},  // text_offset == back_len: below all the text
+      TestPlacement{4, 0, 0, 6},  // the image-only side
+  };
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, placements))),
+              static_cast<int>(DeckError::Ok));
+
+  flashcards::DeckImagePlacement found[flashcards::DECK_MAX_IMAGES_PER_SIDE];
+  // Cards with nothing on them, on both sides of the ones that have some: the
+  // binary search has to land on the right run, not merely near it.
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Back, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(5, CardSide::Front, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(5, CardSide::Back, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(1, CardSide::Back, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(2, CardSide::Back, found, 4), 0);
+  EXPECT_EQ_U(deck.imagesForSide(3, CardSide::Front, found, 4), 0);
+
+  EXPECT_EQ_U(deck.imagesForSide(1, CardSide::Front, found, 4), 1);
+  EXPECT_EQ_U(found[0].textOffset, 0);
+  EXPECT_EQ_U(found[0].image.width, 16);
+  EXPECT_EQ_U(found[0].image.height, 12);
+  EXPECT_EQ_U(found[0].image.byteLength, sizeof(JPEG_GRAY_16x12));
+
+  EXPECT_EQ_U(deck.imagesForSide(2, CardSide::Front, found, 4), 4);
+  EXPECT_EQ_U(found[0].textOffset, 0);
+  EXPECT_EQ_U(found[1].textOffset, 3);
+  EXPECT_EQ_U(found[2].textOffset, 3);  // the tie survives, in table order
+  EXPECT_EQ_U(found[3].textOffset, 7);
+  // Distinct table entries, so consecutive images sit one encoded image apart.
+  EXPECT_EQ_U(found[1].image.fileOffset - found[0].image.fileOffset, sizeof(JPEG_GRAY_16x12));
+
+  EXPECT_EQ_U(deck.imagesForSide(3, CardSide::Back, found, 4), 1);
+  EXPECT_EQ_U(found[0].textOffset, 6);  // == back_len ("back 3")
+
+  EXPECT_EQ_U(deck.imagesForSide(4, CardSide::Front, found, 4), 1);
+  EXPECT_EQ_U(found[0].textOffset, 0);
+
+  // A caller with room for fewer takes fewer; an out-of-range ordinal takes
+  // none. Neither is a read failure.
+  EXPECT_EQ_U(deck.imagesForSide(2, CardSide::Front, found, 2), 2);
+  EXPECT_EQ_U(deck.imagesForSide(static_cast<Ordinal>(cards.size()), CardSide::Front, found, 4), 0);
+
+  // A card the query has already visited answers the same way a second time --
+  // the placement window is a cache, and a cache that went stale would show up
+  // here first.
+  EXPECT_EQ_U(deck.imagesForSide(2, CardSide::Front, found, 4), 4);
+  EXPECT_EQ_U(found[3].textOffset, 7);
+
+  // A v1 deck answers 0 for every card, and does it WITHOUT TOUCHING THE CARD:
+  // the op counters are what makes "an image-free deck never pays" a fact.
+  deck.close();
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeck(cards))), static_cast<int>(DeckError::Ok));
+  EXPECT(!deck.hasImages());
+  EXPECT_EQ_U(deck.maxImageBytes(), 0);
+  resetIo();
+  for (size_t ordinal = 0; ordinal < cards.size(); ordinal++) {
+    EXPECT_EQ_U(deck.imagesForSide(static_cast<Ordinal>(ordinal), CardSide::Front, found, 4), 0);
+    EXPECT_EQ_U(deck.imagesForSide(static_cast<Ordinal>(ordinal), CardSide::Back, found, 4), 0);
+  }
+  EXPECT_EQ_U(hostIoCounters().deckReads, 0);
+  EXPECT_EQ_U(hostIoCounters().deckSeeks, 0);
+  deck.close();
+}
+
+/**
+ * The placement window is a CACHE, and a failed refill must leave it holding no
+ * claim at all.
+ *
+ * imagesForSide() binary-searches the on-disk placement table through a
+ * 16-entry window, so a query that walks from one window into another refills
+ * it mid-search. If that refill fails -- a bad sector under the table, which is
+ * the whole reason these reads have an error path -- the window must be marked
+ * EMPTY, not left describing the block it was about to load. Otherwise the next
+ * query is answered out of a buffer whose contents belong to a different part of
+ * the table: not a failure the caller can see, but four wrong pictures on a card.
+ *
+ * The op counters are what makes "invalidated" checkable rather than asserted:
+ * a query into a window that is genuinely resident costs no window read, and one
+ * into an invalidated window costs exactly one more read than that.
+ */
+void testPlacementWindowFault() {
+  beginGroup("deck/v2 placement window");
+  resetCard();
+  makeDirs();
+
+  // 24 placements over 6 cards -- two windows of 16, so the search really does
+  // cross from one to the other. One image, named by all of them: an image with
+  // several placements is legal, and it keeps the image table out of the way.
+  const std::vector<TestCard> cards = makeCards(6);
+  std::vector<TestPlacement> placements;
+  for (uint16_t ordinal = 0; ordinal < 6; ordinal++) {
+    for (uint32_t slot = 0; slot < flashcards::DECK_MAX_IMAGES_PER_SIDE; slot++) {
+      placements.push_back(TestPlacement{ordinal, 0, slot, 0});
+    }
+  }
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, {grayImage()}, placements))),
+              static_cast<int>(DeckError::Ok));
+
+  flashcards::DeckImagePlacement found[flashcards::DECK_MAX_IMAGES_PER_SIDE];
+  // Card 0 lives in the first window; loading it leaves that window resident.
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 4);
+  resetIo();
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 4);
+  const long warmReads = hostIoCounters().deckReads;  // image-table reads only
+
+  // Card 5 is in the SECOND window, so the search refills -- into a card that
+  // has just gone bad. The query fails softly (no images, deck still open).
+  failDeckIo();
+  EXPECT_EQ_U(deck.imagesForSide(5, CardSide::Front, found, 4), 0);
+  EXPECT(hostIoFaults().seekFailures + hostIoFaults().readFailures > 0);
+  EXPECT(deck.isOpen());
+
+  // Back on a healthy card, the first window must be READ AGAIN rather than
+  // served out of the buffer the failed refill was aiming at.
+  resetIo();
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 4);
+  EXPECT_EQ_U(found[0].textOffset, 0);
+  EXPECT_EQ_U(found[3].textOffset, 3);
+  EXPECT(hostIoCounters().deckReads > warmReads);
+
+  // ... and the window that faulted is usable again too.
+  EXPECT_EQ_U(deck.imagesForSide(5, CardSide::Front, found, 4), 4);
+  EXPECT_EQ_U(found[0].textOffset, 0);
+  EXPECT_EQ_U(found[3].textOffset, 3);
+  deck.close();
+}
+
+/**
+ * loadImage(): the bounds, and the frame sniff that open() deliberately does
+ * not do. This is where read_deck.py's encoding-contract rejections land, and
+ * the point of every one of them is that a bad picture is a bad PICTURE.
+ */
+void testImageBytes() {
+  beginGroup("deck/v2 image bytes");
+  resetCard();
+  makeDirs();
+
+  const std::vector<TestCard> cards = makeCards(3);
+  const std::vector<TestImage> images = {
+      grayImage(),
+      TestImage{JPEG_PROGRESSIVE_16x12, sizeof(JPEG_PROGRESSIVE_16x12), 16, 12, 0, 0, 0, false},
+      TestImage{JPEG_RGB_16x12, sizeof(JPEG_RGB_16x12), 16, 12, 0, 0, 0, false},
+      TestImage{JPEG_GRAY_16x12, sizeof(JPEG_GRAY_16x12), 20, 12, 0, 0, 0, false},  // the table lies about the width
+  };
+  const std::vector<TestPlacement> placements = {
+      TestPlacement{0, 0, 0, 0},
+      TestPlacement{0, 1, 0, 1},
+      TestPlacement{1, 0, 0, 2},
+      TestPlacement{1, 1, 0, 3},
+  };
+
+  DeckFile deck;
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, placements))),
+              static_cast<int>(DeckError::Ok));
+  EXPECT_EQ_U(deck.maxImageBytes(), sizeof(JPEG_RGB_16x12));  // the largest of the four
+
+  std::vector<uint8_t> buffer(deck.maxImageBytes() + 8);
+  flashcards::DeckImagePlacement found[flashcards::DECK_MAX_IMAGES_PER_SIDE];
+
+  // The baseline grayscale one reads back byte for byte.
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 1);
+  EXPECT(deck.loadImage(found[0].image, buffer.data(), buffer.size()));
+  EXPECT_EQ_U(memcmp(buffer.data(), JPEG_GRAY_16x12, sizeof(JPEG_GRAY_16x12)), 0);
+
+  // A buffer one byte short of the encoded length is refused rather than filled
+  // part way: the decoder would then read whatever was behind it.
+  EXPECT(!deck.loadImage(found[0].image, buffer.data(), found[0].image.byteLength - 1));
+  EXPECT(!deck.loadImage(found[0].image, nullptr, buffer.size()));
+
+  // The three encoding-contract refusals.
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Back, found, 4), 1);
+  EXPECT(!deck.loadImage(found[0].image, buffer.data(), buffer.size()));  // progressive
+  EXPECT_EQ_U(deck.imagesForSide(1, CardSide::Front, found, 4), 1);
+  EXPECT(!deck.loadImage(found[0].image, buffer.data(), buffer.size()));  // three components
+  EXPECT_EQ_U(deck.imagesForSide(1, CardSide::Back, found, 4), 1);
+  EXPECT(!deck.loadImage(found[0].image, buffer.data(), buffer.size()));  // dimensions disagree
+  // ... and the deck is still open and still readable after all three.
+  EXPECT(deck.isOpen());
+  char text[flashcards::DECK_MAX_SLICE_BYTES + 1];
+  uint16_t length = 0;
+  EXPECT(deck.loadSide(2, CardSide::Front, text, sizeof(text), length));
+  EXPECT_STR(text, "front 2");
+
+  // Truncated JPEGs, cut at every point the frame walk has to survive. This is
+  // the realistic corruption for a blob addressed by offset and length, and the
+  // walk steps through attacker-shaped data with only `bytes` to stop it: each
+  // cut below lands in a different one of its bounds checks, and NONE of them
+  // may read past the buffer or claim the frame is fine. (The cuts are the SOI
+  // pair alone, a marker with no length, the middle of APP0, the last byte
+  // before the SOF marker, the SOF marker with its length missing, the middle of
+  // the frame header, and one byte short of the complete frame segment. 102 is
+  // the first length that carries a whole SOF0, and it is deliberately not
+  // here.)
+  {
+    const size_t cuts[] = {2, 4, 20, 89, 91, 95, 101};
+    for (const size_t cut : cuts) {
+      DeckFile cutDeck;
+      const TestImage truncated{JPEG_GRAY_16x12, cut, 16, 12, 0, 0, 0, false};
+      const DeckError opened =
+          installDeck(cutDeck, buildDeckV2(makeCards(1), {truncated}, {TestPlacement{0, 0, 0, 0}}));
+      // The DECK still opens: open() never sniffs a frame (§2.2 -- one seek per
+      // image is minutes of them at the format's cap), so a truncated picture is
+      // a picture that will not draw, not a deck that will not study.
+      EXPECT_EQ_U(static_cast<int>(opened), static_cast<int>(DeckError::Ok));
+      flashcards::DeckImagePlacement cutFound[flashcards::DECK_MAX_IMAGES_PER_SIDE];
+      EXPECT_EQ_U(cutDeck.imagesForSide(0, CardSide::Front, cutFound, 4), 1);
+      EXPECT_EQ_U(cutFound[0].image.byteLength, cut);
+      // EXACTLY as many bytes as the image claims, and no more. A generously
+      // sized buffer would let the frame walk step past `bytes` into slack that
+      // happens to be readable, and a bounds check deleted from that walk would
+      // then be invisible to every assertion here. Sized to the byte, an
+      // over-read is a heap over-read: this loop is the fixture an address
+      // sanitizer needs, and the reason the cuts land where they do.
+      std::vector<uint8_t> exact(cut);
+      EXPECT(!cutDeck.loadImage(cutFound[0].image, exact.data(), exact.size()));
+      cutDeck.close();
+    }
+  }
+  // Reinstall the four-image deck the rest of this group works on: the cut decks
+  // above wrote over the same path.
+  EXPECT_EQ_U(static_cast<int>(installDeck(deck, buildDeckV2(cards, images, placements))),
+              static_cast<int>(DeckError::Ok));
+
+  // A read that fails under an open deck costs the picture, never the card: the
+  // C3 variant reaches the card for every one of these calls, so this is the
+  // path that actually runs there (FLASHCARD_SPEC.md §7b.4).
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 1);
+  failDeckIo();
+  EXPECT(!deck.loadImage(found[0].image, buffer.data(), buffer.size()));
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 0);
+  resetIo();
+  EXPECT_EQ_U(deck.imagesForSide(0, CardSide::Front, found, 4), 1);
+  EXPECT(deck.loadImage(found[0].image, buffer.data(), buffer.size()));
+  deck.close();
 }
 
 // --- StateStore --------------------------------------------------------------
@@ -2757,6 +3590,10 @@ int main(int argc, char** argv) {
   testDeckParameterBlock();
   testEmptyBack();
   testC0Sanitize();
+  testImageValidation();
+  testImageQueries();
+  testPlacementWindowFault();
+  testImageBytes();
   testStateCreation();
   testStateAdoptAndCounters();
   testStateRebuildsFromRubbish();

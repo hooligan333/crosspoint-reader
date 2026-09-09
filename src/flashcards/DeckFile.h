@@ -9,8 +9,8 @@
 #include <string>
 
 /**
- * Reader for a `CPDK` v1 deck file (FLASHCARD_SPEC.md §2, byte layout in
- * `deck-server/DECK_SERVER_SPEC.md` §3).
+ * Reader for a `CPDK` v1 or v2 deck file (FLASHCARD_SPEC.md §2/§2.2, byte layout
+ * in `deck-server/DECK_SERVER_SPEC.md` §3/§3.7).
  *
  * Two jobs, in this order:
  *
@@ -66,6 +66,44 @@
  *     ordinals, i.e. one card's history is copied rather than lost. That is the
  *     accepted worst case. The Pro keeps the check, so a deck that would hit it
  *     is still caught on any device with the RAM to look.
+ *
+ * ---------------------------------------------------------------------------
+ * **CPDK v2 — card images** (FLASHCARD_SPEC.md §2.2, layout in
+ * DECK_SERVER_SPEC.md §3.7). A v2 file inserts an image table and a placement
+ * table between the optional FSRS block and the card index, and appends an
+ * image blob that runs to EOF. Both variants of this reader accept v1 AND v2 —
+ * there is no build flag for it, and a v1 file is byte-for-byte the file it
+ * always was.
+ *
+ * **Neither table is ever held resident, on either variant.** The Pro's
+ * resident card index is affordable because it is 20 bytes per card; the image
+ * tables are not bounded that way. At the Pro's 40000-card cap the format
+ * permits 8x40000 image entries (5.12 MB) and 8x40000 placements (3.84 MB) —
+ * 8.96 MB on top of the 800 KB index and the ~2.0 MB whole-feature peak
+ * documented on StateStore::open(), which is more than this feature's PSRAM
+ * budget can promise. So both tables are STREAM-VALIDATED at open (in chunks
+ * that stay under 4 KB, the C3 rule) and are then left on the card, exactly as
+ * the C3 variant treats the card index:
+ *
+ *   - `imagesForSide()` binary-searches the placement table on disk — it is
+ *     sorted by (ordinal, side, text_offset), which is the key it searches —
+ *     through a 16-entry (192-byte) window that also serves the forward walk of
+ *     that card's <= 4 placements, then reads one 16-byte image-table entry per
+ *     placement. Around 20 short reads per card side, against a card load that
+ *     already pays a text read and an e-ink repaint;
+ *   - that window is the ONLY thing v2 adds to this object's footprint, and it
+ *     is a plain member array. `open()` allocates nothing new on either
+ *     variant, and a v1 deck touches none of this code at all:
+ *     `imagesForSide()` returns 0 without a single read when image_count is 0.
+ *
+ * What is NOT checked at open is each image's JPEG frame header (read_deck.py's
+ * §3.7 check 4). Sniffing it costs one seek per image — minutes of SD seeks at
+ * the format's cap — so it moves to `loadImage()`, which refuses a
+ * non-baseline, non-grayscale or wrong-sized image at the moment it is asked
+ * for the bytes. The study screen draws a placeholder box for that one image
+ * and the deck still opens, which is the right outcome on a device that cannot
+ * afford to read the whole blob to find out. `read_deck.py` remains the gate
+ * that catches it before the file is ever published.
  */
 namespace flashcards {
 
@@ -87,13 +125,32 @@ constexpr uint32_t DECK_MAX_CARDS = 40000;
 constexpr uint16_t DECK_MAX_SLICE_BYTES = 4096;
 constexpr uint8_t DECK_TITLE_MAX_BYTES = 39;
 
+// --- CPDK v2 card-image caps (DECK_SERVER_SPEC.md §3.7) ---------------------
+/** Encoded JPEG bytes per image. The one figure the study screen's buffer is sized by. */
+constexpr uint32_t DECK_MAX_IMAGE_BYTES = 64 * 1024;
+/** Longest side the converter emits. The device never scales; it draws as delivered. */
+constexpr uint16_t DECK_MAX_IMAGE_EDGE = 440;
+/**
+ * Placements per (ordinal, side). The 5th image on a side keeps its `[image]` marker.
+ *
+ * This is the ONE number both v2 table caps are derived from, and they are both
+ * spelled `2 * DECK_MAX_IMAGES_PER_SIDE * card_count` at the point of use rather
+ * than given constants of their own (FLASHCARD_SPEC.md §2.2, I1 pins): a card
+ * has two sides, so four per side is eight per card for BOTH `image_count` and
+ * `placement_count`. An earlier `DECK_MAX_IMAGES_PER_CARD = 4` made the image
+ * cap 4x while the per-side rule already permitted 4 front + 4 back — a bound
+ * the converter could not satisfy, and one that only drifted because it was
+ * written down twice.
+ */
+constexpr uint8_t DECK_MAX_IMAGES_PER_SIDE = 4;
+
 /** Why a deck would not open. Ok is the only value that leaves it usable. */
 enum class DeckError : uint8_t {
   Ok,
   OpenFailed,       // the file will not open at all
   ShortFile,        // shorter than its header, or than its own index end
   BadMagic,         // not "CPDK"
-  BadVersion,       // format_version != 1
+  BadVersion,       // format_version is neither 1 nor 2
   UnknownFlags,     // a reserved flags bit is set — the version escape hatch
   BadCardCount,     // 0, or above DECK_MAX_CARDS (40000; 2000 on the C3 variant)
   ReadFailed,       // a read came up short mid-file
@@ -101,12 +158,42 @@ enum class DeckError : uint8_t {
   SliceOutOfRange,  // an index entry points outside the text blob, or is > 4096 B
   DuplicateKey,     // two cards share a key: state could not be kept per card
   OutOfMemory,      // the card index would not fit
+  // v2 only (DECK_SERVER_SPEC.md §3.7): image_count out of range, an entry with
+  // a bad byte_len / dimensions / reserved field, a v2 header that does not
+  // set has_images (a deck with no images is written as v1, so that a v1 device
+  // can still read it — a v2 file therefore always carries at least one image),
+  // or an image blob whose entries do not tile it densely from offset 0.
+  BadImageTable,
+  // v2 only: the placement table is out of order, or an entry names an ordinal,
+  // side, image or text offset that does not exist.
+  BadPlacement,
 };
 
 /** Log-friendly name for a DeckError. User-facing text is the study screen's job. */
 const char* deckErrorName(DeckError error);
 
 enum class CardSide : uint8_t { Front, Back };
+
+/**
+ * One entry of the v2 image table, resolved: `fileOffset` is ABSOLUTE, so the
+ * caller never has to know where the image blob starts.
+ *
+ * `width`/`height` are what the converter encoded and what the file's own JPEG
+ * frame must agree with — the device never scales, it draws as delivered
+ * (DECK_SERVER_SPEC.md §3.7).
+ */
+struct DeckImage {
+  uint32_t fileOffset;
+  uint32_t byteLength;
+  uint16_t width;
+  uint16_t height;
+};
+
+/** Where one image sits in a card side's text: drawn BEFORE the byte at `textOffset`. */
+struct DeckImagePlacement {
+  uint32_t textOffset;
+  DeckImage image;
+};
 
 class DeckFile {
  public:
@@ -204,9 +291,81 @@ class DeckFile {
    */
   bool loadSide(Ordinal ordinal, CardSide side, char* buffer, size_t bufferBytes, uint16_t& lengthOut);
 
+  // --- CPDK v2 card images ---------------------------------------------------
+
+  /** True for a v2 deck that carries at least one image; false for every v1 deck. */
+  bool hasImages() const { return imageCountValue != 0; }
+
+  /**
+   * The largest `byte_len` in this deck's image table, 0 when there are none.
+   *
+   * Recorded during the open-time validation pass, which reads every entry
+   * anyway. It exists so the study screen can size ONE encoded-image buffer at
+   * session start and reuse it for every image the session draws, instead of
+   * allocating inside the render path or reserving the format's 64 KB cap for a
+   * deck whose pictures are 20 KB (FLASHCARD_SPEC.md §2.2).
+   */
+  uint32_t maxImageBytes() const { return maxImageBytesValue; }
+
+  /**
+   * The images placed on one card side, in text order, into `out`.
+   *
+   * Returns how many were written — 0 to `min(capacity, 4)`; 0 immediately, and
+   * with no I/O at all, for a v1 deck. `capacity` should be
+   * DECK_MAX_IMAGES_PER_SIDE: the format caps a side at four, and a deck that
+   * somehow carried more was refused at open.
+   *
+   * Costs a binary search of the on-disk placement table (about 14 windowed
+   * reads at the format's cap, 5 on a realistic deck) plus one 16-byte
+   * image-table read per placement found. A read failure mid-search is reported
+   * as "no images here" rather than as a card that will not load: a bad sector
+   * under the placement table must cost the pictures, not the study session.
+   */
+  uint8_t imagesForSide(Ordinal ordinal, CardSide side, DeckImagePlacement* out, uint8_t capacity);
+
+  /**
+   * Reads one image's encoded JPEG bytes into `buffer`.
+   *
+   * `bufferBytes` must be at least `image.byteLength`. False on a short buffer,
+   * a failed read, or bytes that do not sniff as the baseline single-component
+   * JPEG of exactly `image.width` x `image.height` that §3.7's encoding contract
+   * promises — the embedded decoder is baseline-only, and handing it a
+   * progressive frame is how a decoder walks off its own buffers. The caller
+   * draws a placeholder box; nothing here ever refuses the deck.
+   */
+  bool loadImage(const DeckImage& image, uint8_t* buffer, size_t bufferBytes);
+
  private:
   /** Index entry fields for `ordinal`, memcpy'd out of the resident index. */
   bool sliceAt(Ordinal ordinal, CardSide side, uint32_t& offsetOut, uint16_t& lengthOut) const;
+
+  // --- v2 image/placement tables (neither is resident; see the class comment) --
+  /** Bytes in one image-table entry and one placement-table entry (§3.7). */
+  static constexpr uint32_t CPDK_IMAGE_ENTRY_BYTES = 16;
+  static constexpr uint32_t CPDK_PLACEMENT_ENTRY_BYTES = 12;
+  /**
+   * Placement entries the on-disk binary search reads at a time: 16 entries =
+   * 192 bytes, the only RAM v2 costs this object. It is sized to cover a
+   * card's whole run in one read (a side holds at most 4 placements, and both
+   * sides of one card at most 8) while keeping the search's probe reads short.
+   */
+  static constexpr uint32_t PLACEMENT_WINDOW_ENTRIES = 16;
+  static constexpr uint32_t PLACEMENT_WINDOW_EMPTY = 0xFFFFFFFFu;
+
+  /** Reads image/placement counts and validates both tables. Called only for v2. */
+  DeckError readImageSections(size_t fileSize, uint32_t cards, size_t& offsetInOut, uint64_t& imageBlobLenOut);
+  /** Streams the image table, validating every entry and finding the blob's length. */
+  DeckError validateImageTable(size_t fileSize, uint64_t& imageBlobLenOut);
+  /** Streams the placement table, validating order, ranges and the per-side cap. */
+  DeckError validatePlacements();
+  /**
+   * Points `entryOut` at placement `slot`'s 12 bytes, refilling the window when
+   * it is not already there. The pointer is valid until the next call and is
+   * bounded by what was actually read, never by the window's capacity.
+   */
+  bool placementAt(uint32_t slot, const uint8_t*& entryOut);
+  /** The image-table entry at `imageIndex`, resolved to absolute file offsets. */
+  bool imageAt(uint32_t imageIndex, DeckImage& out);
 
 #ifdef CROSSPOINT_FLASHCARDS_C3
   /** Bytes in one CPDK index entry — the header's copy of DeckFile.cpp's constant. */
@@ -250,7 +409,20 @@ class DeckFile {
   uint32_t cardCountValue = 0;
   uint64_t contentHashValue = 0;
   uint32_t blobStart = 0;  // absolute file offset of the text blob
-  uint32_t blobBytes = 0;
+  uint32_t blobBytes = 0;  // TEXT blob length: on v2 it stops where the image blob starts
+
+  // v2 image sections. All zero on a v1 deck, which is what makes every image
+  // accessor a no-op there without a version test of its own.
+  uint32_t imageCountValue = 0;
+  uint32_t placementCountValue = 0;
+  uint32_t imageTableOffset = 0;      // absolute file offset of image entry 0
+  uint32_t placementTableOffset = 0;  // absolute file offset of placement entry 0
+  uint32_t imageBlobStart = 0;        // absolute file offset of image-blob byte 0
+  uint32_t maxImageBytesValue = 0;
+  uint8_t placementWindow[PLACEMENT_WINDOW_ENTRIES * CPDK_PLACEMENT_ENTRY_BYTES] = {};
+  uint32_t placementWindowFirst = PLACEMENT_WINDOW_EMPTY;
+  uint32_t placementWindowCount = 0;
+
   bool deckSuppliedParams = false;
   fsrs::Params schedulerParams{};
   char titleText[DECK_TITLE_MAX_BYTES + 1] = {};
