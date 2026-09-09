@@ -263,17 +263,45 @@ bool FlashcardStudyActivity::allocateSessionBuffers() {
   if (!frontText) frontText = makeUniqueNoThrow<char[]>(CARD_TEXT_BYTES);
   if (!backText) backText = makeUniqueNoThrow<char[]>(CARD_TEXT_BYTES);
   if (!lines) lines = makeUniqueNoThrow<CardLine[]>(MAX_CARD_LINES);
-  if (frontText && backText && lines) return true;
-  LOG_ERR("DECK", "OOM: card buffers (2x%u B text + %u B lines)", static_cast<unsigned>(CARD_TEXT_BYTES),
-          static_cast<unsigned>(MAX_CARD_LINES * sizeof(CardLine)));
-  releaseSessionBuffers();
-  return false;
+  if (!frontText || !backText || !lines) {
+    LOG_ERR("DECK", "OOM: card buffers (2x%u B text + %u B lines)", static_cast<unsigned>(CARD_TEXT_BYTES),
+            static_cast<unsigned>(MAX_CARD_LINES * sizeof(CardLine)));
+    releaseSessionBuffers();
+    return false;
+  }
+
+  // Card images, and ONLY for a deck that carries any: an image-free deck (every
+  // v1 deck, and most v2 ones on a given day) allocates nothing here. Both
+  // claims are gated and neither is fatal — a session that cannot have the
+  // 17 KB decoder or a buffer for the deck's largest picture draws placeholder
+  // boxes and studies on, which is the C3's realistic outcome on a fragmented
+  // ~50 KB heap (FLASHCARD_SPEC.md §2.2).
+  if (deck.hasImages() && !imageBytes) {
+    const uint32_t wanted = deck.maxImageBytes();
+    if (wanted != 0 && wanted <= flashcards::DECK_MAX_IMAGE_BYTES) {
+      imageBytes = makeUniqueNoThrow<uint8_t[]>(wanted);
+      if (imageBytes) {
+        imageBytesCapacity = wanted;
+        if (!imageDecoder.acquire()) imageBytes.reset();
+      }
+      if (!imageBytes) {
+        imageBytesCapacity = 0;
+        LOG_ERR("DECK", "Card images off: %u B encoded buffer refused", static_cast<unsigned>(wanted));
+      }
+    }
+  }
+  return true;
 }
 
 void FlashcardStudyActivity::releaseSessionBuffers() {
   frontText.reset();
   backText.reset();
   lines.reset();
+  imageBytes.reset();
+  imageBytesCapacity = 0;
+  imageDecoder.release();
+  frontImageCount = 0;
+  backImageCount = 0;
   lineCount = 0;
 }
 
@@ -475,7 +503,11 @@ bool FlashcardStudyActivity::loadCurrentCard() {
     haveCard = false;
   }
 
-  // SD work next, with no lock held.
+  // SD work next, with no lock held: this is the loop task's card read, and it
+  // must not hold the render task off the panel while the card is being pulled
+  // off the SD. (It is not the ONLY SD work this screen does -- renderReview()
+  // reads a card image's encoded bytes when the page carrying it paints, on the
+  // render task. The two never overlap; see the haveCard note below.)
   frontLength = 0;
   backLength = 0;
   if (!deck.loadSide(currentOrdinal, flashcards::CardSide::Front, frontText.get(), CARD_TEXT_BYTES, frontLength)) {
@@ -483,6 +515,25 @@ bool FlashcardStudyActivity::loadCurrentCard() {
   }
   if (!deck.loadSide(currentOrdinal, flashcards::CardSide::Back, backText.get(), CARD_TEXT_BYTES, backLength)) {
     return false;
+  }
+  // The card's placements, read here rather than at wrap time: the wrap runs
+  // under the RenderLock and must not go near the card, and this is the one
+  // point in the card's life where the placements are needed and the lock is
+  // not held. Front placements occupy the first slots, back placements the ones
+  // behind them. Writing them with `haveCard` false is safe for the same reason
+  // the two text buffers are — renderReview() draws nothing until it is set
+  // again (the invariant is stated in full on renderReview()).
+  //
+  // Read whether or not this session can DECODE them: a card lays out the same
+  // way on a device that ran out of heap for the decoder as on one that did not,
+  // and the box is filled with a placeholder rather than closed up (§2.2).
+  frontImageCount = 0;
+  backImageCount = 0;
+  if (deck.hasImages()) {
+    constexpr uint8_t perSide = flashcards::DECK_MAX_IMAGES_PER_SIDE;
+    frontImageCount = deck.imagesForSide(currentOrdinal, flashcards::CardSide::Front, cardImages, perSide);
+    backImageCount =
+        deck.imagesForSide(currentOrdinal, flashcards::CardSide::Back, cardImages + frontImageCount, perSide);
   }
   fsrs::CardState state{};
   if (store.readRecord(currentOrdinal, state) == flashcards::RecordStatus::IoError) return false;
@@ -518,6 +569,8 @@ const char* FlashcardStudyActivity::bufferFor(const LineKind kind) const {
     case LineKind::Back:
       return backText.get();
     case LineKind::Rule:
+    case LineKind::Image:
+    case LineKind::Blank:
       return nullptr;
   }
   return nullptr;
@@ -543,24 +596,88 @@ int FlashcardStudyActivity::measureSpan(const char* text, size_t length) const {
  * truncated, so the spans below page instead, and they point into the two card
  * buffers rather than copying.
  */
+bool FlashcardStudyActivity::appendLine(const CardLine& line, const uint16_t lineLimit, bool& overflowed) {
+  if (lineCount >= lineLimit) {
+    overflowed = true;
+    return false;
+  }
+  lines[lineCount++] = line;
+  return true;
+}
+
+/**
+ * Lays out one image as a block of whole line slots.
+ *
+ * Two rules, and the second is what keeps the pager's model intact. An image is
+ * `ceil(height / lineHeight)` lines tall, capped at a full page — the converter
+ * pre-sizes to 440 px and the device never scales, so a picture taller than the
+ * body is cut off at the bottom rather than shrunk. And an image never STRADDLES
+ * a page break: if the block will not fit in what is left of the current page,
+ * the page is padded out with blank lines so the image starts at the top of the
+ * next one. Padding rather than teaching renderReview() to draw half an image
+ * across two frames is what lets pages stay exactly what they were — a slice
+ * `[page * linesPerPage, +linesPerPage)` of one flat line array — so every tap
+ * target, the page counter and the grade row all keep working untouched.
+ *
+ * The padding and the fillers are drawn from the SAME budget the text is, so a
+ * card whose images crowd out its words reports the overflow marker for that
+ * side exactly as a card with too many newlines does.
+ */
+void FlashcardStudyActivity::appendImage(const uint8_t slot, const uint16_t lineLimit, bool& overflowed) {
+  if (slot >= MAX_CARD_IMAGES) return;  // both sides together cannot exceed the array; guard, not a path
+  const int lineHeight = std::max(1, renderer.getLineHeight(CARD_FONT_ID));
+  const int perPage = std::max(1, linesPerPage);
+  int span = (static_cast<int>(cardImages[slot].image.height) + lineHeight - 1) / lineHeight;
+  span = std::max(1, std::min(span, perPage));
+
+  const int used = lineCount % perPage;
+  if (used != 0 && used + span > perPage) {
+    for (int pad = used; pad < perPage; pad++) {
+      if (!appendLine(CardLine{0, 0, LineKind::Blank}, lineLimit, overflowed)) return;
+    }
+  }
+  if (!appendLine(CardLine{slot, static_cast<uint16_t>(span), LineKind::Image}, lineLimit, overflowed)) return;
+  for (int filler = 1; filler < span; filler++) {
+    if (!appendLine(CardLine{0, 0, LineKind::Blank}, lineLimit, overflowed)) return;
+  }
+}
+
 void FlashcardStudyActivity::appendWrapped(const char* text, const uint16_t length, const LineKind kind,
-                                           const int maxWidth, const uint16_t lineLimit, bool& overflowed) {
+                                           const int maxWidth, const uint16_t lineLimit, bool& overflowed,
+                                           const flashcards::DeckImagePlacement* const images, const uint8_t imageCount,
+                                           const uint8_t imageSlot) {
   const int spaceWidth = renderer.getSpaceWidth(CARD_FONT_ID, EpdFontFamily::REGULAR);
 
   uint16_t lineStart = 0;
   uint16_t lineEnd = 0;
   int lineWidth = 0;
 
+  // An image is drawn BEFORE the byte at its text_offset, and the converter
+  // guarantees a paragraph break exactly there (DECK_SERVER_SPEC.md §3.7), so
+  // "snap to the nearest line break" is this: emit every placement the wrap has
+  // now passed, at the line boundary it just crossed. Offset 0 lands above all
+  // the text, offset == length below it, and a side of length 0 with a
+  // placement at 0 is an image-only side that this handles without a special
+  // case. Ties (two images at one offset) come out in table order.
+  uint8_t emitted = 0;
+  const auto emitImagesUpTo = [&](const uint32_t reached) {
+    while (emitted < imageCount && images[emitted].textOffset <= reached && !overflowed) {
+      appendImage(static_cast<uint8_t>(imageSlot + emitted), lineLimit, overflowed);
+      emitted++;
+    }
+  };
+
   const auto flushLine = [&](const uint16_t nextStart) {
-    if (lineCount >= lineLimit) {
-      overflowed = true;
+    if (!appendLine(CardLine{lineStart, static_cast<uint16_t>(lineEnd - lineStart), kind}, lineLimit, overflowed)) {
       return;
     }
-    lines[lineCount++] = CardLine{lineStart, static_cast<uint16_t>(lineEnd - lineStart), kind};
     lineStart = nextStart;
     lineEnd = nextStart;
     lineWidth = 0;
+    emitImagesUpTo(nextStart);
   };
+
+  emitImagesUpTo(0);
 
   // Space and newline are the only separators this has to know about: DeckFile
   // rewrites every C0 byte except '\n' to a space as it reads a side, so a tab
@@ -629,6 +746,10 @@ void FlashcardStudyActivity::appendWrapped(const char* text, const uint16_t leng
     }
   }
   if (lineEnd > lineStart) flushLine(length);
+  // Anything still pending sits at or past the end of the text: the "below all
+  // the text" placement, and any image the loop never reached because the wrap
+  // stopped early.
+  emitImagesUpTo(length);
 }
 
 void FlashcardStudyActivity::wrapForDisplay() {
@@ -639,24 +760,36 @@ void FlashcardStudyActivity::wrapForDisplay() {
   totalPages = 1;
   if (!lines) return;
 
-  const BodyArea body = bodyArea();
+  // The REVEALED geometry, in both states. Pages are sized once, against the
+  // body the answer screen has, so a front occupies the same lines and the same
+  // pages whether or not the answer is showing; the question screen simply
+  // leaves the grade band's rows unused (see bodyArea(bool)). Sizing by the
+  // visible body instead re-flowed the front under the reader at the moment of
+  // the reveal.
+  const BodyArea body = bodyArea(true);
   if (body.width <= 0 || body.height <= 0) return;
+
+  // linesPerPage is settled BEFORE the wrap, not after it: an image block is
+  // measured in whole pages (it is capped at one, and it is padded forward
+  // rather than split across two), so the wrap has to know the page height it
+  // is laying out against.
+  const int lineHeight = renderer.getLineHeight(CARD_FONT_ID);
+  linesPerPage = std::max(1, body.height / std::max(1, lineHeight));
 
   // The front is capped short of the buffer (§5 pin d) whether or not the answer
   // is showing, so that revealing a front made of 300 newlines still has room
-  // for the rule and the first 32 lines of the back -- and so that the front
-  // pages identically either side of the reveal.
-  appendWrapped(frontText.get(), frontLength, LineKind::Front, body.width, MAX_FRONT_LINES, frontOverflowed);
+  // for the rule and the first 32 lines of the back.
+  appendWrapped(frontText.get(), frontLength, LineKind::Front, body.width, MAX_FRONT_LINES, frontOverflowed, cardImages,
+                frontImageCount, 0);
   if (revealed) {
     // The front stays on the answer screen: recall is judged against the
     // question, and a rule marks where the answer starts. Both sides page as
     // one flow, so neither can be cut off.
     if (lineCount < MAX_CARD_LINES) lines[lineCount++] = CardLine{0, 0, LineKind::Rule};
-    appendWrapped(backText.get(), backLength, LineKind::Back, body.width, MAX_CARD_LINES, backOverflowed);
+    appendWrapped(backText.get(), backLength, LineKind::Back, body.width, MAX_CARD_LINES, backOverflowed,
+                  cardImages + frontImageCount, backImageCount, frontImageCount);
   }
 
-  const int lineHeight = renderer.getLineHeight(CARD_FONT_ID);
-  linesPerPage = std::max(1, body.height / std::max(1, lineHeight));
   totalPages = std::max(1, (lineCount + linesPerPage - 1) / linesPerPage);
 }
 
@@ -666,9 +799,27 @@ void FlashcardStudyActivity::setRevealed(const bool shown) {
   {
     RenderLock lock(*this);
     revealed = shown;
-    // The grade row appears with the answer, so the body shrinks: re-wrap
-    // against the new column height rather than paging stale lines.
+    // Re-wrap: the answer's lines are appended by the wrap, not held back by the
+    // render, so revealing changes what there is to page through. The page
+    // HEIGHT is unchanged in both directions (wrapForDisplay lays both states
+    // out against the revealed body), which is what lets the front keep its
+    // pagination across the reveal.
     wrapForDisplay();
+    // wrapForDisplay() resets to page 0, which is the right landing for the
+    // question. For the answer it is not: on a front that fills more than one
+    // page, page 0 is still the question and the reveal would look like nothing
+    // happened -- the §5 pin d promise that "a reveal must never be a visual
+    // no-op" is about the RULE and the back being reachable, and reachable is
+    // not the same as shown. So the answer opens on the page carrying the rule,
+    // which is where the answer starts; the front stays behind it, one page
+    // back, exactly where it was.
+    if (shown) {
+      for (uint16_t i = 0; i < lineCount; i++) {
+        if (lines[i].kind != LineKind::Rule) continue;
+        currentPage = static_cast<int>(i) / std::max(1, linesPerPage);
+        break;
+      }
+    }
   }
   requestUpdate();
 }
@@ -1177,7 +1328,7 @@ void FlashcardStudyActivity::loopDone() {
 
 // --- Layout ---
 
-FlashcardStudyActivity::BodyArea FlashcardStudyActivity::bodyArea() const {
+FlashcardStudyActivity::BodyArea FlashcardStudyActivity::bodyArea(const bool withGradeBand) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // One line is always reserved between the header and the card for the page /
   // overflow indicator, drawn right-aligned in that strip. Always, not only when
@@ -1186,7 +1337,7 @@ FlashcardStudyActivity::BodyArea FlashcardStudyActivity::bodyArea() const {
   // geometry depend on the wrap's own result.
   const int top =
       metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing + renderer.getLineHeight(UI_10_FONT_ID);
-  const int gradeBand = revealed ? metrics.menuRowHeight + metrics.verticalSpacing : 0;
+  const int gradeBand = withGradeBand ? metrics.menuRowHeight + metrics.verticalSpacing : 0;
   const int bottom = metrics.buttonHintsHeight + metrics.verticalSpacing + gradeBand;
   return BodyArea{metrics.contentSidePadding, top, renderer.getScreenWidth() - 2 * metrics.contentSidePadding,
                   renderer.getScreenHeight() - top - bottom};
@@ -1310,9 +1461,61 @@ void FlashcardStudyActivity::renderMode() const {
            clockAvailable ? 3 : 1, modeSelection, -1);
 }
 
-void FlashcardStudyActivity::renderReview() const {
-  // No card resident means the spans below point into buffers that loadCurrentCard()
-  // is rewriting right now: draw the frame without a body rather than a torn one.
+/**
+ * Draws the image on one LineKind::Image line, or a box where it should have
+ * been.
+ *
+ * Everything about this is best-effort by design: a session with no decoder, a
+ * deck whose bytes will not read, a JPEG that does not sniff as the baseline
+ * grayscale frame the format promises, a decode that gives up half way — each
+ * ends at the same placeholder, and none of them can fail a render, lose the
+ * card or change where the next line goes. The image is centred in the column
+ * and clipped to the box the wrap reserved; it is never scaled to fit it.
+ *
+ * Reached only from renderReview(), i.e. only with `haveCard` true, so `line`,
+ * `cardImages` and the open deck are all this card's and none of them can be
+ * rewritten underneath the read or the decode (the invariant is spelled out on
+ * renderReview()).
+ */
+void FlashcardStudyActivity::drawCardImage(const CardLine& line, const BodyArea& body, const int y,
+                                           const int lineHeight) {
+  // On a LineKind::Image line the two CardLine fields are overloaded: `start` is
+  // the slot in `cardImages` and `length` is the block's height in LINE SLOTS,
+  // not a byte count (see the CardLine comment). appendImage() is the only
+  // producer of such a line and it emits `1 <= length <= linesPerPage` with
+  // `start < MAX_CARD_IMAGES`. The guard below is that invariant restated rather
+  // than a case that occurs, and it is worth restating because `length` is what
+  // the reserved box's height is computed from: a zero would draw a box of no
+  // height where the pager has already set slots aside.
+  if (line.start >= MAX_CARD_IMAGES || line.length == 0) return;
+  const flashcards::DeckImage& image = cardImages[line.start].image;
+  const int boxWidth = std::min(static_cast<int>(image.width), body.width);
+  const int boxHeight = std::min(static_cast<int>(image.height), static_cast<int>(line.length) * lineHeight);
+  if (boxWidth <= 0 || boxHeight <= 0) return;
+  const int x = body.x + (body.width - boxWidth) / 2;
+
+  const bool drawn = imageBytes && imageDecoder.ready() &&
+                     deck.loadImage(image, imageBytes.get(), imageBytesCapacity) &&
+                     imageDecoder.draw(renderer, imageBytes.get(), image.byteLength, x, y, boxWidth, boxHeight);
+  if (!drawn) flashcards::CardImageDecoder::drawPlaceholder(renderer, x, y, boxWidth, boxHeight);
+}
+
+void FlashcardStudyActivity::renderReview() {
+  // THE INVARIANT THIS SCREEN'S TWO TASKS SHARE, stated once, here.
+  //
+  // `haveCard` is what makes the loop task's card load and the render task's
+  // draw mutually exclusive, and it has to, because the render task both READS
+  // the card state (the line spans, `cardImages`, the two text buffers) and does
+  // its own SD work through it (drawCardImage() -> DeckFile::loadImage()).
+  //
+  // loadCurrentCard() clears `haveCard` under the RenderLock BEFORE it touches
+  // any of that -- taking the lock also waits out a frame that may be mid-draw
+  // -- and sets it again, under the lock, only once the new card is wrapped. So
+  // for the whole span in which the buffers, the placements and the deck cursor
+  // are being rewritten, `haveCard` is false and this early return is taken.
+  // Everything below (and everything drawCardImage() reaches) may therefore
+  // assume a complete, self-consistent card, and no member here needs a lock,
+  // an atomic or a copy of its own.
   if (!haveCard) return;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -1331,6 +1534,18 @@ void FlashcardStudyActivity::renderReview() const {
     const CardLine& line = lines[i];
     if (line.kind == LineKind::Rule) {
       renderer.drawLine(body.x, y + lineHeight / 2, body.x + body.width, y + lineHeight / 2);
+      y += lineHeight;
+      continue;
+    }
+    if (line.kind == LineKind::Image) {
+      // The block's own line advances by one; its LineKind::Blank fillers carry
+      // the rest of the height, so the flat line array stays the thing that
+      // decides where the next line goes.
+      drawCardImage(line, body, y, lineHeight);
+      y += lineHeight;
+      continue;
+    }
+    if (line.kind == LineKind::Blank) {
       y += lineHeight;
       continue;
     }
