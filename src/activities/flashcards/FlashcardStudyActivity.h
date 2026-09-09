@@ -88,7 +88,7 @@ class FlashcardStudyActivity final : public Activity {
   static constexpr uint16_t RESERVED_BACK_LINES = 33;
   static constexpr uint16_t MAX_FRONT_LINES = MAX_CARD_LINES - RESERVED_BACK_LINES;
   static constexpr size_t MEASURE_BYTES = 192;  // longest span measured in one call
-  // 64 resurface slots (256 B, and the same again in the undo snapshot). A
+  // 64 resurface slots (512 B, and the same again in the undo snapshot). A
   // session that pushes past this counts the drop and reports it on the Done
   // screen rather than losing the card silently (§5 pin e).
   static constexpr uint8_t MAX_PENDING = 64;
@@ -105,12 +105,24 @@ class FlashcardStudyActivity final : public Activity {
   };
 
   /**
-   * A card waiting to resurface inside this session. `showAfter` counts the
-   * other cards that must still be shown before it comes back, so an Again goes
-   * behind >= REQUEUE_GAP cards and lands at the end of the session when fewer
-   * than that remain.
+   * A card waiting to resurface inside this session.
+   *
+   * TWO gates, and a card has to clear both. `showAfter` counts the other cards
+   * that must still be shown before it comes back, so an Again goes behind
+   * >= REQUEUE_GAP cards; `dueUnix` is the intraday due the answer actually
+   * scheduled, so a card on the 10-minute learning step does not come back
+   * three cards later just because three cards went past. The card gap alone
+   * was the bug behind "the first card keeps coming back": Anki brings a
+   * learning card back when its STEP TIMER expires, and only pulls it forward
+   * early through learn-ahead once the session has nothing else to show --
+   * which is exactly what advanceToNextCard()'s third branch is.
+   *
+   * `dueUnix` is meaningless in cram (nothing is scheduled and there may be no
+   * clock at all), and the gate is skipped there: the card gap alone governs,
+   * as it always did.
    */
   struct PendingCard {
+    uint32_t dueUnix;
     flashcards::Ordinal ordinal;
     uint8_t showAfter;
   };
@@ -119,7 +131,7 @@ class FlashcardStudyActivity final : public Activity {
    * One-deep undo. It restores the whole answer, not just the record: the
    * pre-answer CardState, the two daily counters, where the queue had got to,
    * the resurface list and the session tallies. Snapshotting the pending list
-   * wholesale (256 bytes) is what makes the restore exact -- the answer may have
+   * wholesale (512 bytes) is what makes the restore exact -- the answer may have
    * pushed the card onto it, or pulled a different one off it -- and, with the
    * list full, may have been the answer whose resurface was dropped.
    */
@@ -155,7 +167,8 @@ class FlashcardStudyActivity final : public Activity {
 
   // --- Queue ---
   void advanceToNextCard();
-  void requeueCurrent();
+  /** Parks the current card for later; `dueUnix` is its scheduled intraday due (0 in cram). */
+  void requeueCurrent(uint32_t dueUnix);
   void dropFromPending(flashcards::Ordinal ordinal);
   void decayPending();
 
