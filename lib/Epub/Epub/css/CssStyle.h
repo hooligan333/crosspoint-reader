@@ -122,7 +122,8 @@ struct CssPropertyFlags {
         borderLeft(0),
 #endif
         verticalAlign(0),
-        listStyleType(0) {}
+        listStyleType(0) {
+  }
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||

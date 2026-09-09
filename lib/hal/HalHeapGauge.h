@@ -30,9 +30,7 @@
 // Diagnostics deliberately stay on the raw ESP calls: the [MEM] prints and the
 // web-server stats report the whole internal pool, not the gate's view of it.
 #ifdef CROSSPOINT_PSRAM_HEAP_GAUGE
-static inline size_t gateFreeHeap() {
-  return heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
-}
+static inline size_t gateFreeHeap() { return heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL); }
 static inline size_t gateMaxAllocHeap() {
   return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
 }

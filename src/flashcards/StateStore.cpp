@@ -45,9 +45,7 @@ static_assert(CHUNK_BYTES % 512 == 0, "record chunks must stay sector-aligned");
 static_assert(CPST_RECORDS_OFFSET % 512 == 0, "record 0 must start on a sector boundary");
 
 /** Absolute file offset of `ordinal`'s record. */
-size_t recordOffset(Ordinal ordinal) {
-  return CPST_RECORDS_OFFSET + static_cast<size_t>(ordinal) * CPST_RECORD_BYTES;
-}
+size_t recordOffset(Ordinal ordinal) { return CPST_RECORDS_OFFSET + static_cast<size_t>(ordinal) * CPST_RECORD_BYTES; }
 
 // The record payload IS an fsrs::CardState: the library pins the field offsets
 // with its own static_asserts, and these two say the file format agrees.
