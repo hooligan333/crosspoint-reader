@@ -6,6 +6,9 @@
 
 #include <functional>
 #include <string>
+#ifdef CROSSPOINT_SOFT_CLOCK
+#include <cstring>  // memcpy for the Date-header buffer below
+#endif
 
 #include "WifiPowerSaveGuard.h"
 
@@ -16,6 +19,21 @@ namespace {
 // (>15s) and chunked catalogs stall mid-body, so 15s killed them. 60s gives
 // slow servers room.
 constexpr int HTTP_TIMEOUT_MS = 60000;
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+// Soft-clock Date-header capture (FLASHCARD_SPEC.md §7b.2). A fixed buffer, not
+// a std::string: it is written on every fetch on a device with ~50 KB of
+// fragmented heap, and an RFC-1123 date is 29 characters.
+char g_lastResponseDate[40] = "";
+
+void noteResponseDate(const std::string& value) {
+  // A header longer than the buffer is not a date; store nothing rather than a
+  // truncated string the parser would have to reject.
+  const size_t len = value.size() < sizeof(g_lastResponseDate) ? value.size() : 0;
+  memcpy(g_lastResponseDate, value.c_str(), len);
+  g_lastResponseDate[len] = '\0';
+}
+#endif
 
 // All HTTP(S) fetches go through wolfSSL (the firmware's only TLS stack: it
 // speaks TLS 1.3 and reads large bodies reliably). Plain-http URLs still use a
@@ -29,9 +47,33 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   WifiPowerSaveGuard psGuard;
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // Never let a previous fetch's Date be read as this one's.
+  noteResponseDate("");
+  // fetchResumable owns each attempt's client, so the Date header is read from
+  // inside the body callback, where that attempt's client is alive and its
+  // headers are parsed. The SDK hands the sink 2xx bodies only, so a redirect
+  // hop's Date is never taken: a redirector's clock is not the feed server's.
+  // A 2xx with an empty body never reaches the sink and leaves "", which the
+  // sync flows treat as "no Date" and fall through to NTP.
+  const freeink::SecureHttpClient* attemptClient = nullptr;
+  bool attemptDateNoted = false;
+  freeink::FetchSink dateSink = sink;
+  dateSink.write = [&](const uint8_t* data, size_t len) {
+    if (attemptClient && !attemptDateNoted) {
+      noteResponseDate(attemptClient->getHeader("date"));
+      attemptDateNoted = true;
+    }
+    return sink.write(data, len);
+  };
+#endif
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
+#ifdef CROSSPOINT_SOFT_CLOCK
+        attemptClient = &http;
+        attemptDateNoted = false;
+#endif
         http.setTimeout(HTTP_TIMEOUT_MS);
         http.setInsecure();
         // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
@@ -47,7 +89,12 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
         LOG_DBG("HTTP", "wolfSSL GET: %s (heap %u, max block %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMaxAllocHeap());
       },
-      sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
+#ifdef CROSSPOINT_SOFT_CLOCK
+      dateSink,
+#else
+      sink,
+#endif
+      [cancelFlag] { return cancelFlag && *cancelFlag; });
   if (bytesOut) *bytesOut = result.bytes;
 
   if (result.aborted) return HttpDownloader::ABORTED;
@@ -134,3 +181,11 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
   return OK;
 }
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+// Every fetch goes through runGetSecure (wolfSSL via fetchResumable), which
+// fills the buffer from the 2xx response's first body chunk. A response with no
+// Date header -- or a 2xx with an empty body -- leaves "", and the sync flows
+// fall straight through to the NTP fallback, which is the intended degradation.
+const char* HttpDownloader::lastResponseDate() { return g_lastResponseDate; }
+#endif
