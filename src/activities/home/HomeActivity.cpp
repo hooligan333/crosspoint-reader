@@ -29,7 +29,7 @@ int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
-  count++;  // Sync Decks
+  count += 2;  // Flashcards, Sync Decks
 #endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
@@ -208,6 +208,9 @@ void HomeActivity::loop() {
         break;
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+      case HomeMenuItem::FLASHCARD_STUDY:
+        onFlashcardStudyOpen();
+        break;
       case HomeMenuItem::FLASHCARD_SYNC:
         onFlashcardSyncOpen();
         break;
@@ -346,7 +349,10 @@ void HomeActivity::render(RenderLock&&) {
   // into. Inserted rather than folded into the initialisers above so a build
   // with this flag off keeps byte-identical code (FLASHCARD_SPEC.md §0.5).
   // Bookmark is the closest glyph the UIIcon set ships that the home menu does
-  // not already spend on another row (see BaseTheme.h).
+  // not already spend on another row (see BaseTheme.h); Text sits above it for
+  // the study screen, which is the row a user visits daily.
+  menuItems.insert(menuItems.end() - 1, tr(STR_DECK_STUDY));
+  menuIcons.insert(menuIcons.end() - 1, Text);
   menuItems.insert(menuItems.end() - 1, tr(STR_DECK_SYNC));
   menuIcons.insert(menuIcons.end() - 1, Bookmark);
 #endif
@@ -402,6 +408,8 @@ void HomeActivity::onRssSyncOpen() { activityManager.goToRssSync(); }
 #endif
 
 #ifdef CROSSPOINT_FLASHCARDS
+void HomeActivity::onFlashcardStudyOpen() { activityManager.goToFlashcardStudy(); }
+
 void HomeActivity::onFlashcardSyncOpen() { activityManager.goToFlashcardSync(); }
 #endif
 

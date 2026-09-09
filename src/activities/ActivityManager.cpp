@@ -25,6 +25,7 @@
 #include "network/RssSyncActivity.h"
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+#include "flashcards/FlashcardStudyActivity.h"
 #include "network/FlashcardSyncActivity.h"
 #endif
 #include "reader/ReaderActivity.h"
@@ -336,6 +337,10 @@ void ActivityManager::goToRssSync() { replaceActivity(std::make_unique<RssSyncAc
 #endif
 
 #ifdef CROSSPOINT_FLASHCARDS
+void ActivityManager::goToFlashcardStudy() {
+  replaceActivity(std::make_unique<FlashcardStudyActivity>(renderer, mappedInput));
+}
+
 void ActivityManager::goToFlashcardSync() {
   replaceActivity(std::make_unique<FlashcardSyncActivity>(renderer, mappedInput));
 }
@@ -390,6 +395,11 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::RSS_SYNC;
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+    } else if (activityName == "FlashcardStudy") {
+      // A study session is never restored mid-card: the state file is current
+      // after every answer, so coming back lands on the deck picker and the
+      // home cursor sits on the row that opened it.
+      initialMenuItem = HomeMenuItem::FLASHCARD_STUDY;
     } else if (activityName == "FlashcardSync") {
       initialMenuItem = HomeMenuItem::FLASHCARD_SYNC;
 #endif
