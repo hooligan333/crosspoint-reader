@@ -8,6 +8,9 @@
 
 #include <functional>
 #include <string>
+#ifdef CROSSPOINT_SOFT_CLOCK
+#include <cstring>  // memcpy for the Date-header buffer below
+#endif
 
 #if defined(FREEINK_NET_WOLFSSL)
 #include <SecureHttpClient.h>
@@ -46,6 +49,23 @@ bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
+#ifdef CROSSPOINT_SOFT_CLOCK
+// Soft-clock Date-header capture (FLASHCARD_SPEC.md §7b.2). A fixed buffer, not
+// a std::string: it is written on every fetch on a device with ~50 KB of
+// fragmented heap, and an RFC-1123 date is 29 characters.
+char g_lastResponseDate[40] = "";
+
+#if defined(FREEINK_NET_WOLFSSL)
+void noteResponseDate(const std::string& value) {
+  // A header longer than the buffer is not a date; store nothing rather than a
+  // truncated string the parser would have to reject.
+  const size_t len = value.size() < sizeof(g_lastResponseDate) ? value.size() : 0;
+  memcpy(g_lastResponseDate, value.c_str(), len);
+  g_lastResponseDate[len] = '\0';
+}
+#endif
+#endif
+
 // OtaUpdater.cpp already disables WiFi power-save for firmware downloads, but
 // OPDS feed/book fetches never did despite being able to run just as long for
 // a large category. Modem sleep periodically powers the radio down between
@@ -68,6 +88,10 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
                                          const std::string& password, Sink& sink) {
   WifiPowerSaveGuard psGuard;
   std::string url = startUrl;
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // Never let a previous fetch's Date be read as this one's.
+  noteResponseDate("");
+#endif
 
   for (int hop = 0; hop <= MAX_REDIRECTS; ++hop) {
     freeink::SecureHttpClient http;
@@ -120,6 +144,11 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
       LOG_ERR("HTTP", "wolfSSL unexpected status: %d", status);
       return HttpDownloader::HTTP_ERROR;
     }
+#ifdef CROSSPOINT_SOFT_CLOCK
+    // The 200's own Date header, captured before `http` leaves scope. Taken
+    // only from the final hop: a redirector's clock is not the feed server's.
+    noteResponseDate(http.getHeader("date"));
+#endif
     if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
     if (!http.responseComplete()) {
       LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
@@ -320,3 +349,13 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   LOG_DBG("HTTP", "Downloaded %zu bytes", sink.downloaded);
   return OK;
 }
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+// Only the wolfSSL path fills the buffer. FREEINK_NET_WOLFSSL is set in
+// platformio.ini's [base] section, so it is the path every env actually
+// compiles; the esp_http_client alternate would need a header event handler to
+// see response headers at all, and adding one to a path no build takes would be
+// untestable code. Without it the accessor returns "" and the sync flows fall
+// straight through to the NTP fallback, which is the intended degradation.
+const char* HttpDownloader::lastResponseDate() { return g_lastResponseDate; }
+#endif

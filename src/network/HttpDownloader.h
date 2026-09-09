@@ -50,4 +50,18 @@ class HttpDownloader {
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "");
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+  /**
+   * The `Date:` header of the most recent 200 response, raw, or "" when that
+   * response carried none. The soft clock (FLASHCARD_SPEC.md §7b.2) uses it as
+   * its primary time source: the board has no RTC, and a feed server's own
+   * clock is free, arrives on every sync, and needs no route off the LAN.
+   *
+   * Points into a static buffer that the next fetch overwrites — read it
+   * immediately after the fetch that should have set it. Declared last so the
+   * class layout above is exactly what it is without the flag.
+   */
+  static const char* lastResponseDate();
+#endif
 };

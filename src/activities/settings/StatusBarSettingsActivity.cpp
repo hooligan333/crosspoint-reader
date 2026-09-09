@@ -17,8 +17,10 @@
 namespace fui = freeink::ui;
 
 namespace {
-// Menu items in their natural order. Clock entries are appended only when an
-// RTC is present (halClock.isAvailable()), so RTC-less devices don't see them.
+// Menu items in their natural order. Clock entries are appended only when the
+// device has a clock, which onEnter() decides — an RTC chip on the hardware
+// backend, always on the CROSSPOINT_SOFT_CLOCK backend (where "no clock yet" is
+// a state the "Sync clock now" row exists to leave).
 enum MenuItem {
   ITEM_CHAPTER_PAGE_COUNT = 0,
   ITEM_BOOK_PROGRESS_PERCENTAGE,
@@ -105,7 +107,16 @@ StatusBarSettingsActivity::StatusBarSettingsActivity(GfxRenderer& renderer, Mapp
 void StatusBarSettingsActivity::onEnter() {
   UiListActivity::onEnter();
 
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // isAvailable() means two different things on the two backends. With an RTC
+  // it means "this board has a clock chip", and hiding the rows on a board
+  // without one is right. With the soft clock the board always has a clock; the
+  // flag only says whether it has been SET, and hiding the rows while it is
+  // unset would hide "Sync clock now" — the row that sets it.
+  visibleItemCount = FULL_MENU_ITEMS;
+#else
   visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
+#endif
 
   // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
@@ -257,7 +268,24 @@ std::string StatusBarSettingsActivity::rowValueText(const int index) {
     }
 #endif
     case ITEM_CLOCK_SYNC:
+#ifdef CROSSPOINT_SOFT_CLOCK
+      // Live validity, never the persisted flag. clockHasBeenSynced survives a
+      // power cut and the soft clock does not, so after a flat battery the flag
+      // would still read "Clock synced" over a clock that is unset or only
+      // restored-and-approximate. STALE deliberately reads the same as INVALID:
+      // both mean "this is not a time a server vouched for", which is what the
+      // row is asking, and the difference does not need its own wording.
+      switch (halClock.validity()) {
+        case softclock::Validity::Valid:
+          return tr(STR_CLOCK_SYNCED);
+        case softclock::Validity::Stale:
+        case softclock::Validity::Invalid:
+          break;
+      }
+      return tr(STR_NOT_SET);
+#else
       return SETTINGS.clockHasBeenSynced ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
+#endif
     default:
       return tr(STR_HIDE);
   }
