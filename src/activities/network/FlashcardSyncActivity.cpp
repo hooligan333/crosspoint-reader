@@ -24,9 +24,9 @@
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
-#ifdef CROSSPOINT_FLASHCARDS_C3
-#include "flashcards/DeckFile.h"  // DECK_MAX_CARDS: the reader's cap is this screen's cap
-#endif
+// DECK_MAX_CARDS (C3 builds) and DECK_MAX_IMAGES_PER_SIDE (v2 header gate) — the
+// reader's caps are this screen's caps. Constants only; pulls no study-layer code.
+#include "flashcards/DeckFile.h"
 #include "flashcards/DeckPaths.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
@@ -59,7 +59,16 @@ constexpr size_t CPDK_PARAMS_BYTES = 84;  // f32 w[21], present iff flags bit 0
 constexpr size_t CPDK_INDEX_ENTRY_BYTES = 20;
 constexpr size_t CPDK_CONTENT_HASH_OFFSET = 12;
 constexpr uint16_t CPDK_FORMAT_VERSION = 1;
+constexpr uint16_t CPDK_FORMAT_VERSION_IMAGES = 2;  // card images, FLASHCARD_SPEC.md §2.2
 constexpr uint16_t CPDK_FLAG_FSRS_PARAMS = 0x0001;
+constexpr uint16_t CPDK_FLAG_HAS_IMAGES = 0x0002;
+// v2's image table and placement table sit between the optional FSRS block and
+// the card index, and each is a u32 count followed by fixed-size entries. This
+// screen reads only the two counts: it needs them to know where the index ends,
+// which is the one thing its length check is about (§3.7).
+constexpr size_t CPDK_IMAGE_ENTRY_BYTES = 16;
+constexpr size_t CPDK_PLACEMENT_ENTRY_BYTES = 12;
+constexpr size_t CPDK_SECTION_COUNT_BYTES = 4;
 #ifdef CROSSPOINT_FLASHCARDS_C3
 // FLASHCARD_SPEC.md §7b.3 pin b: this gate and the reader's are the SAME cap.
 // A private 40000 here would let an over-cap deck complete its download, be
@@ -148,14 +157,24 @@ bool deckHeaderIsReadable(const std::string& path) {
   memcpy(&flags, header + 6, sizeof(flags));
   memcpy(&cardCount, header + 8, sizeof(cardCount));
 
-  if (formatVersion != CPDK_FORMAT_VERSION) {
+  const bool isImageVersion = formatVersion == CPDK_FORMAT_VERSION_IMAGES;
+  if (formatVersion != CPDK_FORMAT_VERSION && !isImageVersion) {
     LOG_ERR("DECK", "Unsupported format version %u: %s", static_cast<unsigned>(formatVersion), path.c_str());
     return false;
   }
   // Unknown flags bits are the format's version escape hatch: refuse rather
-  // than guess what the block after the header means.
-  if ((flags & static_cast<uint16_t>(~CPDK_FLAG_FSRS_PARAMS)) != 0) {
+  // than guess what the block after the header means. Which bits are known is a
+  // property of the version — has_images on a v1 file is an unknown bit — and a
+  // v2 file that does not set it is one nobody wrote (an --images run that
+  // embedded nothing is emitted as v1, DECK_SERVER_SPEC.md §3.7).
+  const uint16_t knownFlags =
+      static_cast<uint16_t>(CPDK_FLAG_FSRS_PARAMS | (isImageVersion ? CPDK_FLAG_HAS_IMAGES : 0));
+  if ((flags & static_cast<uint16_t>(~knownFlags)) != 0) {
     LOG_ERR("DECK", "Unknown header flags 0x%04x: %s", static_cast<unsigned>(flags), path.c_str());
+    return false;
+  }
+  if (isImageVersion && (flags & CPDK_FLAG_HAS_IMAGES) == 0) {
+    LOG_ERR("DECK", "v2 header without has_images: %s", path.c_str());
     return false;
   }
   // Zero is refused with the over-cap case: an empty deck has nothing to study,
@@ -168,8 +187,49 @@ bool deckHeaderIsReadable(const std::string& path) {
   // A truncated download is the realistic failure mode (DECK_SERVER_SPEC.md
   // §3.6.4); the header alone says how long the file must be before its first
   // byte of text. cardCount is capped above, so this cannot overflow.
-  const size_t blobStart = CPDK_HEADER_BYTES + ((flags & CPDK_FLAG_FSRS_PARAMS) != 0 ? CPDK_PARAMS_BYTES : 0) +
-                           static_cast<size_t>(cardCount) * CPDK_INDEX_ENTRY_BYTES;
+  size_t indexStart = CPDK_HEADER_BYTES + ((flags & CPDK_FLAG_FSRS_PARAMS) != 0 ? CPDK_PARAMS_BYTES : 0);
+  // On v2 the index no longer starts at a fixed offset: the two image sections
+  // are in front of it, and each is a count plus that many fixed-size entries,
+  // so both counts have to be read before the index end is even known. This
+  // stays a HEADER check: the tables themselves belong to the deck reader, which
+  // validates every entry (FLASHCARD_SPEC.md §2.1).
+  if (isImageVersion) {
+    // ONE cap for both sections, spelled the same way the deck reader spells it
+    // (DeckFile.cpp, readImageSections): four images per SIDE over the two sides
+    // of every card. Writing it as `2 * DECK_MAX_IMAGES_PER_SIDE * cardCount` in
+    // both places rather than as two literals is the point — a 4x here beside an
+    // 8x there was a bound the converter could not satisfy (FLASHCARD_SPEC.md
+    // §2.2, I1 pins).
+    const uint32_t sectionCap = 2u * flashcards::DECK_MAX_IMAGES_PER_SIDE * cardCount;
+    const size_t entryBytes[2] = {CPDK_IMAGE_ENTRY_BYTES, CPDK_PLACEMENT_ENTRY_BYTES};
+    for (int section = 0; section < 2; section++) {
+      uint8_t countBytes[CPDK_SECTION_COUNT_BYTES];
+      if (fileSize < indexStart + sizeof(countBytes) || !file.seek(indexStart) ||
+          file.read(countBytes, sizeof(countBytes)) != static_cast<int>(sizeof(countBytes))) {
+        LOG_ERR("DECK", "Truncated before image section %d: %s", section, path.c_str());
+        return false;
+      }
+      uint32_t count = 0;
+      memcpy(&count, countBytes, sizeof(count));
+      // image_count >= 1 is the has_images gate restated.
+      if (count > sectionCap || (section == 0 && count == 0)) {
+        LOG_ERR("DECK", "Image section %d count %u out of range: %s", section, static_cast<unsigned>(count),
+                path.c_str());
+        return false;
+      }
+      indexStart += sizeof(countBytes);
+      // Division-style, never `count * entryBytes`: the count came off the card
+      // as a raw u32 and the multiply is what overflows (§2.2 I1 pins). The cap
+      // above already bounds it, but the bound this needs is the FILE's.
+      if (count > (fileSize - indexStart) / entryBytes[section]) {
+        LOG_ERR("DECK", "Truncated inside image section %d (%u entries): %s", section, static_cast<unsigned>(count),
+                path.c_str());
+        return false;
+      }
+      indexStart += static_cast<size_t>(count) * entryBytes[section];
+    }
+  }
+  const size_t blobStart = indexStart + static_cast<size_t>(cardCount) * CPDK_INDEX_ENTRY_BYTES;
   if (fileSize < blobStart) {
     LOG_ERR("DECK", "Truncated: %u B < index end %u: %s", static_cast<unsigned>(fileSize),
             static_cast<unsigned>(blobStart), path.c_str());
