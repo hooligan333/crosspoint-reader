@@ -5,6 +5,9 @@
 #include <Arduino.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#ifdef CROSSPOINT_SOFT_CLOCK
+#include <HalClock.h>  // the soft clock's time-fix hook in startFetch()
+#endif
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -21,6 +24,9 @@
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+#ifdef CROSSPOINT_FLASHCARDS_C3
+#include "flashcards/DeckFile.h"  // DECK_MAX_CARDS: the reader's cap is this screen's cap
+#endif
 #include "flashcards/DeckPaths.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
@@ -54,7 +60,16 @@ constexpr size_t CPDK_INDEX_ENTRY_BYTES = 20;
 constexpr size_t CPDK_CONTENT_HASH_OFFSET = 12;
 constexpr uint16_t CPDK_FORMAT_VERSION = 1;
 constexpr uint16_t CPDK_FLAG_FSRS_PARAMS = 0x0001;
+#ifdef CROSSPOINT_FLASHCARDS_C3
+// FLASHCARD_SPEC.md §7b.3 pin b: this gate and the reader's are the SAME cap.
+// A private 40000 here would let an over-cap deck complete its download, be
+// renamed into the deck folder, be offered by the picker and only then be
+// refused — and, being present, be skipped by every later sync. Refusing it at
+// the download instead unlinks the temp and counts it as Invalid on the screen.
+constexpr uint32_t CPDK_MAX_CARDS = flashcards::DECK_MAX_CARDS;
+#else
 constexpr uint32_t CPDK_MAX_CARDS = 40000;
+#endif
 
 // Every CPDK multi-byte field is little-endian on the wire and is memcpy'd
 // straight into a local below, so the bytes only land in the right order on a
@@ -260,6 +275,15 @@ void FlashcardSyncActivity::startFetch() {
   requestUpdateAndWait();
 
   if (!fetchFeed()) return;  // fetchFeed() set the error state
+
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // The deck flow needs the clock more than any other: an invalid one drops the
+  // study screen to Cram-only. The deck server's own Date header, which arrived
+  // with the feed a line above, is the cheapest possible fix; NTP is the
+  // fallback for a server that sends no usable one, and it is free here too
+  // because WiFi is up and the "Fetching..." screen is still showing.
+  if (!halClock.applyServerDate(HttpDownloader::lastResponseDate())) halClock.maybeOpportunisticSync();
+#endif
 
   {
     RenderLock lock(*this);

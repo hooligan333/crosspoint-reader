@@ -130,7 +130,14 @@ void SettingsActivity::rebuildSettings() {
   }
 
   // Clock configuration only exists where the RTC probe found hardware.
+  // CROSSPOINT_SOFT_CLOCK boards always have a clock; isAvailable() only says
+  // whether it has been SET yet, and hiding the entry while unset would hide
+  // "Sync clock now" with it.
+#ifdef CROSSPOINT_SOFT_CLOCK
+  {
+#else
   if (halClock.isAvailable()) {
+#endif
     addAction(SettingsSection::General, StrId::STR_CLOCK, SettingAction::ClockSettings);
   }
   addAction(SettingsSection::Reader, StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar);

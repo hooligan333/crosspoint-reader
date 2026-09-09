@@ -16,8 +16,9 @@ namespace fui = freeink::ui;
 
 namespace {
 // Menu items in their natural order. The clock position entry is appended only
-// when the RTC probe found hardware; time, zone, and format live in Settings >
-// System > Clock.
+// when the device has a clock, which onEnter() decides — an RTC chip on the
+// hardware backend, always on the CROSSPOINT_SOFT_CLOCK backend. Time, zone,
+// and format live in Settings > System > Clock.
 enum MenuItem {
   ITEM_CHAPTER_PAGE_COUNT = 0,
   ITEM_BOOK_PROGRESS_PERCENTAGE,
@@ -71,7 +72,17 @@ StatusBarSettingsActivity::StatusBarSettingsActivity(GfxRenderer& renderer, Mapp
 void StatusBarSettingsActivity::onEnter() {
   UiListActivity::onEnter();
 
+#ifdef CROSSPOINT_SOFT_CLOCK
+  // isAvailable() means two different things on the two backends. With an RTC
+  // it means "this board has a clock chip", and hiding the rows on a board
+  // without one is right. With the soft clock the board always has a clock; the
+  // flag only says whether it has been SET, so the clock row stays visible
+  // while it is unset (Settings > System > Clock is gated the same way, so
+  // "Sync clock now" — the row that sets it — stays reachable).
+  visibleItemCount = FULL_MENU_ITEMS;
+#else
   visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
+#endif
 
   // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
