@@ -333,7 +333,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // share releaseSectionForChildScreen() (the two TEXT_SETTINGS branches --
   // classic menu and toolbar -- plus SELECT_CHAPTER), and the rest do it inline
   // because they need a wider critical section: applyReaderTextSettings (the
-  // return path all three take, plus the Text panel's own live edits),
+  // return path of both of those TEXT_SETTINGS branches -- SELECT_CHAPTER's
+  // handler does a chapter jump and never calls it -- plus the Text panel's own
+  // live edits),
   // applyOrientation, toggleAutoPageTurn, and the backward chapter-boundary
   // arm. The two font teardowns themselves were moved INSIDE a
   // RenderLock for the same reason.
