@@ -729,7 +729,14 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
       settled = true;
       return false;
     }
-    if (!target.startBuild(lastRenderSpec)) {
+    // mayReleaseFontCaches=false: #3527 drops the SD-font caches at the top of
+    // startBuild(). On this path that would evict the caches the FOREGROUND is
+    // rendering the current chapter through, to serve a speculative layout of
+    // the next one -- so the very next page turn would pay a full
+    // advance/kern/ligature reload from SD. The gates above already decline
+    // this arm when the heap is short, which is the right answer here: a
+    // declined prebuild costs nothing, an evicted font cache costs a page turn.
+    if (!target.startBuild(lastRenderSpec, nullptr, /*mayReleaseFontCaches=*/false)) {
       LOG_ERR("ERS", "Failed to start prebuild of section %d", spine);
       settled = true;
       return false;
