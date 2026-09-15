@@ -62,8 +62,9 @@ bool insufficientHeap() {
   const auto heap = HalMemory::getDefaultHeap();
   if (heap.freeBytes < MIN_FREE_FOR_TLS || heap.largestBlockBytes < MIN_BLOCK_FOR_TLS) {
     LOG_ERR("KOSync",
-            "Insufficient allocatable heap for TLS handshake: %zu bytes free (need %u), %zu max alloc (need %u)",
-            heap.freeBytes, MIN_FREE_FOR_TLS, heap.largestBlockBytes, MIN_BLOCK_FOR_TLS);
+            "Insufficient allocatable heap for TLS handshake: %lu bytes free (need %u), %lu max alloc (need %u)",
+            static_cast<unsigned long>(heap.freeBytes), MIN_FREE_FOR_TLS,
+            static_cast<unsigned long>(heap.largestBlockBytes), MIN_BLOCK_FOR_TLS);
     return true;
   }
 #ifdef CROSSPOINT_PSRAM_HEAP_GAUGE
@@ -76,8 +77,9 @@ bool insufficientHeap() {
   // numerically dead on exactly the image it was written for and the user gets a
   // ~15 s frozen "Syncing..." instead of an immediate refusal.
   if (gateFreeHeap() < MIN_FREE_FOR_TLS || gateMaxAllocHeap() < MIN_BLOCK_FOR_TLS) {
-    LOG_ERR("KOSync", "Insufficient INTERNAL heap for TLS handshake: %zu bytes free (need %u), %zu max alloc (need %u)",
-            gateFreeHeap(), MIN_FREE_FOR_TLS, gateMaxAllocHeap(), MIN_BLOCK_FOR_TLS);
+    LOG_ERR("KOSync", "Insufficient INTERNAL heap for TLS handshake: %lu bytes free (need %u), %lu max alloc (need %u)",
+            static_cast<unsigned long>(gateFreeHeap()), MIN_FREE_FOR_TLS,
+            static_cast<unsigned long>(gateMaxAllocHeap()), MIN_BLOCK_FOR_TLS);
     return true;
   }
 #endif

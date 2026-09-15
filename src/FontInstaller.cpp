@@ -92,7 +92,7 @@ bool FontInstaller::validateCpfontFile(const char* path) {
   file.close();
 
   if (bytesRead < CPFONT_MAGIC_LEN) {
-    LOG_ERR("FONT", "File too small: %s (%zu bytes)", path, bytesRead);
+    LOG_ERR("FONT", "File too small: %s (%lu bytes)", path, static_cast<unsigned long>(bytesRead));
     return false;
   }
 

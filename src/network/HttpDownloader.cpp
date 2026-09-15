@@ -108,7 +108,8 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
     return HttpDownloader::HTTP_ERROR;
   }
   if (!result.complete) {
-    LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", result.bytes, result.total);
+    LOG_ERR("HTTP", "wolfSSL incomplete: got %lu of %lu bytes", static_cast<unsigned long>(result.bytes),
+            static_cast<unsigned long>(result.total));
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::OK;
