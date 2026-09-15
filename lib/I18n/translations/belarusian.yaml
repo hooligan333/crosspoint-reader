@@ -40,7 +40,7 @@ STR_DICT_DECOMPRESS_ERROR: "Не ўдалося распакаваць азна�
 STR_DICT_LOW_MEMORY: "Не хапае памяці"
 STR_WIFI_NETWORKS: "Сеткі Wi-Fi"
 STR_NO_NETWORKS: "Сеткі не знойдзены"
-STR_NETWORKS_FOUND: "Знойдзена сетак: %zu"
+STR_NETWORKS_FOUND: "Знойдзена сетак: %lu"
 STR_SCANNING: "Сканаванне..."
 STR_FINDING_SAVED_WIFI: "Пошук захаванай сеткі Wi-Fi..."
 STR_CONNECTING: "Падключэнне..."

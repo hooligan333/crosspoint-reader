@@ -46,7 +46,7 @@ STR_DICT_HISTORY_FULL: "היסטוריית החיפושים במילון מלא�
 STR_DICT_RESTORE_FAILED: "לא ניתן לחזור למיקום הקודם בהגדרה"
 STR_WIFI_NETWORKS: "רשתות אלחוטיות (WiFi)"
 STR_NO_NETWORKS: "לא נמצאו רשתות"
-STR_NETWORKS_FOUND: "נמצאו %zu רשתות"
+STR_NETWORKS_FOUND: "נמצאו %lu רשתות"
 STR_SCANNING: "סורק..."
 STR_FINDING_SAVED_WIFI: "מחפש רשת אלחוטית שמורה..."
 STR_CONNECTING: "מתחבר..."
