@@ -95,6 +95,15 @@ class MappedInputManager {
   bool wasHomeGesture() const;
   // Configured one-frame action, independent of the gesture that triggered it.
   HomeButtonAction homeButtonAction() const { return homeAction; }
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Clear the action a global shortcut has just acted on. update() recomputes
+  // homeAction once per input frame and every other reader of homeButtonAction()
+  // in that frame sees the same latched value -- including a NESTED
+  // ActivityManager::loop() that runs before the next gpio.update(). A dispatch
+  // that changes the activity stack has to retire its own action so it cannot be
+  // run twice against two different screens.
+  void consumeHomeButtonAction() const { homeAction = HomeButtonAction::Ignore; }
+#endif
   void resetHomeButtonInput() const {
     homeButtonInput.reset();
     deferredHomeAction = HomeButtonAction::Ignore;

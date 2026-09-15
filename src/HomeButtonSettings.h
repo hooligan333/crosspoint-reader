@@ -5,10 +5,20 @@
 #include "CrossPointSettings.h"
 
 namespace home_button {
+// clang-format off
+// Kept off so upstream's compact table stays byte-identical: an #ifdef inside an
+// initializer list makes clang-format reflow every row, which would collide on
+// every future rebase for one appended entry.
 inline constexpr StrId ACTION_LABELS[] = {StrId::STR_HOME_SHORTCUT, StrId::STR_IGNORE,           StrId::STR_PAGE_TURN,
                                           StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,        StrId::STR_CONFIRM,
                                           StrId::STR_KOSYNC,        StrId::STR_BOOKMARK_OPTION,  StrId::STR_DICTIONARY,
-                                          StrId::STR_READER_MENU,   StrId::STR_TOGGLE_FRONTLIGHT};
+                                          StrId::STR_READER_MENU,   StrId::STR_TOGGLE_FRONTLIGHT,
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+                                          // Appended last: see HomeButtonAction.
+                                          StrId::STR_GO_BACK,
+#endif
+};
+// clang-format on
 static_assert(sizeof(ACTION_LABELS) / sizeof(ACTION_LABELS[0]) == static_cast<unsigned>(HomeButtonAction::Count));
 inline constexpr StrId GESTURE_LABELS[] = {StrId::STR_HOME_BUTTON_TAP, StrId::STR_HOME_BUTTON_DOUBLE_TAP,
                                            StrId::STR_HOME_BUTTON_LONG_PRESS};
