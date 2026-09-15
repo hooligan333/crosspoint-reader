@@ -117,7 +117,8 @@ void checkPanic() {
         panicCaptureMarker = 0;
         LOG_INF("SYS", "Dumped panic info to SD card");
       } else {
-        LOG_ERR("SYS", "Failed to write complete crash report (%zu of %zu bytes)", written, panicInfo.size());
+        LOG_ERR("SYS", "Failed to write complete crash report (%lu of %lu bytes)", static_cast<unsigned long>(written),
+                static_cast<unsigned long>(panicInfo.size()));
       }
     } else {
       LOG_ERR("SYS", "Failed to open crash_report.txt for writing");
