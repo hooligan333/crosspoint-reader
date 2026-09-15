@@ -219,8 +219,12 @@ void OpdsServerListActivity::buildScreen(UiScreen& screen) {
   // rebuildRowItems() when the server list last reloaded; only the
   // folder/format rows' live subtitle needs refreshing here (pointer
   // reassignment onto already-owned strings — no allocation).
-  if (!pickerMode) {
-    const auto serverCount = static_cast<int>(OPDS_STORE.getServers().size());
+  if (!pickerMode && rowItems_.size() >= 3) {
+    // Derive the index from the vector this render is actually walking, not from
+    // the live store: the two only agree until something adds or removes a server
+    // without rebuildRowItems() having run yet, and a live count one ahead would
+    // write one past the end of rowItems_ on every render.
+    const int serverCount = static_cast<int>(rowItems_.size()) - 3;
     rowItems_[serverCount + 1].subtitle =
         SETTINGS.opdsDownloadFolder[0] ? SETTINGS.opdsDownloadFolder : tr(STR_OPDS_SD_ROOT);
     rowItems_[serverCount + 2].subtitle = I18N.get(opdsFormatLabel(SETTINGS.opdsFilenameFormat));
