@@ -168,6 +168,14 @@ class HalGPIO {
   // held level can therefore neither busy-loop the caller nor hide an input
   // behind the full cap.
   bool waitForInput(uint32_t maxMs);
+
+  // True while ANY wake-capable pin sits at its wake level, i.e. a contact is in
+  // progress. waitForInput() cannot help such a round -- it leaves an asserted
+  // pin unarmed and floors the pass at 50 ms -- and 50 ms between polls is what
+  // costs #3463 its sub-50 ms presses, since InputManager only commits a press
+  // when a second poll >= DEBOUNCE_DELAY later agrees. Callers use this to fall
+  // back to the 10 ms slice poll for the duration of the press.
+  bool anyWakePinAsserted() const;
 #endif
 
   // Button indices
