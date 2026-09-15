@@ -576,7 +576,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         downloadUrl_, destPath,
         [this](size_t downloaded, size_t total) {
           fileProgress_ = downloaded;
-          fileTotal_ = total;
+          // Only when the response actually announced a length. The fork's
+          // HttpDownloader fires this callback unconditionally (which is what
+          // un-deadens Cancel on a chunked response), so total can now be 0 --
+          // and clobbering the manifest's own size with it would blank the
+          // progress bar for the rest of the transfer.
+          if (total > 0) fileTotal_ = total;
           mappedInput.update(true);
           if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
               mappedInput.wasPressed(MappedInputManager::Button::Back)) {
