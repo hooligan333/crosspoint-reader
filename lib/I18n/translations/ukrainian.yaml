@@ -40,7 +40,7 @@ STR_DICT_DECOMPRESS_ERROR: "Не вдалося розпакувати визн�
 STR_DICT_LOW_MEMORY: "Недостатньо пам'яті"
 STR_WIFI_NETWORKS: "Мережі Wi-Fi"
 STR_NO_NETWORKS: "Мереж не знайдено"
-STR_NETWORKS_FOUND: "Знайдено мереж: %zu"
+STR_NETWORKS_FOUND: "Знайдено мереж: %lu"
 STR_SCANNING: "Сканування..."
 STR_FINDING_SAVED_WIFI: "Пошук збереженої мережі Wi-Fi..."
 STR_CONNECTING: "Підключення..."
