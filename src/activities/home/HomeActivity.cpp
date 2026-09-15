@@ -22,6 +22,19 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+// Selector rows the recent-books axis contributes, mirroring what the render
+// path actually draws. With homeContinueReadingInMenu the renderer inserts
+// exactly ONE row ("Continue Reading", :363-367) however many recent books were
+// loaded; without it every recent book gets its own cover tile. Counting
+// recentBooks.size() in the first case put every row below Continue Reading out
+// by K-1 in both the highlight and the launch -- latent only because no shipped
+// theme sets homeContinueReadingInMenu with homeRecentBooksCount > 1 (the
+// invariant is stated next to the metrics in BaseTheme.h).
+int HomeActivity::recentRowCount() const {
+  if (recentBooks.empty()) return 0;
+  return UITheme::getInstance().getMetrics().homeContinueReadingInMenu ? 1 : static_cast<int>(recentBooks.size());
+}
+
 int HomeActivity::getMenuItemCount() const {
 #ifdef CROSSPOINT_RSS_SYNC
   int count = 5;  // File Browser, Library, File transfer, Sync RSS Feed, Settings
@@ -31,9 +44,7 @@ int HomeActivity::getMenuItemCount() const {
 #ifdef CROSSPOINT_FLASHCARDS
   count += 2;  // Flashcards, Sync Decks
 #endif
-  if (!recentBooks.empty()) {
-    count += recentBooks.size();
-  }
+  count += recentRowCount();
   if (hasOpdsServers) {
     count++;
   }
@@ -129,7 +140,7 @@ void HomeActivity::onEnter() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
 
-  const auto base = static_cast<int>(recentBooks.size());
+  const int base = recentRowCount();
   selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuItemToIndex(initialMenuItem, hasOpdsServers);
 
   // Trigger first update
@@ -184,11 +195,11 @@ void HomeActivity::loop() {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
   auto activateSelection = [this] {
-    if (selectorIndex < recentBooks.size()) {
+    if (selectorIndex < recentRowCount()) {
       onSelectBook(recentBooks[selectorIndex].path);
       return;
     }
-    const int menuIndex = selectorIndex - static_cast<int>(recentBooks.size());
+    const int menuIndex = selectorIndex - recentRowCount();
     switch (indexToMenuItem(menuIndex, hasOpdsServers)) {
       case HomeMenuItem::FILE_BROWSER:
         onFileBrowserOpen();
@@ -254,7 +265,10 @@ void HomeActivity::loop() {
   }
 
   const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
-  const int recentCount = std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  // Bounded by recentRowCount(), not recentBooks.size(): a tile this grid reports
+  // becomes selectorIndex directly, and only indices below recentRowCount() are
+  // read as books by activateSelection().
+  const int recentCount = std::min(recentRowCount(), coverColumnCount);
   const int coverColumnWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / coverColumnCount;
   int touchedBook = -1;
   const auto coverTouch = mappedInput.colTouch(touchedBook, metrics.contentSidePadding, coverColumnWidth, recentCount,
@@ -274,8 +288,7 @@ void HomeActivity::loop() {
   }
 
   const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
-  const int renderedMenuCount =
-      menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  const int renderedMenuCount = menuCount - (metrics.homeContinueReadingInMenu ? 0 : recentRowCount());
   int menuRow = -1;
   // Row height from the theme, not the metrics table: RoundedRaff draws
   // font-derived rows and the touch grid must match the visuals exactly.
@@ -283,8 +296,7 @@ void HomeActivity::loop() {
   const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, menuRowHeight + metrics.menuSpacing, renderedMenuCount,
                                               0, INT32_MAX, menuRowHeight);
   if (menuTouch != MappedInputManager::RowTouch::None) {
-    const int touchedIndex =
-        metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
+    const int touchedIndex = metrics.homeContinueReadingInMenu ? menuRow : menuRow + recentRowCount();
     if (menuTouch == MappedInputManager::RowTouch::Down) {
       if (selectorIndex != touchedIndex) {
         selectorIndex = touchedIndex;
@@ -333,8 +345,8 @@ void HomeActivity::render(RenderLock&&) {
   // "Sync RSS Feed" sits between File Transfer and Settings. Wifi is the only
   // network-flavoured glyph the UIIcon set ships (see BaseTheme.h) that the
   // home menu doesn't already spend on another row.
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
-                                        tr(STR_RSS_SYNC), tr(STR_SETTINGS_TITLE)};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER), tr(STR_RSS_SYNC),
+                                        tr(STR_SETTINGS_TITLE)};
   std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Wifi, Settings};
 #else
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
@@ -372,7 +384,7 @@ void HomeActivity::render(RenderLock&&) {
            pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
                          metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
       static_cast<int>(menuItems.size()),
-      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
+      metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentRowCount(),
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 

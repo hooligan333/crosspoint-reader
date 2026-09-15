@@ -70,6 +70,13 @@ struct ThemeMetrics {
   int homeCoverHeight;
   int homeCoverTileHeight;
   int homeRecentBooksCount;
+  // True: the home menu carries a single "Continue Reading" row instead of one
+  // cover tile per recent book. INVARIANT: homeContinueReadingInMenu implies
+  // homeRecentBooksCount == 1. The renderer inserts exactly ONE row whatever the
+  // count says (HomeActivity.cpp:363-367); HomeActivity::recentRowCount()
+  // reconciles the selector arithmetic with that, but the Continue Reading title
+  // and the cover tile both name recentBooks[0], so a theme setting both would
+  // load K books to show one.
   bool homeContinueReadingInMenu;
   int homeMenuTopOffset;
 
