@@ -408,7 +408,7 @@ uint8_t* ZipFile::readFileToMemory(const char* filename, size_t* size, const boo
   const auto dataSize = trailingNullByte ? inflatedDataSize + 1 : inflatedDataSize;
   const auto data = static_cast<uint8_t*>(malloc(dataSize));
   if (data == nullptr) {
-    LOG_ERR("ZIP", "Failed to allocate memory for output buffer (%zu bytes)", dataSize);
+    LOG_ERR("ZIP", "Failed to allocate memory for output buffer (%lu bytes)", static_cast<unsigned long>(dataSize));
     return nullptr;
   }
 
@@ -550,8 +550,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
       totalProduced += produced;
       if (totalProduced > static_cast<size_t>(inflatedDataSize)) {
-        LOG_ERR("ZIP", "Decompressed size exceeds expected (%zu > %zu)", totalProduced,
-                static_cast<size_t>(inflatedDataSize));
+        LOG_ERR("ZIP", "Decompressed size exceeds expected (%lu > %lu)", static_cast<unsigned long>(totalProduced),
+                static_cast<unsigned long>(inflatedDataSize));
         break;
       }
 
@@ -568,8 +568,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
       if (status == InflateStream::Status::Done) {
         if (totalProduced != static_cast<size_t>(inflatedDataSize)) {
-          LOG_ERR("ZIP", "Decompressed size mismatch (expected %zu, got %zu)", static_cast<size_t>(inflatedDataSize),
-                  totalProduced);
+          LOG_ERR("ZIP", "Decompressed size mismatch (expected %lu, got %lu)",
+                  static_cast<unsigned long>(inflatedDataSize), static_cast<unsigned long>(totalProduced));
           break;
         }
         LOG_DBG("ZIP", "Decompressed %d bytes into %d bytes", deflatedDataSize, inflatedDataSize);
