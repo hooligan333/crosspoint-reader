@@ -287,6 +287,20 @@ void FlashcardSyncActivity::onEnter() {
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
+bool FlashcardSyncActivity::preventAutoSleep() {
+  switch (state) {
+    case State::WIFI_SELECTION:
+    case State::FETCHING:
+    case State::SYNCING:
+      return true;
+    case State::LIST:
+    case State::SUMMARY:
+    case State::ERROR:
+      return false;
+  }
+  return false;
+}
+
 void FlashcardSyncActivity::onExit() {
   Activity::onExit();
   rows.clear();
@@ -614,10 +628,10 @@ void FlashcardSyncActivity::runSync() {
   }
 
   for (auto& row : rows) {
-    // Cancel is honoured BETWEEN items, so the item in flight always finishes
-    // cleanly (a half-written deck is worse than a slower exit). Latched here
-    // rather than off cancelRequested: a cancel during the LAST item leaves
-    // nothing undone, and that run did complete.
+    // The download itself aborts on cancelRequested (the flag is handed to
+    // downloadToFile), so this is the between-items check that ends the RUN.
+    // Latched here rather than off cancelRequested alone: a cancel during the
+    // LAST item leaves nothing undone, and that run did complete.
     if (cancelRequested) {
       cancelled = true;
       break;
@@ -654,7 +668,14 @@ void FlashcardSyncActivity::runSync() {
       // A failed or rejected replacement leaves the existing deck untouched:
       // the transfer lands in the temp file and the header check runs before
       // the rename, so the user keeps a studiable deck either way.
-      switch (downloadRow(row)) {
+      const ItemResult outcome = downloadRow(row);
+      // A transfer the user aborted is not a failure: end the run here and let
+      // the summary report the remainder as cancelled.
+      if (outcome != ItemResult::Ok && cancelRequested) {
+        cancelled = true;
+        break;
+      }
+      switch (outcome) {
         case ItemResult::Ok:
           // Keep the row consistent with the card, so a later pass over the
           // same list (or the summary) never contradicts what happened.
@@ -722,7 +743,8 @@ FlashcardSyncActivity::ItemResult FlashcardSyncActivity::downloadRow(const Row& 
   int lastRenderedPercent = -1;
   unsigned long lastProgressUpdateMs = 0;
   const auto result = HttpDownloader::downloadToFile(
-      url, tmpPath, [this, &row, &lastRenderedPercent, &lastProgressUpdateMs](const size_t done, const size_t total) {
+      url, tmpPath,
+      [this, &row, &lastRenderedPercent, &lastProgressUpdateMs](const size_t done, const size_t total) {
         fileProgress = done;
         // A response without Content-Length still has a length the user can see:
         // the feed's <enclosure length> is contractually the real byte size
@@ -734,14 +756,23 @@ FlashcardSyncActivity::ItemResult FlashcardSyncActivity::downloadRow(const Row& 
         // whole panel on every kilobyte of the overrun.
         fileTotal = total > 0 ? total : (done <= row.feed.sizeBytes ? row.feed.sizeBytes : 0);
         // The activity loop is blocked for the whole transfer; pump input here
-        // so Back can ask to stop after this item.
-        mappedInput.update();
+        // so Back can ask to stop after this item. deferHomeButtonAction: this
+        // pump runs where ActivityManager::loop() is not, so without it update()
+        // both fails to latch the one-shot Home action and DRAINS any already
+        // deferred one. Upstream's transfer pumps all pass true.
+        mappedInput.update(/*deferHomeButtonAction=*/true);
         if (mappedInput.wasReleased(MappedInputManager::Button::Back)) cancelRequested = true;
-        // This update() consumes the one-shot home event before the central
-        // dispatch can see it, so honour it here.
-        if (mappedInput.wasHomeGesture()) {
+        // Any configured Home-key action stops the transfer promptly; the action
+        // itself was latched above and the central dispatch replays it on the next
+        // main-loop pass. Keyed on the action rather than wasHomeGesture(), which
+        // is homeAction == Home and so never fires on this fork's default binding
+        // (tap = GoBack under CROSSPOINT_HOME_TAP_GO_BACK).
+        if (mappedInput.homeButtonAction() != HomeButtonAction::Ignore) {
           cancelRequested = true;
-          goHomeRequested = true;
+          // Only Home unwinds to the home screen from here; GoBack and the rest
+          // are left to the deferred dispatch, so they act on this screen rather
+          // than past it.
+          if (mappedInput.homeButtonAction() == HomeButtonAction::Home) goHomeRequested = true;
         }
         int percent = fileTotal > 0 ? static_cast<int>(static_cast<uint64_t>(done) * 100 / fileTotal) : 0;
         // A server that sends more than it announced must not paint 137%.
@@ -756,8 +787,19 @@ FlashcardSyncActivity::ItemResult FlashcardSyncActivity::downloadRow(const Row& 
           lastProgressUpdateMs = now;
           requestUpdate(true);
         }
-      });
+      },
+      // Abort mid-stream rather than only between items: on a C3 pulling a
+      // multi-MB deck over a slow LAN the between-items check leaves the screen
+      // unresponsive for minutes. Safe because the transfer lands in tmpPath and
+      // is only renamed into place after the header check, so an aborted item
+      // never reaches the deck folder.
+      &cancelRequested);
 
+  if (result == HttpDownloader::ABORTED) {
+    LOG_DBG("DECK", "Download cancelled: %s", row.url.c_str());
+    Storage.remove(tmpPath.c_str());
+    return ItemResult::Failed;  // the caller ends the run on cancelRequested first
+  }
   if (result != HttpDownloader::OK) {
     LOG_ERR("DECK", "Download failed (%d): %s", static_cast<int>(result), row.url.c_str());
     Storage.remove(tmpPath.c_str());  // belt and braces; downloadToFile already unlinks
@@ -907,7 +949,7 @@ void FlashcardSyncActivity::render(RenderLock&&) {
     case State::LIST:
     case State::SUMMARY:
       renderUi();
-      // Mirrors UiListActivity::render's rebuild loop (UiListActivity.cpp:160):
+      // Mirrors UiListActivity::render's rebuild loop (UiListActivity.cpp:139):
       // list() reports the real layout back to ListNav, and a selection past
       // the drawn rows advances the viewport and asks for another build.
       // Without this pass, scrolling over a page boundary paints the stale

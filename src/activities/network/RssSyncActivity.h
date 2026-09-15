@@ -32,11 +32,13 @@ class RssSyncActivity final : public UiListActivity {
   void onEnter() override;
   void onExit() override;
   void render(RenderLock&&) override;
-  // Every state: FETCHING and SYNCING block the loop (so this is not polled
-  // while they run), and LIST/SUMMARY/ERROR must survive long enough for the
-  // user to act — sleeping there would drop the radio and the fetched list.
-  // Matches OpdsBookBrowserActivity.
-  bool preventAutoSleep() override { return true; }
+  // State-based, like OpdsBookBrowserActivity since upstream #3547 ("Let OPDS
+  // catalog screens auto-sleep"): WIFI_SELECTION and the two blocking states
+  // hold sleep off, but the screens the user can park on indefinitely -- the
+  // feed list, the summary and the error page -- must not block it. FETCHING and
+  // SYNCING block the loop, so this is not polled while they run; they are
+  // listed anyway so the switch stays exhaustive.
+  bool preventAutoSleep() override;
   bool skipLoopDelay() override { return true; }
 
  private:
