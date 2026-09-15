@@ -1,6 +1,9 @@
 #include "KOReaderSyncClient.h"
 
 #include <ArduinoJson.h>
+#ifdef CROSSPOINT_PSRAM_HEAP_GAUGE
+#include <HalHeapGauge.h>  // gate*Heap(): the internal-RAM floor under insufficientHeap()
+#endif
 #include <HalMemory.h>
 #include <Logging.h>
 #include <SecureHttpClient.h>
@@ -21,6 +24,25 @@ constexpr char DEVICE_ID[] = "crosspoint-reader";
 // Keep a free-space floor and room for a full TLS record when the server does
 // not negotiate our smaller record limit. These are preflight margins, not a
 // guarantee that a handshake will fit.
+//
+// Where the two numbers come from (field data, July 2026). Recorded here because
+// the constants are load-bearing and otherwise carry no provenance. Launching
+// sync from a reader session lands at 51.9-58.2 KB free / 42-53 KB maxAlloc once
+// WiFi is up. wolfSSL reports allocation failure as MEMORY_E -- no abort under
+// -fno-exceptions -- so an optimistic attempt degrades to the same clean "sync
+// failed" the gate produces; the gate only has to keep out states where a doomed
+// handshake wastes tens of seconds, not guarantee success.
+//
+// Free and largest-block have separate requirements. With SP ECC
+// (WOLFSSL_HAVE_SP_ECC) the handshake's crypto uses fixed 256-bit arrays, so the
+// largest single TLS allocation is the ~17 KB wolfSSL record buffer, not a run of
+// fast-math bignums: a handshake was measured succeeding inside a 43 KB largest
+// block, and requiring 50 KB contiguous refused syncs that fit. The 35 KB free
+// floor covers the measured peak of what remains after the SP ECC + X25519 work
+// (session object + record buffer + RSA cert-verify temps, 2 KB apiece at
+// FP_MAX_BITS 8192, ~30-40 KB transient). The older 50 KB floor was calibrated
+// against the fast-math bignum failure mode SP ECC removed and sat inside the
+// band a reading session normally leaves free.
 constexpr uint32_t MIN_FREE_FOR_TLS = 35000;
 constexpr uint32_t MIN_BLOCK_FOR_TLS = 20000;
 
@@ -44,6 +66,21 @@ bool insufficientHeap() {
             heap.freeBytes, MIN_FREE_FOR_TLS, heap.largestBlockBytes, MIN_BLOCK_FOR_TLS);
     return true;
   }
+#ifdef CROSSPOINT_PSRAM_HEAP_GAUGE
+  // Second, internal-RAM floor -- fork-only, so the check above stays byte-for-byte
+  // upstream's on every other env. HalMemory::getDefaultHeap() is MALLOC_CAP_DEFAULT,
+  // and on a board that registers PSRAM with the allocator (this flag's board does:
+  // CONFIG_SPIRAM_USE_MALLOC=y) both of its figures are in the megabytes, so neither
+  // threshold above can ever trip there. wolfSSL's sub-SPIRAM_MALLOC_ALWAYSINTERNAL
+  // allocations still come out of internal RAM, so without this the gate is
+  // numerically dead on exactly the image it was written for and the user gets a
+  // ~15 s frozen "Syncing..." instead of an immediate refusal.
+  if (gateFreeHeap() < MIN_FREE_FOR_TLS || gateMaxAllocHeap() < MIN_BLOCK_FOR_TLS) {
+    LOG_ERR("KOSync", "Insufficient INTERNAL heap for TLS handshake: %zu bytes free (need %u), %zu max alloc (need %u)",
+            gateFreeHeap(), MIN_FREE_FOR_TLS, gateMaxAllocHeap(), MIN_BLOCK_FOR_TLS);
+    return true;
+  }
+#endif
   return false;
 }
 }  // namespace
