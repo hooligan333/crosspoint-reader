@@ -1,12 +1,73 @@
 """Work around pioarduino's custom-SDK libc linker configuration gap.
 
 In pioarduino 55.03.311, custom_sdkconfig rebuilds SDK libraries and configuration
-headers, but the Arduino application still uses the packaged libc LINKFLAGS from
-esp32c3/pioarduino-build.py. Selecting ROM libc therefore also requires updating
-those flags. Remove this hook once pioarduino derives the application's libc
-linker flags from the rebuilt SDK configuration.
+headers, but the Arduino application still uses the packaged libc LINKFLAGS and
+LIBS from <mcu>/pioarduino-build.py, which are generated once from the PREBUILT
+kernel and never re-derived. Any sdkconfig option whose ESP-IDF implementation is
+partly a link-line decision therefore lands half-applied: the rebuilt SDK
+libraries honour it and the application link does not. Both hooks below close one
+such gap. Remove them once pioarduino derives the application's libc linker flags
+from the rebuilt SDK configuration.
 """
 from pathlib import Path
+
+# Old and new Kconfig spellings of the same option; components/newlib/
+# sdkconfig.rename:12 maps the first onto the second.
+NANO_FORMAT_KEYS = ("CONFIG_LIBC_NEWLIB_NANO_FORMAT", "CONFIG_NEWLIB_NANO_FORMAT")
+
+
+def _requested_sdkconfig(env):
+    """The env's own custom_sdkconfig as a dict. Per-env by construction."""
+    requested = {}
+    for line in env.GetProjectOption("custom_sdkconfig", "").splitlines():
+        key, separator, value = line.strip().partition("=")
+        if separator:
+            requested[key] = value.strip()
+    return requested
+
+
+def configure_newlib_nano(env):
+    """Point the application link at libc_nano.a when the env asks for nano.
+
+    ESP-IDF implements CONFIG_LIBC_NEWLIB_NANO_FORMAT in two halves. The kernel
+    half is a Kconfig value the rebuilt SDK libraries pick up on their own. The
+    application half is components/newlib/project_include.cmake adding
+    "--specs=<nano.specs>" to LINK_OPTIONS, which rewrites the driver's -lc into
+    -lc_nano. pioarduino runs no CMake for the application, so without this hook
+    the link keeps the full libc: it fails outright on the ROM stub table's
+    references to _printf_float/_scanf_float (libnewlib.a(newlib_init.c.o)),
+    which only libc_nano.a defines, and even if it did not, none of the ~42 KB
+    the option exists to save would come out.
+
+    Swapping the library in place rather than passing the specs file is
+    deliberate: pioarduino names -lc explicitly in LIBS, so a specs-supplied
+    -lc_nano would land AFTER it and the full libc would win every symbol.
+    """
+    # The outer core-generation pass has not installed its new sdkconfig yet.
+    if env.get("ARDUINO_LIB_COMPILE_FLAG") == "Build":
+        return
+    requested = _requested_sdkconfig(env)
+    if not any(requested.get(key) == "y" for key in NANO_FORMAT_KEYS):
+        return
+
+    mcu = env.BoardConfig().get("build.mcu")
+    libs_dir = Path(env.PioPlatform().get_package_dir("framework-arduinoespressif32-libs")) / mcu
+    config = (libs_dir / "sdkconfig").read_text(encoding="utf-8").splitlines()
+    if "CONFIG_LIBC_NEWLIB_NANO_FORMAT=y" not in config:
+        raise RuntimeError(f"{mcu} framework sdkconfig does not carry the requested newlib-nano configuration")
+
+    libs = list(env["LIBS"])
+    swapped = 0
+    for index, entry in enumerate(libs):
+        if str(entry) == "-lc":
+            libs[index] = "-lc_nano"
+            swapped += 1
+        elif str(entry) == "c":
+            libs[index] = "c_nano"
+            swapped += 1
+    if swapped != 1:
+        raise RuntimeError(f"Expected exactly one libc entry in LIBS to retarget at nano, found {swapped}")
+    env.Replace(LIBS=libs)
 
 
 def configure_rom_libc(env):
@@ -52,3 +113,4 @@ def configure_rom_libc(env):
 
 Import("env")  # noqa: F821 -- provided by PlatformIO
 configure_rom_libc(env)  # noqa: F821
+configure_newlib_nano(env)  # noqa: F821
