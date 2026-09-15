@@ -854,7 +854,9 @@ void WifiSelectionActivity::render(RenderLock&&) {
   // STR_NETWORKS_FOUND is ~37 bytes once the Arabic translation is substituted,
   // so 32 truncated it. See ClockSyncActivity for the same class of bug.
   char countStr[64];
-  snprintf(countStr, sizeof(countStr), tr(STR_NETWORKS_FOUND), realNetworkCount);
+  // Catalogs use %lu: %zu is not understood by newlib-nano's printf (combo
+  // envs), and translation strings bypass -Wformat entirely.
+  snprintf(countStr, sizeof(countStr), tr(STR_NETWORKS_FOUND), static_cast<unsigned long>(realNetworkCount));
   // drawHeader self-insets by the board's viewable margins, so it takes a
   // full-width rect (the contract every other caller uses). Passing the already
   // safe-inset `screen` here double-inset the header on bezel panels (EEGO A4).
