@@ -52,8 +52,13 @@ def configure_newlib_nano(env):
 
     mcu = env.BoardConfig().get("build.mcu")
     libs_dir = Path(env.PioPlatform().get_package_dir("framework-arduinoespressif32-libs")) / mcu
-    config = (libs_dir / "sdkconfig").read_text(encoding="utf-8").splitlines()
-    if "CONFIG_LIBC_NEWLIB_NANO_FORMAT=y" not in config:
+    sdkconfig_path = libs_dir / "sdkconfig"
+    if not sdkconfig_path.is_file():
+        raise RuntimeError(f"nano retarget: {sdkconfig_path} missing — framework package layout changed?")
+    config = sdkconfig_path.read_text(encoding="utf-8").splitlines()
+    # Accept either Kconfig spelling: IDF renamed NEWLIB_* to LIBC_* and maps
+    # the old name via sdkconfig.rename, so generated files may carry either.
+    if not any(f"{key}=y" in config for key in NANO_FORMAT_KEYS):
         raise RuntimeError(f"{mcu} framework sdkconfig does not carry the requested newlib-nano configuration")
 
     libs = list(env["LIBS"])
@@ -66,7 +71,11 @@ def configure_newlib_nano(env):
             libs[index] = "c_nano"
             swapped += 1
     if swapped != 1:
-        raise RuntimeError(f"Expected exactly one libc entry in LIBS to retarget at nano, found {swapped}")
+        raise RuntimeError(
+            f"Expected exactly one libc entry in LIBS to retarget at nano, found {swapped}. "
+            "If this fires after a pioarduino upgrade, check whether the core-generation "
+            "pass sentinel (ARDUINO_LIB_COMPILE_FLAG == 'Build') was renamed."
+        )
     env.Replace(LIBS=libs)
 
 
