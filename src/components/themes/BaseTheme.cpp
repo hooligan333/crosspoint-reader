@@ -24,6 +24,22 @@
 
 // Internal constants
 namespace {
+// snprintf("%.0f") rounds to nearest and breaks a tie towards the even value.
+// newlib-nano's formatter has no float conversions at all -- it emits nothing
+// for %f and the percentage would render as a bare "%" -- so the status bar
+// rounds to an int itself and prints "%d". See the CONFIG_LIBC_NEWLIB_NANO_FORMAT
+// entry in platformio.ini. Every caller passes 0..100, so the truncating cast is
+// a floor; the tie rule is reproduced so the drawn string stays byte-identical
+// to what the float path produced.
+int roundHalfToEven(const float v) {
+  if (!(v > 0.0f)) return 0;  // zero, negatives and NaN all render as "0"
+  const int whole = static_cast<int>(v);
+  const float frac = v - static_cast<float>(whole);
+  if (frac > 0.5f) return whole + 1;
+  if (frac < 0.5f) return whole;
+  return (whole & 1) ? whole + 1 : whole;
+}
+
 constexpr int homeMenuMargin = 20;
 constexpr int homeMarginTop = 30;
 constexpr int subtitleY = 738;
@@ -749,10 +765,11 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     // Draw the estimate marker separately so it can use the next UI font size.
     const bool showEstimate = pageCountEstimated && sb.showChapterPageCount;
 
+    const int bookProgressPercent = roundHalfToEven(bookProgress);
     if (sb.showBookProgressPercent && sb.showChapterPageCount) {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d  %.0f%%", currentPage, pageCount, bookProgress);
+      snprintf(progressStr, sizeof(progressStr), "%d/%d  %d%%", currentPage, pageCount, bookProgressPercent);
     } else if (sb.showBookProgressPercent) {
-      snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
+      snprintf(progressStr, sizeof(progressStr), "%d%%", bookProgressPercent);
     } else {
       snprintf(progressStr, sizeof(progressStr), "%d/%d", currentPage, pageCount);
     }

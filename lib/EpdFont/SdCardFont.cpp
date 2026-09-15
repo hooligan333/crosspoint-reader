@@ -518,7 +518,8 @@ void SdCardFont::computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset) {
 bool SdCardFont::load(const char* path) {
   freeAll();
   if (strlen(path) >= sizeof(filePath_)) {
-    LOG_ERR("SDCF", "Path too long (%zu bytes, max %zu)", strlen(path), sizeof(filePath_) - 1);
+    LOG_ERR("SDCF", "Path too long (%lu bytes, max %lu)", static_cast<unsigned long>(strlen(path)),
+            static_cast<unsigned long>(sizeof(filePath_) - 1));
     return false;
   }
   strncpy(filePath_, path, sizeof(filePath_) - 1);

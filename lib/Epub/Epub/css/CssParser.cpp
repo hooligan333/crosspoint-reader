@@ -503,7 +503,7 @@ CssParser::PoolResult CssParser::ensureEntryCapacity(const size_t needed) {
   capacity = std::min(capacity, MAX_RULES);
   auto grown = makeUniqueNoThrow<SelectorEntry[]>(capacity);
   if (!grown) {
-    LOG_ERR("CSS", "OOM: selector index (%zu entries)", capacity);
+    LOG_ERR("CSS", "OOM: selector index (%lu entries)", static_cast<unsigned long>(capacity));
     return PoolResult::OutOfMemory;
   }
   if (entryCount_ > 0) memcpy(grown.get(), entries_.get(), entryCount_ * sizeof(SelectorEntry));
@@ -521,7 +521,7 @@ CssParser::PoolResult CssParser::ensureSelectorPoolCapacity(const size_t needed)
   capacity = std::min(capacity, SELECTOR_POOL_CAP);
   auto grown = makeUniqueNoThrow<char[]>(capacity);
   if (!grown) {
-    LOG_ERR("CSS", "OOM: selector pool (%zu bytes)", capacity);
+    LOG_ERR("CSS", "OOM: selector pool (%lu bytes)", static_cast<unsigned long>(capacity));
     return PoolResult::OutOfMemory;
   }
   if (selectorPoolSize_ > 0) memcpy(grown.get(), selectorPool_.get(), selectorPoolSize_);
@@ -539,7 +539,7 @@ CssParser::PoolResult CssParser::ensureStyleCapacity(const size_t needed) {
   capacity = std::min(capacity, MAX_UNIQUE_STYLES);
   auto grownStyles = makeUniqueNoThrow<CssStyle[]>(capacity);
   if (!grownStyles) {
-    LOG_ERR("CSS", "OOM: style pool (%zu styles)", capacity);
+    LOG_ERR("CSS", "OOM: style pool (%lu styles)", static_cast<unsigned long>(capacity));
     return PoolResult::OutOfMemory;
   }
   for (size_t i = 0; i < styleCount_; ++i) grownStyles[i] = stylePool_[i];

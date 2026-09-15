@@ -339,8 +339,8 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     // Check heap before parsing - CSS parsing allocates heavily
     const uint32_t freeHeap = gateFreeHeap();
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
-      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
-              MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %lu), skipping: %s", freeHeap,
+              static_cast<unsigned long>(MIN_HEAP_FOR_CSS_PARSING), cssPath.c_str());
       if (parseResult == CssParser::ParseResult::Complete) {
         parseResult = CssParser::ParseResult::Partial;
       }
@@ -351,8 +351,8 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     size_t cssFileSize = 0;
     if (getItemSize(cssPath, &cssFileSize)) {
       if (cssFileSize > MAX_CSS_FILE_SIZE) {
-        LOG_ERR("EBP", "CSS file too large (%zu bytes > %zu max), skipping: %s", cssFileSize, MAX_CSS_FILE_SIZE,
-                cssPath.c_str());
+        LOG_ERR("EBP", "CSS file too large (%lu bytes > %lu max), skipping: %s", static_cast<unsigned long>(cssFileSize),
+                static_cast<unsigned long>(MAX_CSS_FILE_SIZE), cssPath.c_str());
         if (parseResult == CssParser::ParseResult::Complete) {
           parseResult = CssParser::ParseResult::Partial;
         }

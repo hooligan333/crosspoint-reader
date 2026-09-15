@@ -253,7 +253,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   }
   stringArena_ = makeUniqueNoThrow<char[]>(arenaBytes);
   if (!stringArena_) {
-    LOG_ERR("FONT", "OOM: %zu byte string arena", arenaBytes);
+    LOG_ERR("FONT", "OOM: %lu byte string arena", static_cast<unsigned long>(arenaBytes));
     errorMessage_ = tr(STR_MEMORY_ERROR);
     return false;
   }
@@ -262,21 +262,22 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   arenaCapacity_ = static_cast<uint32_t>(arenaBytes);
   files_ = makeUniqueNoThrow<ManifestFile[]>(manifestFileCount);
   if (!files_) {
-    LOG_ERR("FONT", "OOM: %zu manifest file entries", manifestFileCount);
+    LOG_ERR("FONT", "OOM: %lu manifest file entries", static_cast<unsigned long>(manifestFileCount));
     errorMessage_ = tr(STR_MEMORY_ERROR);
     return false;
   }
 
   scriptGroupLabels_.reserve(groupCount);
   if (groupsArr.size() > MAX_SCRIPT_GROUPS) {
-    LOG_ERR("FONT", "Manifest declares more than %zu script groups; extra groups ignored", MAX_SCRIPT_GROUPS);
+    LOG_ERR("FONT", "Manifest declares more than %lu script groups; extra groups ignored",
+            static_cast<unsigned long>(MAX_SCRIPT_GROUPS));
   }
   for (size_t groupIndex = 0; groupIndex < groupCount; groupIndex++) {
     JsonObject groupObj = groupsArr[groupIndex].as<JsonObject>();
     const char* tag = groupObj["tag"] | "";
     const char* label = groupObj["label"] | "";
     if (*tag == '\0' || *label == '\0') {
-      LOG_ERR("FONT", "Malformed script group at index %zu", groupIndex);
+      LOG_ERR("FONT", "Malformed script group at index %lu", static_cast<unsigned long>(groupIndex));
       errorMessage_ = tr(STR_INVALID_FONT_MANIFEST);
       return false;
     }
@@ -917,14 +918,33 @@ bool FontDownloadActivity::handleCustomInput() {
 
 // --- Rendering ---
 
+namespace {
+// value/divisor rounded the way printf rounds a "%.Nf": to nearest, ties to
+// the even quotient. Both divisors below are powers of two, so the quotient
+// and remainder are exact and this reproduces the float path bit for bit.
+uint64_t roundScaledHalfToEven(const uint64_t value, const uint64_t divisor) {
+  const uint64_t quotient = value / divisor;
+  const uint64_t remainder = value % divisor;
+  if (remainder * 2 > divisor) return quotient + 1;
+  if (remainder * 2 < divisor) return quotient;
+  return (quotient & 1u) ? quotient + 1 : quotient;
+}
+}  // namespace
+
 std::string FontDownloadActivity::formatSize(size_t bytes) {
   char buf[32];
+  // Integer formatting rather than "%.1f"/"%.0f": newlib-nano's printf drops
+  // float conversions entirely, and %zu is not one of its length modifiers
+  // (it knows only h, l and L, and an unknown one shifts every later
+  // argument). See the CONFIG_LIBC_NEWLIB_NANO_FORMAT entry in platformio.ini.
   if (bytes >= 1024 * 1024) {
-    snprintf(buf, sizeof(buf), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    const uint64_t tenths = roundScaledHalfToEven(static_cast<uint64_t>(bytes) * 10u, 1024u * 1024u);
+    snprintf(buf, sizeof(buf), "%lu.%lu MB", static_cast<unsigned long>(tenths / 10u),
+             static_cast<unsigned long>(tenths % 10u));
   } else if (bytes >= 1024) {
-    snprintf(buf, sizeof(buf), "%.0f KB", static_cast<double>(bytes) / 1024.0);
+    snprintf(buf, sizeof(buf), "%lu KB", static_cast<unsigned long>(roundScaledHalfToEven(bytes, 1024u)));
   } else {
-    snprintf(buf, sizeof(buf), "%zu B", bytes);
+    snprintf(buf, sizeof(buf), "%lu B", static_cast<unsigned long>(bytes));
   }
   return buf;
 }

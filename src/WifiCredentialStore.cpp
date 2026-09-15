@@ -50,7 +50,8 @@ bool WifiCredentialStore::fromJson(JsonVariantConst doc) {
       }
       expectedLength = passwordLength.as<size_t>();
       if (expectedLength > MAX_PASSWORD_LENGTH) {
-        LOG_ERR("WCS", "Discarding oversized password for %s (%zu bytes)", cred.ssid.c_str(), expectedLength);
+        LOG_ERR("WCS", "Discarding oversized password for %s (%lu bytes)", cred.ssid.c_str(),
+                static_cast<unsigned long>(expectedLength));
         needsResave = true;
         continue;
       }
@@ -67,8 +68,8 @@ bool WifiCredentialStore::fromJson(JsonVariantConst doc) {
     bool integrityValid = true;
     if (hasPasswordLength) {
       if (cred.password.size() != expectedLength) {
-        LOG_ERR("WCS", "Discarding corrupted password for %s (expected %zu bytes, decoded %zu)", cred.ssid.c_str(),
-                expectedLength, cred.password.size());
+        LOG_ERR("WCS", "Discarding corrupted password for %s (expected %lu bytes, decoded %lu)", cred.ssid.c_str(),
+                static_cast<unsigned long>(expectedLength), static_cast<unsigned long>(cred.password.size()));
         integrityValid = false;
       }
     } else {

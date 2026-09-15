@@ -2311,7 +2311,8 @@ bool GfxRenderer::storeBwBuffer() {
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
     // Check if any chunks are already allocated
     if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
+      LOG_ERR("GFX", "!! BW buffer chunk %lu already stored - this is likely a bug, freeing chunk",
+              static_cast<unsigned long>(i));
       free(bwBufferChunks[i]);
       bwBufferChunks[i] = nullptr;
     }
@@ -2321,7 +2322,8 @@ bool GfxRenderer::storeBwBuffer() {
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));
 
     if (!bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! Failed to allocate BW buffer chunk %zu (%zu bytes)", i, chunkSize);
+      LOG_ERR("GFX", "!! Failed to allocate BW buffer chunk %lu (%lu bytes)", static_cast<unsigned long>(i),
+              static_cast<unsigned long>(chunkSize));
       // Free previously allocated chunks
       freeBwBufferChunks();
       return false;

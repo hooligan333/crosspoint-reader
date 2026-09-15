@@ -25,6 +25,14 @@ extern const char TAG[];
 const char* boardName();
 size_t boardNameLen();
 
+// NUL-terminated copy of boardName() into a caller-owned buffer, truncated to
+// fit. "%.*s" is the natural spelling for a name that is not terminated at its
+// own boundary, but argument-supplied precision is a C99 printf feature the
+// combo envs' newlib-nano formatter cannot be relied on to carry (see the
+// CONFIG_LIBC_NEWLIB_NANO_FORMAT entry in platformio.ini), so callers copy
+// first and print "%s". Returns the number of name bytes written.
+size_t copyBoardName(char* out, size_t outSize);
+
 // Incremental scanner: feed every byte of a candidate image in stream order,
 // then check mismatch(). State persists across feed() calls, so chunk
 // boundaries splitting the tag are handled.
