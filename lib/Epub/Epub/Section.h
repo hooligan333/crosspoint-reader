@@ -94,7 +94,19 @@ class Section {
   // builds. createSectionFile() above is the one-shot wrapper over these.
   //   if (!startBuild(...)) fail;
   //   each tick: buildSomeMore(N); render up to pageCount; when isBuildComplete() stop.
-  bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
+  // mayReleaseFontCaches: #3527 reclaims the rebuildable SD-font caches here,
+  // before the CSS and layout allocations. That is right for a build the
+  // FOREGROUND is about to render from -- the page is being re-laid-out anyway,
+  // so the caches are about to be repopulated with the glyphs it actually needs.
+  // It is wrong for the fork's SPECULATIVE background prebuild of the NEXT
+  // spine: those caches belong to the page the reader is looking at right now,
+  // and evicting them to serve work that may never be adopted makes the very
+  // next page turn pay a full advance/kern/ligature reload from SD. Pass false
+  // from a background/speculative caller; it declines on its own heap floors
+  // instead (see EpubReaderActivity's PREBUILD_BUILD_MIN_* gates), and a
+  // declined prebuild costs nothing.
+  bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr,
+                  bool mayReleaseFontCaches = true);
   // Lay out up to maxPages more pages (maxPages <= 0 = build to completion). Returns
   // false on error (the build is abandoned). Sets isBuildComplete() when finished.
   bool buildSomeMore(int maxPages);
