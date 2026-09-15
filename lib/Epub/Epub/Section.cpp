@@ -439,14 +439,18 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
   return buildComplete_;
 }
 
-bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn,
+                         const bool mayReleaseFontCaches) {
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
   }
   // Reclaim rebuildable font caches before CSS and layout allocations.
-  if (auto* fontCache = renderer.getFontCacheManager()) {
-    fontCache->releaseSdFontCaches();
+  // Skipped for a speculative background build -- see the header.
+  if (mayReleaseFontCaches) {
+    if (auto* fontCache = renderer.getFontCacheManager()) {
+      fontCache->releaseSdFontCaches();
+    }
   }
   buildComplete_ = false;
   builtPageCount_ = 0;
