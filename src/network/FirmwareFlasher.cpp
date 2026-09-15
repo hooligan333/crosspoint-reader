@@ -208,8 +208,9 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
   }
 
   if (tagScanner.mismatch()) {
-    LOG_ERR("FLASH", "validate: wrong board: image=%s device=%.*s", tagScanner.foundName(),
-            static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+    char deviceName[24];
+    board_tag::copyBoardName(deviceName, sizeof(deviceName));
+    LOG_ERR("FLASH", "validate: wrong board: image=%s device=%s", tagScanner.foundName(), deviceName);
     mbedtls_sha256_free(&shaCtx);
     file.close();
     return Result::WRONG_BOARD;
