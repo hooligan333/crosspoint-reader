@@ -17,8 +17,10 @@ constexpr size_t STATE_ALIGNED = (sizeof(tinfl_decompressor) + 7) & ~size_t{7};
 void logAllocationFailure(const char* allocation, size_t bytes) {
   const auto heap = HalMemory::getDefaultHeap();
   const auto psram = HalMemory::getPsramHeap();
-  LOG_ERR("ZIP", "Inflate %s OOM (%zu bytes): heap %zu free/%zu max, PSRAM %zu free/%zu total", allocation, bytes,
-          heap.freeBytes, heap.largestBlockBytes, psram.freeBytes, psram.totalBytes);
+  LOG_ERR("ZIP", "Inflate %s OOM (%lu bytes): heap %lu free/%lu max, PSRAM %lu free/%lu total", allocation,
+          static_cast<unsigned long>(bytes), static_cast<unsigned long>(heap.freeBytes),
+          static_cast<unsigned long>(heap.largestBlockBytes), static_cast<unsigned long>(psram.freeBytes),
+          static_cast<unsigned long>(psram.totalBytes));
 }
 }  // namespace
 
