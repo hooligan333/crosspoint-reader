@@ -329,11 +329,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // down (SdFontSystem::ensureLoaded, FontCacheManager::clearCache) under a
   // renderer this task measures text through. So every site that releases
   // `section` before pushing, or abandons the spec the prebuild was armed for,
-  // discards it too, under the RenderLock it already holds: the two TEXT_SETTINGS
-  // branches (classic menu and toolbar), applyReaderTextSettings (the return
-  // path both of those take, plus the Text panel's own live edits),
-  // SELECT_CHAPTER, applyOrientation, toggleAutoPageTurn, and the backward
-  // chapter-boundary arm. The two font teardowns themselves were moved INSIDE a
+  // discards it too, under the RenderLock it already holds: the three push sites
+  // share releaseSectionForChildScreen() (the two TEXT_SETTINGS branches --
+  // classic menu and toolbar -- plus SELECT_CHAPTER), and the rest do it inline
+  // because they need a wider critical section: applyReaderTextSettings (the
+  // return path all three take, plus the Text panel's own live edits),
+  // applyOrientation, toggleAutoPageTurn, and the backward chapter-boundary
+  // arm. The two font teardowns themselves were moved INSIDE a
   // RenderLock for the same reason.
   // Belt and braces on top of that: prebuildStep drops the prebuild whenever
   // `section` is null, so anything that releases it without discarding still
@@ -591,6 +593,11 @@ class EpubReaderActivity final : public ReaderActivity {
   void paintOverlayPopup();
   // Persist the reader text settings, (re)load the selected SD font, and
   // re-paginate the current chapter so changes apply without re-opening the book.
+  // Cache the visible position and release the laid-out Section (and any armed
+  // prebuild) before pushing a child screen that can change the render spec.
+  // See the definition for the invariant this exists to hold. Takes the
+  // RenderLock; no caller may hold it.
+  void releaseSectionForChildScreen();
   void applyReaderTextSettings();
   // More panel rows.
   void buildMoreActions();

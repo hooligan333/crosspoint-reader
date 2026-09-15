@@ -1735,23 +1735,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // holding its CJK glyph arena (RAM-only repaints) and re-reading
       // glyphs from SD on every row step. Cancel restores via the same
       // cached-position rebuild TEXT_SETTINGS uses.
-      {
-        RenderLock lock;
-        if (section) {
-          rememberCurrentContentOffset();
-          cachedSpineIndex = currentSpineIndex;
-          cachedChapterTotalPageCount = section->pageCount;
-          nextPageNumber = section->currentPage;
-        }
-        section.reset();
-#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-        // A Push does not stop this activity: the build task keeps pumping while
-        // the chapter list is up, and that list clears the font cache out from
-        // under the renderer a prebuild measures text through. Drop it here,
-        // under the lock already held. (See the header's discard-site list.)
-        discardPrebuiltSection();
-#endif
-      }
+      // A Push does not stop this activity: the build task keeps pumping while
+      // the chapter list is up, and that list clears the font cache out from
+      // under the renderer a prebuild measures text through.
+      releaseSectionForChildScreen();
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, spineIdx),
           [this](const ActivityResult& result) {
@@ -1784,32 +1771,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS: {
-      // Release the section BEFORE the settings screen opens, like
-      // SELECT_CHAPTER above, not in the result handler: an external pop (the
-      // Home-key "Go Back" action) skips a no-result handler, and a section
-      // released only there survives a font change — renderBook() then draws
-      // the old layout's word positions with the new size's glyphs (spacing
-      // collapses or gapes until something else rebuilds the section).
-      // Resetting up front means every return path rebuilds against the
-      // settings as they are then, and the settings screen's font previews get
-      // the section's tens-of-KB footprint, as the chapter list already does.
-      {
-        RenderLock lock;
-        if (section) {
-          rememberCurrentContentOffset();
-          cachedSpineIndex = currentSpineIndex;
-          cachedChapterTotalPageCount = section->pageCount;
-          nextPageNumber = section->currentPage;
-        }
-        section.reset();
-#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-        // Same as SELECT_CHAPTER above, and more sharply: the settings screen
-        // loads and unloads SD fonts under the renderer this task measures text
-        // through, while the Push leaves the task running. Drop the prebuild
-        // under the lock already held.
-        discardPrebuiltSection();
-#endif
-      }
+      // Release the section BEFORE the settings screen opens, like SELECT_CHAPTER
+      // above, not in the result handler -- see releaseSectionForChildScreen()
+      // for why a handler cannot be relied on. Same prebuild reason as
+      // SELECT_CHAPTER, and more sharply: the settings screen loads and unloads
+      // SD fonts under the renderer the build task measures text through, while
+      // the Push leaves that task running.
+      releaseSectionForChildScreen();
       startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                     TextSettingsActivity::Tab::Family),
                              [this](const ActivityResult&) { openReaderMenu(); });
@@ -3451,31 +3419,12 @@ void EpubReaderActivity::handleOverlayInput() {
         overlay = Overlay::None;
         overlayPopup.dismiss();
         discardOverlayPage();
-        // Release the section BEFORE the picker opens, the same way the classic
-        // menu's TEXT_SETTINGS branch does. applyReaderTextSettings() below
-        // still resets it, but that runs only when the result handler runs, and
-        // an EXTERNAL pop (the Home-key "Go Back" action) skips a handler whose
-        // result is monostate — so a font or size change made here would leave
-        // the old layout's baked word positions to be drawn with the new size's
-        // glyphs. Resetting up front means every return path rebuilds against
-        // the settings as they are then, and frees the section's tens of KB for
-        // the picker's font previews.
-        {
-          RenderLock lock;
-          if (section) {
-            rememberCurrentContentOffset();
-            cachedSpineIndex = currentSpineIndex;
-            cachedChapterTotalPageCount = section->pageCount;
-            nextPageNumber = section->currentPage;
-          }
-          section.reset();
-#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
-          // Same as the classic menu's TEXT_SETTINGS branch: the Push leaves
-          // this activity's build task running while the picker loads and
-          // unloads SD fonts under the shared renderer.
-          discardPrebuiltSection();
-#endif
-        }
+        // Release the section BEFORE the picker opens. applyReaderTextSettings()
+        // in the handler below also resets it, but only when the handler runs --
+        // and the handler is not guaranteed (see releaseSectionForChildScreen).
+        // The Push also leaves this activity's build task running while the
+        // picker loads and unloads SD fonts under the shared renderer.
+        releaseSectionForChildScreen();
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
                                [this](const ActivityResult&) {
@@ -3637,6 +3586,42 @@ void EpubReaderActivity::paintOverlayPopup() {
   RenderLock lock;
   overlayPopup.render(renderer);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// The MUST-HOLD text-size invariant, in one place. Three screens are pushed on
+// top of a live reader and can change the settings the resident Section was laid
+// out for -- the chapter list, the classic menu's Text Settings, and the toolbar
+// Text panel's font picker. All three release the Section BEFORE the push rather
+// than in their result handler, because a handler is not guaranteed to run: an
+// EXTERNAL pop (the fork's Home-key "Go Back" action climbing one level) skips a
+// result handler whose ActivityResult is still std::monostate, and
+// TextSettingsActivity sets no result. A Section released only in the handler
+// would therefore survive a font or size change, and renderBook() would draw the
+// old layout's baked word positions with the new size's glyphs -- spacing
+// collapsing or gaping until something else rebuilt it.
+//
+// Releasing up front also means every return path rebuilds against the settings
+// as they are then, and hands the child screen the Section's tens of KB for its
+// font previews.
+//
+// Takes the RenderLock itself, so no caller may already hold it: all three sites
+// run either from a result handler (dispatched after ActivityManager releases
+// its own lock) or from handleOverlayInput at a point where it holds none.
+void EpubReaderActivity::releaseSectionForChildScreen() {
+  RenderLock lock;
+  if (section) {
+    rememberCurrentContentOffset();
+    cachedSpineIndex = currentSpineIndex;
+    cachedChapterTotalPageCount = section->pageCount;
+    nextPageNumber = section->currentPage;
+  }
+  section.reset();
+#ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
+  // The spec the prebuild was armed for is about to be abandoned, and the child
+  // screen tears fonts down under the renderer the build task measures text
+  // through. Drop it here, under the lock already held.
+  discardPrebuiltSection();
+#endif
 }
 
 void EpubReaderActivity::applyReaderTextSettings() {
