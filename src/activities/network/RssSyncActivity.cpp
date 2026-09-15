@@ -549,17 +549,23 @@ bool RssSyncActivity::downloadRow(const Row& row) {
         // deferred one. Upstream's transfer pumps all pass true.
         mappedInput.update(/*deferHomeButtonAction=*/true);
         if (mappedInput.wasReleased(MappedInputManager::Button::Back)) cancelRequested = true;
-        // Any configured Home-key action stops the transfer promptly; the action
-        // itself was latched above and the central dispatch replays it on the next
-        // main-loop pass. Keyed on the action rather than wasHomeGesture(), which
-        // is homeAction == Home and so never fires on this fork's default binding
-        // (tap = GoBack under CROSSPOINT_HOME_TAP_GO_BACK).
-        if (mappedInput.homeButtonAction() != HomeButtonAction::Ignore) {
+        // Only the navigation actions cancel the transfer (upstream's pumps key
+        // on Home alone and say so); a non-navigation action such as
+        // ToggleFrontlight was latched above and replays via the deferred
+        // dispatch without killing the download. Keyed on the action rather
+        // than wasHomeGesture(), which is homeAction == Home and so never
+        // fires on this fork's default binding (tap = GoBack under
+        // CROSSPOINT_HOME_TAP_GO_BACK).
+        const auto homeAct = mappedInput.homeButtonAction();
+        bool homeNavCancel = homeAct == HomeButtonAction::Home;
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+        homeNavCancel = homeNavCancel || homeAct == HomeButtonAction::GoBack;
+#endif
+        if (homeNavCancel) {
           cancelRequested = true;
-          // Only Home unwinds to the home screen from here; GoBack and the rest
-          // are left to the deferred dispatch, so they act on this screen rather
-          // than past it.
-          if (mappedInput.homeButtonAction() == HomeButtonAction::Home) goHomeRequested = true;
+          // Only Home unwinds to the home screen from here; GoBack is left to
+          // the deferred dispatch, so it acts on this screen rather than past it.
+          if (homeAct == HomeButtonAction::Home) goHomeRequested = true;
         }
         // total == 0 is a response without Content-Length: there is no percent
         // to step, so the repaint falls back to the time-based branch below and
