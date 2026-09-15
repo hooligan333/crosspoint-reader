@@ -2835,10 +2835,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   } else if (pageHasImages) {
 #ifdef CROSSPOINT_IMG_NO_FORCED_CLEAN
     // `grayscale` above was resolved for this page's mode, and this branch is
-    // the non-absolute one — the pass below runs Overlay. Query the capability
-    // with that mode explicitly and BEFORE the base paint: displayBuffer()
-    // cancels any staged pass and resets the facade's remembered mode, so a
-    // later no-argument query would be answering about the wrong pass.
+    // the non-absolute one — the pass below runs Overlay, so ask about that mode
+    // explicitly. BEFORE the base paint, but NOT because the query reads a
+    // remembered mode: fastAfterGrayscaleSafe(mode) consults only _inverted,
+    // _inversionDirty, _driver and grayscaleCapabilities(mode) — making the API
+    // mode-bound is what removed that dependence. The real reason is that
+    // displayBuffer() CLEARS _inversionDirty, and fastAfterGrayscaleSafe returns
+    // false while that flag is set: asking first is the conservative order, able
+    // to force a clean the panel did not need but never to skip one it did.
     if (renderer.fastAfterGrayscaleSafe(HalDisplay::GrayscaleMode::Overlay)) {
       // This panel's driver substitutes a gray-exit transition for the plain
       // differential update whenever a FAST paint follows a grayscale pass, so
@@ -3475,7 +3479,7 @@ void EpubReaderActivity::handleOverlayInput() {
   const int count = overlay == Overlay::Contents ? epub->getTocItemsCount()
                     : overlay == Overlay::Text   ? kTextRowCount
                                                  : static_cast<int>(moreItems.size());
-  const int pageRows = std::max(1, toolbarUi->visibleRows());
+  const int pageRows = std::max(1, toolbarUi->visibleRows(count));
 
   // Activate the highlighted row: change a value / jump to a chapter / run an
   // action. Shared by the Confirm button and a row tap.
@@ -3667,13 +3671,13 @@ void EpubReaderActivity::paintOverlayPopup() {
 // top of a live reader and can change the settings the resident Section was laid
 // out for -- the chapter list, the classic menu's Text Settings, and the toolbar
 // Text panel's font picker. All three release the Section BEFORE the push rather
-// than in their result handler, because a handler is not guaranteed to run: an
-// EXTERNAL pop (the fork's Home-key "Go Back" action climbing one level) skips a
-// result handler whose ActivityResult is still std::monostate, and
-// TextSettingsActivity sets no result. A Section released only in the handler
-// would therefore survive a font or size change, and renderBook() would draw the
-// old layout's baked word positions with the new size's glyphs -- spacing
-// collapsing or gaping until something else rebuilt it.
+// than in their result handler, because the handler is not where the guarantee
+// lives: TextSettingsActivity persists each change itself and sets no result, so
+// the settings can already have moved by the time any handler runs, and the
+// toolbar picker's handler does no rebuild at all. A Section released only in a
+// handler would survive a font or size change on at least one of those paths,
+// and renderBook() would draw the old layout's baked word positions with the new
+// size's glyphs -- spacing collapsing or gaping until something else rebuilt it.
 //
 // Releasing up front also means every return path rebuilds against the settings
 // as they are then, and hands the child screen the Section's tens of KB for its
@@ -3681,8 +3685,13 @@ void EpubReaderActivity::paintOverlayPopup() {
 //
 // Takes the RenderLock itself, so no caller may already hold it: all three sites
 // run either from a result handler (dispatched after ActivityManager releases
-// its own lock) or from handleOverlayInput at a point where it holds none.
+// its own lock) or from handleOverlayInput at a point where it holds none. The
+// assert below guards the fourth: RenderLock's mutex is non-recursive and taken
+// with portMAX_DELAY, so a caller that already holds it does not fail loudly, it
+// blocks forever and the task watchdog reboots.
 void EpubReaderActivity::releaseSectionForChildScreen() {
+  assert(!activityManager.renderLockHeldByCaller() &&
+         "releaseSectionForChildScreen takes the RenderLock; no caller may hold it");
   RenderLock lock;
   if (section) {
     rememberCurrentContentOffset();

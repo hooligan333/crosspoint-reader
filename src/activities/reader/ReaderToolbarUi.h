@@ -71,8 +71,14 @@ class ReaderToolbarUi : public UiAppHost {
   // viewport (measured page size, no-op detection), the top/selected fields
   // are the live state, and buildPanel() syncs it into the list each build.
   freeink::ui::ListNav& nav() { return nav_; }
-  // Rows one page holds, measured after the first render.
-  int visibleRows() const { return nav_.pageRows(); }
+  // Rows one page holds for a list of `count` rows: the measured value when the
+  // last build was for that same count, the fixed-height estimate otherwise.
+  // pageRowsFor(), not the unchecked pageRows(): setModel() switches panels
+  // without nav_.reset(), so drawnRows/drawnCount survive a Chapters <-> Text
+  // <-> More hop and the first page-jump after one would otherwise move by the
+  // previous panel's page size. Every clamp and page step has to agree on this
+  // rule, or one scrolls to a viewport another refuses to draw.
+  int visibleRows(const int count) const { return nav_.pageRowsFor(count); }
 
  private:
   static void screenFn(UiScreen& screen, void* user);
