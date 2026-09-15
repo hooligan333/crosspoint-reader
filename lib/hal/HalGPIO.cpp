@@ -511,4 +511,11 @@ bool HalGPIO::waitForInput(const uint32_t maxMs) {
   return woken != 0;
 }
 
+bool HalGPIO::anyWakePinAsserted() const {
+  for (uint8_t i = 0; i < wakePinCount; ++i) {
+    if (wakePinAsserted(wakePins[i])) return true;
+  }
+  return false;
+}
+
 #endif  // CROSSPOINT_TOUCH_INT_WAKE

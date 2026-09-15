@@ -808,11 +808,23 @@ static void idleInputSlicePoll() {
 //     the poll, and a motionless finger produces no new GT911 frame to wake on;
 //   * the capacitive home key is down — same reason, and it is a separate latch
 //     from the contact one: a held key reports no frames either, so its
-//     HOME_KEY_LONG_PRESS_MS threshold is timed purely by the poll.
-// The caller has already established the other two: the power-saving idle state
-// is engaged, and no activity requested skipLoopDelay.
+//     HOME_KEY_LONG_PRESS_MS threshold is timed purely by the poll;
+//   * any wake pin is already asserted — a physical button is mid-press.
+//     waitForInput() cannot help that round anyway (it leaves an asserted pin
+//     unarmed and floors the pass at LOOP_FLOOR_MS = 50 ms), and 50 ms between
+//     polls is exactly what #3463's slice poll exists to avoid: InputManager
+//     commits a press only when a second poll ≥ DEBOUNCE_DELAY later still
+//     agrees, so without this the minimum registerable press would go from
+//     ~15 ms to ~55 ms and a short power-button tap would be dropped where
+//     upstream registers it. The X4 Pro feels this on the power button
+//     specifically — rawInputActive()'s ADC branch returns −1 on a
+//     DigitalButtons board, so upstream's early break only ever helped power.
+// The all-released case keeps the full tickless window, which is the point of
+// the feature. The caller has already established the other two: the
+// power-saving idle state is engaged, and no activity requested skipLoopDelay.
 static uint32_t idleInputWaitMs() {
   if (!gpio.inputWakeAvailable()) return 0;
+  if (gpio.anyWakePinAsserted()) return 0;
   if (SETTINGS.tiltPageTurn != CrossPointTiltPageTurn::TILT_OFF && halTiltSensor.isAvailable()) return 0;
   float nx = 0.0f;
   float ny = 0.0f;
