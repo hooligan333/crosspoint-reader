@@ -359,16 +359,22 @@ void EpubReaderActivity::openReaderMenu() {
                                                position.totalPages, bookProgressPercent, SETTINGS.orientation,
                                                !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
       [this](const ActivityResult& result) {
-        const auto& menu = std::get<MenuResult>(result.data);
+        // The menu arms a MenuResult on every path it closes itself, but a pop
+        // it did not drive -- the Home-key "Go Back" action -- delivers a bare
+        // cancellation with the variant still on monostate. Read the alternative
+        // only when it is there: the firmware builds -fno-exceptions, so a bad
+        // std::get<> is an abort, not a throw.
+        const auto* menu = std::get_if<MenuResult>(&result.data);
+        if (!menu) return;
 
-        if (SETTINGS.orientation != menu.orientation) {
-          applyOrientation(menu.orientation);
+        if (SETTINGS.orientation != menu->orientation) {
+          applyOrientation(menu->orientation);
         }
 
-        toggleAutoPageTurn(menu.pageTurnOption);
+        toggleAutoPageTurn(menu->pageTurnOption);
 
         if (!result.isCancelled) {
-          onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+          onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu->action));
         }
       });
 }

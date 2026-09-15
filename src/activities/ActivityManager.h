@@ -144,6 +144,27 @@ class ActivityManager {
   // that same lock, so the pointer it compares is never a torn or stale read.
   bool isCurrentActivity(const Activity* activity) const { return currentActivity.get() == activity; }
 
+  // True when the CALLING task already holds the RenderLock. RenderLock wraps a
+  // non-recursive FreeRTOS mutex taken with portMAX_DELAY, so a function that
+  // takes the lock itself deadlocks its own caller rather than aborting -- and
+  // the task watchdog reboots. Distinct from RenderLock::peek(), which reports
+  // "held by anyone" (the render task included) and so cannot be asserted on.
+  bool renderLockHeldByCaller() const {
+    return xSemaphoreGetMutexHolder(renderingMutex) == xTaskGetCurrentTaskHandle();
+  }
+
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Climb one activity level on behalf of the Home-key "Go Back" action.
+  // Prefers the screen's own Home-gesture close path, which is the only one
+  // that sets the ActivityResult its parent's handler expects; screens without
+  // one are handed an explicitly cancelled result and popped, so the parent's
+  // handler still runs -- down its cancel branch, which is the cleanup an
+  // abandoned child needs. Returns false (having done nothing) when no activity
+  // is up, a transition is already pending, or the home screen is what is
+  // showing; the caller must not consume the frame in that case.
+  bool goBackOneLevel();
+#endif
+
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);
 
