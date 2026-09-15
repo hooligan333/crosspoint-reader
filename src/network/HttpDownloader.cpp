@@ -158,7 +158,8 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
 #endif
     if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
     if (!http.responseComplete()) {
-      LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+      LOG_ERR("HTTP", "wolfSSL incomplete: got %lu of %lu bytes", static_cast<unsigned long>(sink.downloaded),
+              static_cast<unsigned long>(sink.total));
       return HttpDownloader::HTTP_ERROR;
     }
     return HttpDownloader::OK;
@@ -253,7 +254,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     }
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
-      LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
+      LOG_ERR("HTTP", "read error after %lu bytes", static_cast<unsigned long>(sink.downloaded));
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -271,7 +272,8 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   const bool complete = esp_http_client_is_complete_data_received(client);
   esp_http_client_cleanup(client);
   if (!complete) {
-    LOG_ERR("HTTP", "incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+    LOG_ERR("HTTP", "incomplete: got %lu of %lu bytes", static_cast<unsigned long>(sink.downloaded),
+            static_cast<unsigned long>(sink.total));
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::OK;

@@ -37,8 +37,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
   char assetSuffix[20] = "-x3-x4";
   if (!isX4) {
-    snprintf(assetSuffix, sizeof(assetSuffix), "-%.*s", static_cast<int>(board_tag::boardNameLen()),
-             board_tag::boardName());
+    assetSuffix[0] = '-';
+    board_tag::copyBoardName(assetSuffix + 1, sizeof(assetSuffix) - 1);
   }
   char assetName[48] = {};
   bool assetNameSet = false;
@@ -189,8 +189,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     }
     tagScanner.feed(data, len);
     if (tagScanner.mismatch()) {
-      LOG_ERR("OTA", "wrong board: image=%s device=%.*s", tagScanner.foundName(),
-              static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+      char deviceName[24];
+      board_tag::copyBoardName(deviceName, sizeof(deviceName));
+      LOG_ERR("OTA", "wrong board: image=%s device=%s", tagScanner.foundName(), deviceName);
       return false;  // abort the transfer
     }
     if (esp_ota_write(otaHandle, data, len) != ESP_OK) {

@@ -3,6 +3,22 @@
 #include <Arduino.h>
 #include <Logging.h>
 
+#include <climits>
+#include <cstdint>
+
+namespace {
+// newlib-nano's printf knows only the h/l/L length modifiers: it prints "lld"
+// as literal text AND leaves the argument unconsumed, which shifts every later
+// one. These are diagnostics for an image that is already being rejected, so
+// saturate into long and print "%ld". See the CONFIG_LIBC_NEWLIB_NANO_FORMAT
+// entry in platformio.ini.
+long clampToLong(const int64_t v) {
+  if (v > static_cast<int64_t>(LONG_MAX)) return LONG_MAX;
+  if (v < static_cast<int64_t>(LONG_MIN)) return LONG_MIN;
+  return static_cast<long>(v);
+}
+}  // namespace
+
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
 #include <atomic>
 
@@ -18,22 +34,19 @@ bool ImageToFramebufferDecoder::abortRequested() { return decodeAbort.load(std::
 bool ImageToFramebufferDecoder::validateAndStoreDimensions(const int64_t width, const int64_t height,
                                                            ImageDimensions& out, const char* format) {
   if (width <= 0 || height <= 0) {
-    LOG_ERR("IMG", "Invalid %s dimensions: %lldx%lld", format, static_cast<long long>(width),
-            static_cast<long long>(height));
+    LOG_ERR("IMG", "Invalid %s dimensions: %ldx%ld", format, clampToLong(width), clampToLong(height));
     return false;
   }
   if (width > MAX_SOURCE_DIMENSION || height > MAX_SOURCE_DIMENSION) {
-    LOG_ERR("IMG", "%s dimensions exceed supported limit: %lldx%lld (max %lld per dimension)", format,
-            static_cast<long long>(width), static_cast<long long>(height),
-            static_cast<long long>(MAX_SOURCE_DIMENSION));
+    LOG_ERR("IMG", "%s dimensions exceed supported limit: %ldx%ld (max %ld per dimension)", format,
+            clampToLong(width), clampToLong(height), clampToLong(MAX_SOURCE_DIMENSION));
     return false;
   }
 
   const int64_t pixels = width * height;
   if (pixels > MAX_SOURCE_PIXELS) {
-    LOG_ERR("IMG", "%s too large (%lldx%lld = %lld pixels), max supported: %lld pixels", format,
-            static_cast<long long>(width), static_cast<long long>(height), static_cast<long long>(pixels),
-            static_cast<long long>(MAX_SOURCE_PIXELS));
+    LOG_ERR("IMG", "%s too large (%ldx%ld = %ld pixels), max supported: %ld pixels", format, clampToLong(width),
+            clampToLong(height), clampToLong(pixels), clampToLong(MAX_SOURCE_PIXELS));
     return false;
   }
 

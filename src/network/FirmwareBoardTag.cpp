@@ -2,6 +2,7 @@
 
 #include <BoardConfig.h>
 
+#include <algorithm>
 #include <cstring>
 
 // The board name derives from the FREEINK_DEVICE_* build flags so every env
@@ -43,6 +44,14 @@ const char TAG[] = "CROSSPOINT-BOARD-V1:" CROSSPOINT_BOARD_NAME ";";
 
 const char* boardName() { return TAG + MAGIC_LEN; }
 size_t boardNameLen() { return sizeof(TAG) - 1 - MAGIC_LEN - 1; }  // strip magic and ';'
+
+size_t copyBoardName(char* const out, const size_t outSize) {
+  if (out == nullptr || outSize == 0) return 0;
+  const size_t len = std::min(boardNameLen(), outSize - 1);
+  memcpy(out, boardName(), len);
+  out[len] = '\0';
+  return len;
+}
 
 void Scanner::feed(const uint8_t* data, size_t len) {
   if (mismatchFound) return;
