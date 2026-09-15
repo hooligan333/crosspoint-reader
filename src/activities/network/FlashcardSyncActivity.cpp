@@ -762,17 +762,23 @@ FlashcardSyncActivity::ItemResult FlashcardSyncActivity::downloadRow(const Row& 
         // deferred one. Upstream's transfer pumps all pass true.
         mappedInput.update(/*deferHomeButtonAction=*/true);
         if (mappedInput.wasReleased(MappedInputManager::Button::Back)) cancelRequested = true;
-        // Any configured Home-key action stops the transfer promptly; the action
-        // itself was latched above and the central dispatch replays it on the next
-        // main-loop pass. Keyed on the action rather than wasHomeGesture(), which
-        // is homeAction == Home and so never fires on this fork's default binding
-        // (tap = GoBack under CROSSPOINT_HOME_TAP_GO_BACK).
-        if (mappedInput.homeButtonAction() != HomeButtonAction::Ignore) {
+        // Only the navigation actions cancel the transfer (upstream's pumps key
+        // on Home alone and say so); a non-navigation action such as
+        // ToggleFrontlight was latched above and replays via the deferred
+        // dispatch without killing a multi-MB download. Keyed on the action
+        // rather than wasHomeGesture(), which is homeAction == Home and so
+        // never fires on this fork's default binding (tap = GoBack under
+        // CROSSPOINT_HOME_TAP_GO_BACK).
+        const auto homeAct = mappedInput.homeButtonAction();
+        bool homeNavCancel = homeAct == HomeButtonAction::Home;
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+        homeNavCancel = homeNavCancel || homeAct == HomeButtonAction::GoBack;
+#endif
+        if (homeNavCancel) {
           cancelRequested = true;
-          // Only Home unwinds to the home screen from here; GoBack and the rest
-          // are left to the deferred dispatch, so they act on this screen rather
-          // than past it.
-          if (mappedInput.homeButtonAction() == HomeButtonAction::Home) goHomeRequested = true;
+          // Only Home unwinds to the home screen from here; GoBack is left to
+          // the deferred dispatch, so it acts on this screen rather than past it.
+          if (homeAct == HomeButtonAction::Home) goHomeRequested = true;
         }
         int percent = fileTotal > 0 ? static_cast<int>(static_cast<uint64_t>(done) * 100 / fileTotal) : 0;
         // A server that sends more than it announced must not paint 137%.
