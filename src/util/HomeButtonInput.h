@@ -16,8 +16,28 @@ enum class HomeButtonAction : uint8_t {
   ReaderMenu,
   ToggleFrontlight,
   CreateClipping,
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Fork action: climb ONE activity level rather than jumping all the way Home.
+  // Appended last and behind the flag, so the persisted indices above are
+  // untouched and a flags-off build is byte-identical upstream -- a settings.json
+  // written by a flagged build with a gesture bound to GoBack clamps back to the
+  // field default on load, because CrossPointSettings::fromJson() bounds ENUM
+  // rows by home_button::ACTION_LABELS' size. Same pattern as
+  // CrossPointSettings::SHORT_PWRBTN::TOGGLE_LIGHT.
+  //
+  // r8: upstream appended CreateClipping at 11, which is where r7b and earlier
+  // stored GoBack, so GoBack moved 11 -> 12. Fork builds stamp the GoBack value
+  // they wrote into settings.json ("homeGoBackAction"); a file without the stamp
+  // was written with GoBack = HOME_GO_BACK_LEGACY_VALUE, and fromJson() remaps it.
+  GoBack,
+#endif
   Count
 };
+
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+// The value r7b-and-earlier fork builds persisted for GoBack (see the enum).
+inline constexpr uint8_t HOME_GO_BACK_LEGACY_VALUE = 11;
+#endif
 
 class HomeButtonInput {
  public:
