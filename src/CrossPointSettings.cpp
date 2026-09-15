@@ -109,6 +109,13 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // display-index mapping and is skipped by the generic persistence loop.
   doc["longPressMenuFunction"] = longPressMenuFunction;
   doc["shortPwrBtn"] = shortPwrBtn;
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // The value GoBack has in THIS build, so a later fork build whose GoBack moved
+  // again (upstream appending actions) can remap it on load. See fromJson().
+  // Upgrades only: an older build clamps an out-of-range GoBack to the field
+  // default in its generic loop before it would look at the stamp.
+  doc["homeGoBackAction"] = static_cast<uint8_t>(HomeButtonAction::GoBack);
+#endif
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
@@ -286,6 +293,25 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (BoardConfig::hasTouch() && shortPwrBtn == LEGACY_TOGGLE_LIGHT) {
     shortPwrBtn = TOGGLE_LIGHT;
     needsResave = true;
+  }
+#endif
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Home-key gestures bound to "Go Back": r7b and earlier persisted GoBack as 11,
+  // which upstream has since given to CreateClipping (GoBack is now 12). Fork
+  // builds stamp the GoBack value they write ("homeGoBackAction", toJson()), so a
+  // file without the stamp was written by an older fork image -- or by a build
+  // without the flag, which never persists GoBack at all -- and its 11 is GoBack.
+  // Runs on the values the generic loop just read, BEFORE the pre-#3516 long-press
+  // migration below, which may legitimately produce CreateClipping itself.
+  {
+    const uint8_t storedGoBack = doc["homeGoBackAction"] | HOME_GO_BACK_LEGACY_VALUE;
+    const auto goBack = static_cast<uint8_t>(HomeButtonAction::GoBack);
+    if (storedGoBack != goBack) {
+      for (uint8_t* action : {&homeButtonTapAction, &homeButtonDoubleTapAction, &homeButtonLongPressAction}) {
+        if (*action == storedGoBack) *action = goBack;
+      }
+    }
+    if (doc["homeGoBackAction"].isNull() || storedGoBack != goBack) needsResave = true;
   }
 #endif
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
