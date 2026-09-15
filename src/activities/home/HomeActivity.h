@@ -64,6 +64,10 @@ class HomeActivity final : public Activity {
   }
 
   // Convert menu index to HomeMenuItem (used in loop)
+  // ORDER-SENSITIVE: the OPDS row's test is `hasOpdsUrl && idx == i++`, so the
+  // post-increment runs ONLY on a device that has the row. Swapping the two
+  // operands to `idx == i++ && hasOpdsUrl` would consume an index on every
+  // device and shift every row below OPDS by one where the row is absent.
   static HomeMenuItem indexToMenuItem(int idx, bool hasOpdsUrl) {
     int i = 0;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
@@ -95,6 +99,8 @@ class HomeActivity final : public Activity {
   void onOpdsBrowserOpen();
   void onPluginsOpen();
 
+  // Selector rows the recent-books axis contributes; see the definition.
+  int recentRowCount() const;
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
