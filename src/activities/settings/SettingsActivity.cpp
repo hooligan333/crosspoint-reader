@@ -434,7 +434,11 @@ void SettingsActivity::toggleCurrentSetting() {
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
       case SettingAction::FlashcardSettings:
-        startActivityForResult(std::make_unique<FlashcardSettingsActivity>(renderer, mappedInput), resultHandler);
+        if (auto activity = makeUniqueNoThrow<FlashcardSettingsActivity>(renderer, mappedInput)) {
+          startActivityForResult(std::move(activity), resultHandler);
+        } else {
+          LOG_ERR("SETTINGS", "OOM: FlashcardSettingsActivity");
+        }
         break;
 #endif
       case SettingAction::None:
