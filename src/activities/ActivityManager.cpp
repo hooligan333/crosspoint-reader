@@ -20,6 +20,7 @@
 #include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/UsbDriveActivity.h"
+#include "util/HomeButtonInput.h"
 #ifdef CROSSPOINT_RSS_SYNC
 #include "network/RssSyncActivity.h"
 #endif
@@ -35,6 +36,40 @@
 #include "util/FullScreenMessageActivity.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+bool ActivityManager::goBackOneLevel() {
+  if (!currentActivity) return false;
+  // Nothing above the home screen to climb out of, and popping it would only
+  // bounce through goHome() and repaint Home for no reason.
+  if (currentActivity->isHomeActivity()) return false;
+  // A transition queued one frame ago has not been adopted yet, and popActivity()
+  // would silently reset it -- its "should never happen" LOG_ERR is compiled out
+  // at LOG_LEVEL=0. The concrete case under #3516's tracker is the 350 ms
+  // double-tap window: a long press that queued the reader menu is adopted on the
+  // NEXT frame, and the tap whose action was HELD BACK for that window can land
+  // in between and pop the reader instead. It also makes this idempotent within a
+  // frame, since homeAction stays latched for the rest of the frame that read it.
+  if (pendingAction != PendingAction::None) return false;
+  // Screens that own a Home-gesture close path use it, because that path sets the
+  // result the parent actually expects, not a bare cancellation --
+  // EpubReaderMenuActivity::closeCancelled() arms a MenuResult carrying the
+  // orientation and page-turn values the reader reads back on EVERY return,
+  // cancelled or not. Popping from the outside would discard them.
+  if (currentActivity->handleHomeGesture()) return true;
+  // No close path here, so nobody will call setResult() for this screen. Deliver
+  // the cancellation ourselves rather than popping silently: every result handler
+  // in the tree has a cancel branch, and that branch is exactly the cleanup an
+  // abandoned child needs (reopen the library index, reset the wizard state,
+  // rebuild the row vector, re-read the bookmark cache). Skipping the dispatch
+  // instead would strand the parent in the state it pushed from.
+  ActivityResult cancelled;
+  cancelled.isCancelled = true;
+  currentActivity->setResult(std::move(cancelled));
+  popActivity();
+  return true;
+}
+#endif
 
 void ActivityManager::begin() {
 #if defined(configNUM_CORES) && configNUM_CORES > 1
@@ -103,6 +138,24 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity) {
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+    // The fork's Home-key action, dispatched here rather than in main.cpp's loop
+    // because it is the activity stack it acts on, and because this is where the
+    // sibling Home action (goHome) already lives -- the two are mutually
+    // exclusive, homeAction being a single value per frame. Consume first: a
+    // stack change must not be run twice off one latched action.
+    if (mappedInput.homeButtonAction() == HomeButtonAction::GoBack) {
+      mappedInput.consumeHomeButtonAction();
+      // Only claim the frame when something actually moved. goBackOneLevel()
+      // declines on the home screen (the common case, GoBack being the flagged
+      // tap default) and while a transition is already pending -- and the frame
+      // it would have eaten is the one that drains that transition, including
+      // goToSleep()'s nested loop() that adopts and paints SleepActivity and
+      // runs the outgoing reader's onExit(). The action is already consumed, so
+      // falling through cannot double-dispatch.
+      if (goBackOneLevel()) return;
+    }
+#endif
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -161,11 +214,10 @@ void ActivityManager::loop() {
         LOG_DBG("ACT", "Popped from activity stack, new size = %zu", stackActivities.size());
         // Handle result if necessary
         if (currentActivity->resultHandler) {
-          LOG_DBG("ACT", "Handling result for popped activity");
-
           // Move it here to avoid the case where handler calling another startActivityForResult()
           auto handler = std::move(currentActivity->resultHandler);
           currentActivity->resultHandler = nullptr;
+          LOG_DBG("ACT", "Handling result for popped activity");
           lock.unlock();  // Handler may acquire its own lock
           handler(pendingResult);
         }

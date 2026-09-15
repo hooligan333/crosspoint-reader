@@ -15,6 +15,16 @@ enum class HomeButtonAction : uint8_t {
   Dictionary,
   ReaderMenu,
   ToggleFrontlight,
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Fork action: climb ONE activity level rather than jumping all the way Home.
+  // Appended last and behind the flag, so the persisted indices above are
+  // untouched and a flags-off build is byte-identical upstream -- a settings.json
+  // written by a flagged build with a gesture bound to GoBack clamps back to the
+  // field default on load, because CrossPointSettings::fromJson() bounds ENUM
+  // rows by home_button::ACTION_LABELS' size. Same pattern as
+  // CrossPointSettings::SHORT_PWRBTN::TOGGLE_LIGHT.
+  GoBack,
+#endif
   Count
 };
 

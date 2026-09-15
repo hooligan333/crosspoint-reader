@@ -272,7 +272,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // X4 Pro: double-click power toggles the frontlight. Disabling frees the
   // power button for shortPwrBtn actions without the double-click wait.
   uint8_t doubleClickPwrLight = 1;
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+  // Fork default: a Home tap climbs one level instead of jumping all the way to
+  // the home screen. Only the DEFAULT moves -- the action itself is selectable
+  // either way, and every other gesture keeps upstream's binding.
+  uint8_t homeButtonTapAction = static_cast<uint8_t>(HomeButtonAction::GoBack);
+#else
   uint8_t homeButtonTapAction = static_cast<uint8_t>(HomeButtonAction::Home);
+#endif
   uint8_t homeButtonDoubleTapAction = static_cast<uint8_t>(HomeButtonAction::ToggleFrontlight);
   uint8_t homeButtonLongPressAction = static_cast<uint8_t>(HomeButtonAction::ReaderMenu);
 #ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
