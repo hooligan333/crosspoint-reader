@@ -40,7 +40,7 @@ STR_DICT_DECOMPRESS_ERROR: "Определението не може да бъд
 STR_DICT_LOW_MEMORY: "Недостатъчна памет"
 STR_WIFI_NETWORKS: "Wi-Fi мрежи"
 STR_NO_NETWORKS: "Не са намерени мрежи"
-STR_NETWORKS_FOUND: "Намерени мрежи: %zu"
+STR_NETWORKS_FOUND: "Намерени мрежи: %lu"
 STR_SCANNING: "Сканиране..."
 STR_FINDING_SAVED_WIFI: "Търсене на запазен Wi-Fi..."
 STR_CONNECTING: "Свързване..."
