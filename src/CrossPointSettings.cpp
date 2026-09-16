@@ -185,6 +185,41 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     sleepTimeoutMinutes = sleepTimeoutEnumToMinutes(legacyValue);
     needsResave = true;
   }
+
+  // Home-key migration from this fork's pre-#3516 catalog. The old firmware
+  // stored its own HOME_BUTTON_ACTION numbering under two of these three key
+  // names; #3516 reuses the names with a different numbering, and the old
+  // values land inside the new valid range, so the generic loop's clamp
+  // cannot catch the reinterpretation (tap "Go Back" 6 became Sync, long
+  // press "Reader Menu" 3 became Refresh). The retired
+  // "homeButtonDoubleClickAction" key is the unambiguous marker: only the
+  // old firmware ever wrote it.
+  if (!doc["homeButtonDoubleClickAction"].isNull()) {
+    // Old catalog: 0 Off, 1 Frontlight, 2 Go Home, 3 Reader Menu, 4 Sleep,
+    // 5 Screenshot, 6 Go Back.
+    static constexpr uint8_t LEGACY_HOME_TO_3516[] = {
+        static_cast<uint8_t>(HomeButtonAction::Ignore),            // 0 Off
+        static_cast<uint8_t>(HomeButtonAction::ToggleFrontlight),  // 1 Frontlight
+        static_cast<uint8_t>(HomeButtonAction::Home),              // 2 Go Home
+        static_cast<uint8_t>(HomeButtonAction::ReaderMenu),        // 3 Reader Menu
+        static_cast<uint8_t>(HomeButtonAction::Ignore),            // 4 Sleep      (no #3516 equivalent)
+        static_cast<uint8_t>(HomeButtonAction::Ignore),            // 5 Screenshot (no #3516 equivalent)
+#ifdef CROSSPOINT_HOME_TAP_GO_BACK
+        static_cast<uint8_t>(HomeButtonAction::GoBack),            // 6 Go Back
+#else
+        static_cast<uint8_t>(HomeButtonAction::Home),              // 6 Go Back -> nearest without the flag
+#endif
+    };
+    constexpr uint8_t LEGACY_HOME_COUNT = sizeof(LEGACY_HOME_TO_3516) / sizeof(LEGACY_HOME_TO_3516[0]);
+    const auto fold = [&](const char* legacyKey, uint8_t CrossPointSettings::* field) {
+      const uint8_t old = doc[legacyKey] | (uint8_t)0xFF;
+      if (old < LEGACY_HOME_COUNT) s.*field = LEGACY_HOME_TO_3516[old];
+    };
+    fold("homeButtonTapAction", &CrossPointSettings::homeButtonTapAction);
+    fold("homeButtonDoubleClickAction", &CrossPointSettings::homeButtonDoubleTapAction);
+    fold("homeButtonLongPressAction", &CrossPointSettings::homeButtonLongPressAction);
+    needsResave = true;  // rewrite drops the retired key, so this fold runs once
+  }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
