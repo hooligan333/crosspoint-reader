@@ -16,6 +16,12 @@
 #include "icons/library.h"
 #include "icons/settings2.h"
 #include "icons/transfer.h"
+#if defined(CROSSPOINT_FLASHCARDS)
+#include "icons/bookmark.h"
+#endif
+#if defined(CROSSPOINT_RSS_SYNC)
+#include "icons/wifi.h"
+#endif
 #include "util/BookProgress.h"
 
 namespace fui = freeink::ui;
@@ -268,15 +274,31 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
 }
 
 void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
-  static constexpr const uint8_t* ICONS[] = {FolderIcon, LibraryIcon, BlocksIcon, TransferIcon, Settings2Icon};
+  // One tab per HomeActivity menu row, in HomeActivity::indexToMenuItem()'s
+  // order: tab i activates selector index books->size() + i, so the fork's
+  // flag-gated rows (RSS sync, flashcard study + deck sync) must sit here in
+  // the same slots, between File Transfer and Settings, or every tab from
+  // Transfer on would launch its neighbour's screen. Icons mirror the list
+  // themes' choices where a 32 px glyph exists (Wifi for RSS, Book for study,
+  // Bookmark for deck sync).
   int count = 0;
-  for (int i = 0; i < 5; ++i) {
-    if (i == 2 && !hasOpds) continue;
-    auto& tab = tabItems[count];
-    tab.value = books->size() + count;
+  tabIcons[count++] = FolderIcon;
+  tabIcons[count++] = LibraryIcon;
+  if (hasOpds) tabIcons[count++] = BlocksIcon;
+  tabIcons[count++] = TransferIcon;
+#ifdef CROSSPOINT_RSS_SYNC
+  tabIcons[count++] = WifiIcon;
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+  tabIcons[count++] = BookIcon;
+  tabIcons[count++] = BookmarkIcon;
+#endif
+  tabIcons[count++] = Settings2Icon;
+  for (int i = 0; i < count; ++i) {
+    auto& tab = tabItems[i];
+    tab.value = books->size() + i;
     tab.selected = selected == tab.value;
     tab.label = nullptr;
-    ++count;
   }
   tabs.tabs = tabItems.data();
   tabs.count = count;
@@ -288,8 +310,7 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
   tabs.iconPainter = [](fui::DrawTarget&, fui::Rect iconRect, const fui::TabItem& tab, uint8_t, void* user) {
     const auto& self = *static_cast<CoverGridHomeUi*>(user);
     const int index = tab.value - static_cast<int>(self.books->size());
-    const int icon = !self.hasOpds && index >= 2 ? index + 1 : index;
-    self.renderer.drawIcon(ICONS[icon], iconRect.x, iconRect.y, iconRect.width);
+    self.renderer.drawIcon(self.tabIcons[index], iconRect.x, iconRect.y, iconRect.width);
     return true;
   };
   tabs.tabStyles.normal.background = fui::Paint::solid(fui::Color::White);

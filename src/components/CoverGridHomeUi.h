@@ -61,5 +61,16 @@ class CoverGridHomeUi final : public UiAppHost {
   freeink::ui::CoverGridProps grid;
   freeink::ui::Rect gridBounds{};
   freeink::ui::TabBarProps tabs;
-  std::array<freeink::ui::TabItem, 5> tabItems;
+  // Files, Library, [OPDS], Transfer, Settings, plus the fork's flag-gated
+  // home rows (RSS sync; flashcard study + deck sync).
+  static constexpr int MAX_TABS = 5
+#ifdef CROSSPOINT_RSS_SYNC
+                                  + 1
+#endif
+#ifdef CROSSPOINT_FLASHCARDS
+                                  + 2
+#endif
+      ;
+  std::array<freeink::ui::TabItem, MAX_TABS> tabItems;
+  std::array<const uint8_t*, MAX_TABS> tabIcons{};
 };
