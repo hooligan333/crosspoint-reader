@@ -704,7 +704,8 @@ void EpubReaderActivity::bgBuildTaskLoop() {
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
 bool EpubReaderActivity::renderSpecEquals(const ReaderRenderSpec& a, const ReaderRenderSpec& b) {
   return a.fontId == b.fontId && a.lineCompression == b.lineCompression &&
-         a.extraParagraphSpacing == b.extraParagraphSpacing && a.paragraphAlignment == b.paragraphAlignment &&
+         a.extraParagraphSpacing == b.extraParagraphSpacing && a.characterSpacing == b.characterSpacing &&
+         a.wordSpacingPercent == b.wordSpacingPercent && a.paragraphAlignment == b.paragraphAlignment &&
          a.viewportWidth == b.viewportWidth && a.viewportHeight == b.viewportHeight &&
          a.hyphenationEnabled == b.hyphenationEnabled && a.embeddedStyle == b.embeddedStyle &&
          a.imageRendering == b.imageRendering && a.focusReadingEnabled == b.focusReadingEnabled;
