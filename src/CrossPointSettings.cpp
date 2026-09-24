@@ -186,9 +186,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (doc["pageTurnGesture"].isNull() && doc["previousPageGesture"].isNull() &&
       doc["touchReaderControls"].is<uint8_t>()) {
     const uint8_t mode = doc["touchReaderControls"].as<uint8_t>();
-    if (mode >= 1 && mode <= 3) {
+    // 4 = the fork's Swipe + Tap mode (r2-r4 images; upstream never wrote 4),
+    // which upstream's Tap & Swipe gesture now provides.
+    if (mode >= 1 && mode <= 4) {
       touchReaderControls = TOUCH_READER_ON;
-      pageTurnGesture = mode == 1 ? TAP_ONLY : mode == 2 ? SWIPE_ONLY : INVERTED_TAP;
+      pageTurnGesture = mode == 1 ? TAP_ONLY : mode == 2 ? SWIPE_ONLY : mode == 3 ? INVERTED_TAP : TAP_AND_SWIPE;
       previousPageGesture = pageTurnGesture;
       needsResave = true;
     }

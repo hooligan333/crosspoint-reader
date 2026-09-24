@@ -121,7 +121,14 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
   result.next = nextTaps && (!prevTaps || nextZone);
   result.prev = prevTaps && (!nextTaps || !nextZone);
-  result.heldMs = gpio.lastTouchHeldMs();
+  // While either direction also pages on swipes, taps never carry a hold
+  // duration: an aborted slow swipe (< 60 px travel, > 700 ms) legally
+  // classifies as a tap at the touch-down point, and letting its dwell time
+  // through would fire the long-press action (chapter skip / rotate) from a
+  // gesture meant as a page swipe. Long-press stays with the tap-only modes.
+  const bool swipesOn =
+      gestureAllowsSwipe(SETTINGS.pageTurnGesture) || gestureAllowsSwipe(SETTINGS.previousPageGesture);
+  result.heldMs = swipesOn ? 0 : gpio.lastTouchHeldMs();
   return result;
 }
 
