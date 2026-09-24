@@ -106,6 +106,21 @@ constexpr bool isUsable(Validity state) { return state != Validity::Invalid; }
  */
 constexpr int64_t settleAfterSync(int64_t snapshot, int64_t answer) { return epochIsValid(answer) ? answer : snapshot; }
 
+/**
+ * Whether the SD record should replace the current system time at boot.
+ *
+ * On a cold boot system time is ~1970 and the record is the best there is. On a
+ * warm boot (esp_restart, or a USB-powered deep-sleep wake) system time kept
+ * running and is at least as new as the record, which was written from it —
+ * overwriting it would roll a live clock back, possibly to a record hours old,
+ * while the surviving rail success stamp still classifies it VALID. So the
+ * record only wins when it is newer: the clock ends up at max(system, record),
+ * and never moves backwards.
+ */
+constexpr bool shouldRestoreRecord(int64_t systemEpoch, int64_t recordEpoch) {
+  return !epochIsValid(systemEpoch) || recordEpoch > systemEpoch;
+}
+
 // --- sync backoff ------------------------------------------------------------
 
 /**
