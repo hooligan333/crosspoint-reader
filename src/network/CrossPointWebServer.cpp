@@ -28,6 +28,7 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
+#include "util/Timezones.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
@@ -1277,6 +1278,11 @@ void CrossPointWebServer::handlePostSettings() {
 
   const auto& settings = getSettingsList(&sdFontSystem.registry());
   int applied = 0;
+  // Everything timezones::activeIndex()/applyToClock() read, to push a zone
+  // change into the clock below.
+  const uint8_t prevTimezone = SETTINGS.clockTimezone;
+  const uint8_t prevDst = SETTINGS.clockDst;
+  const uint8_t prevUtcOffsetQ = SETTINGS.clockUtcOffsetQ;
 
   for (const auto& s : settings) {
     if (!s.key) continue;
@@ -1333,6 +1339,12 @@ void CrossPointWebServer::handlePostSettings() {
   }
 
   SETTINGS.saveToFile();
+  // The device-side pickers apply a zone change on the spot; without this a
+  // web change only reached the clock at the next boot's applyToClock().
+  if (SETTINGS.clockTimezone != prevTimezone || SETTINGS.clockDst != prevDst ||
+      SETTINGS.clockUtcOffsetQ != prevUtcOffsetQ) {
+    timezones::applyToClock();
+  }
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);
   server->send(200, "text/plain", String("Applied ") + String(applied) + " setting(s)");
