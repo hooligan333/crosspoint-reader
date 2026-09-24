@@ -400,8 +400,17 @@ void EpubReaderActivity::openDictionaryWordSelect() {
     requestUpdate();
     return;
   }
-  if (!section) return;
-  auto page = section->loadPage(section->currentPage);
+  std::unique_ptr<Page> page;
+  {
+    // The section's file handle is shared with the background build task, which
+    // writes it under this lock; an unlocked read here can interleave with a
+    // build tick's seek/write on the same handle. Reached from loop() and result
+    // handlers only, neither of which holds the lock. Released before the push:
+    // ActivityManager takes its own lock to switch activities.
+    RenderLock lock;
+    if (!section) return;
+    page = section->loadPage(section->currentPage);
+  }
   if (!page) return;
 
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -422,7 +431,14 @@ void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
     return;
   }
 
-  auto page = section->loadPage(section->currentPage);
+  std::unique_ptr<Page> page;
+  {
+    // Same shared-handle race as openDictionaryWordSelect(): read the page under
+    // the lock the background build task writes the section file under.
+    RenderLock lock;
+    if (!section) return;
+    page = section->loadPage(section->currentPage);
+  }
   if (!page) return;
 
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -1839,13 +1855,20 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
-      if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
-        std::string fullText = section->getTextFromSectionFile();
-        if (!fullText.empty()) {
-          startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
-                                 [this](const ActivityResult&) { openReaderMenu(); });
-          break;
+      std::string fullText;
+      {
+        // getTextFromSectionFile() reads the section file through the handle the
+        // background build task writes under this lock (see
+        // openDictionaryWordSelect()). Released before the push below.
+        RenderLock lock;
+        if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
+          fullText = section->getTextFromSectionFile();
         }
+      }
+      if (!fullText.empty()) {
+        startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
+                               [this](const ActivityResult&) { openReaderMenu(); });
+        break;
       }
       requestUpdate();
       break;
