@@ -98,6 +98,35 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     }
   }
 
+  // touchReaderControls in the legacy single-mode numbering (0 = off, 1 = tap,
+  // 2 = swipe, 3 = inverted tap, 4 = the fork's Swipe + Tap), which fork r2-r4
+  // images read as the whole touch mode and rewrite without the gesture keys:
+  // a bare 1 would come back from one of them as Tap, both directions. So a
+  // gesture pair with a legacy equivalent is written as that mode, and the
+  // legacy split in fromJson() restores the same pair from it. Mixed or
+  // disabled pairs have none and keep 1. Safe for this image and upstream: the
+  // toggle load folds anything >= 2 back to its On default, and the legacy
+  // split only runs when the gesture keys are absent, which they never are
+  // in a file written here.
+  if (touchReaderControls != TOUCH_READER_OFF && pageTurnGesture == previousPageGesture) {
+    switch (pageTurnGesture) {
+      case TAP_ONLY:
+        doc["touchReaderControls"] = uint8_t{1};
+        break;
+      case SWIPE_ONLY:
+        doc["touchReaderControls"] = uint8_t{2};
+        break;
+      case INVERTED_TAP:
+        doc["touchReaderControls"] = uint8_t{3};
+        break;
+      case TAP_AND_SWIPE:
+        doc["touchReaderControls"] = uint8_t{4};
+        break;
+      default:
+        break;
+    }
+  }
+
   // Keys the fork's r3-r4 images read, so a trip through one keeps the zone.
   // Each firmware's save drops the keys it does not know, and r4 knows only
   // clockUtcOffsetQ + clockDstRule (not clockTimezone/clockDst): written from
