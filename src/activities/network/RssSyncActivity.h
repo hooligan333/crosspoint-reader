@@ -133,7 +133,7 @@ class RssSyncActivity final : public UiListActivity {
   // destination. (On this feature's touch hardware silentRestart() takes
   // finishWifiSessionWithoutRestart() and stops the stack in place instead,
   // precisely so the externally powered touch/frontlight rails keep their
-  // state — see main.cpp:198.)
+  // state — see finishWifiSessionWithoutRestart() in main.cpp.)
   void shutdownWifi();
 
   void buildListScreen(UiScreen& screen);
