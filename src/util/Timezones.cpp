@@ -1,6 +1,7 @@
 #include "Timezones.h"
 
 #include <HalClock.h>
+#include <Logging.h>
 
 #include <cstdio>
 #include <cstring>
@@ -167,17 +168,22 @@ void formatOffset(const uint8_t index, char* buf, const size_t bufSize) {
 
 void applyToClock() {
   const TimezoneInfo& tz = TABLE[activeIndex()];
-  if (SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_AUTO) {
-    halClock.setTimezone(tz.posixTz);
-    return;
-  }
-  // Forced DST: replace the zone's rule with a fixed offset — the standard
-  // offset, plus one hour when forced on. POSIX offset sign is inverted.
-  const int q = tz.stdOffsetQ + (SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_ON ? 4 : 0);
-  const int absQ = q < 0 ? -q : q;
+  const char* applied = tz.posixTz;
   char fixed[16];
-  snprintf(fixed, sizeof(fixed), "UTC%c%d:%02d", q < 0 ? '+' : '-', absQ / 4, (absQ % 4) * 15);
-  halClock.setTimezone(fixed);
+  if (SETTINGS.clockDst != CrossPointSettings::CLOCK_DST_AUTO) {
+    // Forced DST: replace the zone's rule with a fixed offset — the standard
+    // offset, plus one hour when forced on. POSIX offset sign is inverted.
+    const int q = tz.stdOffsetQ + (SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_ON ? 4 : 0);
+    const int absQ = q < 0 ? -q : q;
+    snprintf(fixed, sizeof(fixed), "UTC%c%d:%02d", q < 0 ? '+' : '-', absQ / 4, (absQ % 4) * 15);
+    applied = fixed;
+  }
+  LOG_INF("CLK", "Timezone %s (setting %u), DST %s, TZ=%s", tz.name, static_cast<unsigned>(SETTINGS.clockTimezone),
+          SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_AUTO ? "auto"
+          : SETTINGS.clockDst == CrossPointSettings::CLOCK_DST_ON ? "on"
+                                                                  : "off",
+          applied);
+  halClock.setTimezone(applied);
 }
 
 }  // namespace timezones

@@ -203,7 +203,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // which for these files is an hour out all summer. With the rule known, the
   // named zone is unambiguous: same standard offset, same transition rule.
   // Rule bytes: 1 = US, 2 = EU, 3 = AU (0 = off takes upstream's path).
-  if (doc["clockTimezone"].isNull() && doc["clockDstRule"].is<uint8_t>() && clockUtcOffsetQ <= 104) {
+  // 255 is "never chosen" (see Timezones.cpp), and a round-trip through an
+  // upstream image writes it out explicitly, so treat it the same as absent.
+  if ((doc["clockTimezone"] | 255) == 255 && doc["clockDstRule"].is<uint8_t>() && clockUtcOffsetQ <= 104) {
     static constexpr const char* RULES[] = {nullptr, "M3.2.0,M11.1.0", ",M3.5.0", ",M10.1.0,M4.1.0"};
     const uint8_t rule = doc["clockDstRule"].as<uint8_t>();
     if (rule >= 1 && rule <= 3) {
