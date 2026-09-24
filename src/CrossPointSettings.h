@@ -359,10 +359,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Settings list (FlashcardSettingsActivity owns the editing UI). Its own feed
   // and its own folder — decks are not books (FLASHCARD_SPEC.md §0.1).
   //
-  // Accepted limitation, same shape as clockDstRule above: both keys are
-  // flag-gated, so a firmware image built without CROSSPOINT_FLASHCARDS
-  // rewrites settings.json without them. Flashing a non-combo image and coming
-  // back resets the feed URL to empty and the folder to /Decks — the decks
+  // Accepted limitation: both keys are flag-gated, so a firmware image built
+  // without CROSSPOINT_FLASHCARDS rewrites settings.json without them. Flashing
+  // a non-combo image and coming back resets the feed URL to empty and the folder to /Decks — the decks
   // themselves and their scheduling state stay on the card, but the URL has to
   // be typed again.
   char flashcardFeedUrl[128] = "";
