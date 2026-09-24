@@ -215,6 +215,26 @@ void testSettleAfterSync() {
   EXPECT_EQ_I(softclock::settleAfterSync(stale, THRESHOLD), THRESHOLD);
 }
 
+// --- boot restore -------------------------------------------------------------
+
+void testRestoreNeverRollsBack() {
+  beginGroup("boot restore never rolls back");
+
+  const int64_t saved = at(2026, 4, 1, 9);
+  const int64_t later = at(2026, 4, 1, 15);
+
+  // Cold boot: system time is ~1970 (or anything implausible) -> the record.
+  EXPECT(softclock::shouldRestoreRecord(0, saved));
+  EXPECT(softclock::shouldRestoreRecord(THRESHOLD - 1, saved));
+
+  // Warm boot: system time survived and is newer -> keep it.
+  EXPECT(!softclock::shouldRestoreRecord(later, saved));
+  EXPECT(!softclock::shouldRestoreRecord(saved, saved));
+
+  // A plausible but older system time loses to a newer record: max() of the two.
+  EXPECT(softclock::shouldRestoreRecord(saved, later));
+}
+
 // --- epoch -> DateTime -------------------------------------------------------
 
 void expectDate(int64_t epoch, int year, int month, int day, int hour, int minute, int second, int weekday) {
@@ -801,6 +821,7 @@ int main() {
   testValidityThreshold();
   testValidityStates();
   testSettleAfterSync();
+  testRestoreNeverRollsBack();
   testDateTimeConversion();
   testDaysFromCivilAgainstCivilDate();
   testDateTimeRoundTrip();
