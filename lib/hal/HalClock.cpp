@@ -146,11 +146,21 @@ void HalClock::restoreFromStorage() {
     LOG_ERR("CLK", "Soft clock record unusable, clock stays unset");
     return;
   }
-  // Restored, not fixed: the rail success flag stays clear, so this reads back
-  // as STALE. No elapsed-time compensation is possible — the device cannot know
-  // how long it was off — so the restored reading is a lower bound on now.
-  setSystemEpoch(epoch);
   _lastPersistMs = railNowMs();  // it is on the card already; don't rewrite it
+  // A warm boot kept system time running, and the record was written from it,
+  // so the record can only be older: keep the live clock (and its validity).
+  const int64_t current = systemEpochSecs();
+  if (!softclock::shouldRestoreRecord(current, epoch)) {
+    LOG_INF("CLK", "Soft clock record not restored: system time survived the reboot");
+    return;
+  }
+  // Restored, not fixed, on a cold boot: the rail died with system time, so its
+  // success flag is clear too and this reads back as STALE. No elapsed-time
+  // compensation is possible — the device cannot know how long it was off — so
+  // the restored reading is a lower bound on now. (On a warm boot this only
+  // runs when the record is NEWER than the surviving system time, so it moves
+  // the clock forward, never back.)
+  setSystemEpoch(epoch);
   Rtc::DateTime dt;
   if (getDateTime(dt)) {
     LOG_INF("CLK", "Soft clock restored (stale) %04u-%02u-%02u %02u:%02u:%02u UTC", dt.year, dt.month, dt.day, dt.hour,
