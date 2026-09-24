@@ -67,7 +67,8 @@ class HalClock {
 
   // Restore the persisted epoch as a STALE clock. Call once at boot, after
   // Storage.begin() and before anything timestamps anything. A missing or torn
-  // record leaves the clock INVALID.
+  // record leaves the clock INVALID. On a warm boot, where system time survived
+  // and is newer than the record, it is left alone: the clock never moves back.
   void restoreFromStorage();
 
   // Write the persisted record now. Called at deep-sleep entry — on this board
