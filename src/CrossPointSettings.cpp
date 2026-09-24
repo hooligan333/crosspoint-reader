@@ -14,6 +14,7 @@
 #include "ReaderFontSizes.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "util/Timezones.h"
 
 namespace {
 
@@ -193,6 +194,29 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       pageTurnGesture = mode == 1 ? TAP_ONLY : mode == 2 ? SWIPE_ONLY : mode == 3 ? INVERTED_TAP : TAP_AND_SWIPE;
       previousPageGesture = pageTurnGesture;
       needsResave = true;
+    }
+  }
+
+  // Fork r3-r4 images (CROSSPOINT_CLOCK_DST) stored an auto-DST rule next to
+  // the legacy offset, and while a rule was set that offset was STANDARD time.
+  // Upstream's own legacy path maps the offset to a fixed "UTC±HH:MM" entry,
+  // which for these files is an hour out all summer. With the rule known, the
+  // named zone is unambiguous: same standard offset, same transition rule.
+  // Rule bytes: 1 = US, 2 = EU, 3 = AU (0 = off takes upstream's path).
+  if (doc["clockTimezone"].isNull() && doc["clockDstRule"].is<uint8_t>() && clockUtcOffsetQ <= 104) {
+    static constexpr const char* RULES[] = {nullptr, "M3.2.0,M11.1.0", ",M3.5.0", ",M10.1.0,M4.1.0"};
+    const uint8_t rule = doc["clockDstRule"].as<uint8_t>();
+    if (rule >= 1 && rule <= 3) {
+      const int legacyQ = static_cast<int>(clockUtcOffsetQ) - 48;
+      const TimezoneInfo* table = timezones::table();
+      for (size_t i = 0; i < timezones::count(); i++) {
+        if (table[i].stdOffsetQ == legacyQ && strstr(table[i].posixTz, RULES[rule]) != nullptr) {
+          clockTimezone = static_cast<uint8_t>(i);
+          clockDst = CLOCK_DST_AUTO;
+          needsResave = true;
+          break;
+        }
+      }
     }
   }
 
