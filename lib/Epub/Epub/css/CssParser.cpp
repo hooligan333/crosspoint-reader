@@ -237,10 +237,9 @@ void forEachDelimitedToken(std::string_view s, Pred isDelimiter, F&& fn) {
 //
 // std::from_chars(..., float&) links the whole of libstdc++'s
 // floating_from_chars.o -- fast_float, its hex-float and inf/nan readers and a
-// 10KB power-of-five table, about 9KB of it IROM -- for the one call in
-// tryInterpretLength(). newlib's strtof() is in the image already, so the
-// conversion runs through that instead. See the IROM lever notes in
-// platformio.ini.
+// 10KB power-of-five table, about 9KB of code on top -- for the float overload
+// of tryParseNumber(). newlib's strtof() is in the image already, so the
+// conversion runs through that instead.
 //
 // strtof() on its own is not a drop-in: it skips leading whitespace, accepts
 // '+', hex floats ("0x1p3"), "inf" and "nan", and reports range errors through

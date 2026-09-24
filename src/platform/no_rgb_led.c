@@ -1,6 +1,7 @@
-// IROM lever (combo envs only, -DCROSSPOINT_NO_RGB_LED): keep the Arduino
+// Dead-code trim (combo envs only, -DCROSSPOINT_NO_RGB_LED): keep the Arduino
 // core's RGB-LED helper -- and the entire RMT driver stack behind it -- out of
-// the link.
+// the link. The lasting win is RAM: the RMT ISRs are IRAM_ATTR, so ~3.7 KB of
+// IRAM goes back to the heap (plus ~14 KB of flash code and ~5 KB of rodata).
 //
 // The pull-in chain, read off firmware.map's archive-member log:
 //   esp32-hal-gpio.c.o        -- __digitalWrite() has an unconditional
