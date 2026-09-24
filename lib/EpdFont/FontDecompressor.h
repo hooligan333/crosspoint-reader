@@ -98,8 +98,9 @@ class FontDecompressor {
   // (FontCacheManager::releaseSdFontCaches(), used by #3035's WiFi + web-server
   // start and #3093's transparent sleep-overlay decode): resident groups are
   // EXEMPT. That path calls FontDecompressor::clearCache(), which still frees the
-  // page slots and hot group — every internal-heap byte this class held before the
-  // flag existed — so the protection it provides is unchanged with the flag on.
+  // page slots and hot group — every buffer this class held before the flag
+  // existed (fiFontMalloc'd: PSRAM-first, internal heap only without PSRAM) — so
+  // the protection it provides is unchanged with the flag on.
   // What it is protecting is the INTERNAL heap (its own instrumentation reads
   // ESP.getFreeHeap(), and the sleep decode's scanline/region buffers are what
   // must fit), and resident payloads are PSRAM-only, so releasing them would hand
