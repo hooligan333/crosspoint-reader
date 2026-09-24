@@ -23,6 +23,9 @@
 #include <WiFi.h>
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
+#if FREEINK_CAP_TOUCH
+#include <esp_sntp.h>
+#endif
 
 #include <cstring>
 
@@ -216,10 +219,34 @@ static void armSilentReboot(const uint32_t target) {
   silentRebootMagic = SILENT_REBOOT_MAGIC;
 }
 
-// Returns instead of rebooting when sleep supersedes the reboot; callers keep
-// running in that case.
+#if FREEINK_CAP_TOUCH
+// Touch boards end a WiFi session in place instead of rebooting. On the
+// ESP32-S3 a software reset is CPU-only: it does not cycle the externally
+// powered touch/frontlight rails, nor the GPIO block, so the GT911's latched
+// level interrupt survives into the next boot (see HalGPIO's stale-interrupt
+// scrub). Stop SNTP and the radio here and let the exiting activity's normal
+// navigation continue. Boards without touch keep #3575's silent restart and
+// its frontlight replay unchanged.
+static bool finishWifiSessionWithoutRestart() {
+  if (!BoardConfig::hasTouch()) return false;
+
+  if (esp_sntp_enabled()) {
+    esp_sntp_stop();
+  }
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+  LOG_DBG("MAIN", "WiFi stopped without restart on touch device");
+  return true;
+}
+#endif
+
+// Returns instead of rebooting when sleep supersedes the reboot, or on touch
+// boards (WiFi is stopped in place instead); callers keep running in that case.
 static void silentRestartTo(const uint32_t target, const char* targetName) {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+#if FREEINK_CAP_TOUCH
+  if (finishWifiSessionWithoutRestart()) return;
+#endif
   armSilentReboot(target);
   LOG_DBG("MAIN", "Silent restart (target=%s)", targetName);
   // E-ink retains the previous frame until the target's first paint lands
