@@ -46,9 +46,9 @@ void stopDnsServer() {
 void restartMdns(const char* hostname, const char* tag) {
 #ifdef CROSSPOINT_NO_MDNS
   // mDNS compiled out (combo envs): dropping the only references lets
-  // gc-sections shed ESPmDNS + the IDF mdns component (~28 KB IROM, an
-  // 0x1C0000-cliff lever). STA mode leads with the IP URL + QR anyway; AP
-  // mode's captive portal resolves every hostname without mDNS.
+  // gc-sections shed ESPmDNS + the IDF mdns component (~28 KB IROM). STA
+  // mode leads with the IP URL + QR anyway; AP mode's captive portal
+  // resolves every hostname without mDNS.
   (void)hostname;
   (void)tag;
 #else
