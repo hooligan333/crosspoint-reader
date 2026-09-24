@@ -28,6 +28,20 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
   dest[maxLen - 1] = '\0';
 }
 
+// Fork r3-r4 images' auto-DST rule (their "clockDstRule" key), identified by
+// a fragment of the POSIX TZ rule the named zones in Timezones.cpp carry.
+// Index = r4's CLOCK_DST_RULE byte: 1 = US, 2 = EU, 3 = AU (0 = off). The
+// fragments are mutually exclusive across the table, so a zone has at most one.
+constexpr const char* LEGACY_DST_RULES[] = {nullptr, "M3.2.0,M11.1.0", ",M3.5.0", ",M10.1.0,M4.1.0"};
+constexpr uint8_t LEGACY_DST_RULE_COUNT = sizeof(LEGACY_DST_RULES) / sizeof(LEGACY_DST_RULES[0]);
+
+uint8_t legacyDstRuleOf(const char* posixTz) {
+  for (uint8_t rule = 1; rule < LEGACY_DST_RULE_COUNT; rule++) {
+    if (strstr(posixTz, LEGACY_DST_RULES[rule]) != nullptr) return rule;
+  }
+  return 0;
+}
+
 }  // namespace
 
 void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings) {
@@ -82,6 +96,29 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     } else {
       doc[info.key] = s.*(info.valuePtr);
     }
+  }
+
+  // Keys the fork's r3-r4 images read, so a trip through one keeps the zone.
+  // Each firmware's save drops the keys it does not know, and r4 knows only
+  // clockUtcOffsetQ + clockDstRule (not clockTimezone/clockDst): written from
+  // the chosen zone, r4 shows the right DST-aware time, and back here the
+  // clockDstRule migration in fromJson() re-finds the same zone -- every
+  // (standard offset, rule) pair in the table has a single first match. The
+  // migration is gated on clockTimezone being absent/255, so a file this
+  // image wrote itself (real zone) never re-migrates. With DST not on Auto, or
+  // a zone r4 has no rule for, the rule is 0 and the offset is the fixed one
+  // the clock actually applies (standard, +1 h when DST is forced on), which
+  // r4 then shows as-is; the zone name itself cannot survive that trip.
+  // With no zone chosen (255) the legacy offset IS the setting (activeIndex()
+  // maps it to a fixed entry), so it is written back unchanged with rule 0 --
+  // folding a forced-DST hour into it would compound on every save.
+  if (clockTimezone < timezones::count()) {
+    const TimezoneInfo& tz = timezones::table()[clockTimezone];
+    const int offsetQ = tz.stdOffsetQ + (clockDst == CLOCK_DST_ON ? 4 : 0);
+    doc["clockUtcOffsetQ"] = static_cast<uint8_t>(std::clamp(offsetQ + 48, 0, 104));
+    doc["clockDstRule"] = clockDst == CLOCK_DST_AUTO ? legacyDstRuleOf(tz.posixTz) : uint8_t{0};
+  } else {
+    doc["clockDstRule"] = uint8_t{0};
   }
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
@@ -205,14 +242,15 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Rule bytes: 1 = US, 2 = EU, 3 = AU (0 = off takes upstream's path).
   // 255 is "never chosen" (see Timezones.cpp), and a round-trip through an
   // upstream image writes it out explicitly, so treat it the same as absent.
+  // toJson() writes clockDstRule too (see there), always next to a real zone
+  // or a rule of 0, so this image's own files never take this path.
   if ((doc["clockTimezone"] | 255) == 255 && doc["clockDstRule"].is<uint8_t>() && clockUtcOffsetQ <= 104) {
-    static constexpr const char* RULES[] = {nullptr, "M3.2.0,M11.1.0", ",M3.5.0", ",M10.1.0,M4.1.0"};
     const uint8_t rule = doc["clockDstRule"].as<uint8_t>();
-    if (rule >= 1 && rule <= 3) {
+    if (rule >= 1 && rule < LEGACY_DST_RULE_COUNT) {
       const int legacyQ = static_cast<int>(clockUtcOffsetQ) - 48;
       const TimezoneInfo* table = timezones::table();
       for (size_t i = 0; i < timezones::count(); i++) {
-        if (table[i].stdOffsetQ == legacyQ && strstr(table[i].posixTz, RULES[rule]) != nullptr) {
+        if (table[i].stdOffsetQ == legacyQ && strstr(table[i].posixTz, LEGACY_DST_RULES[rule]) != nullptr) {
           clockTimezone = static_cast<uint8_t>(i);
           clockDst = CLOCK_DST_AUTO;
           needsResave = true;
