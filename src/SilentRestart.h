@@ -6,6 +6,10 @@
 // state rides along in the same flag so the reboot is invisible: the light
 // comes back exactly as it was, regardless of the Restore Light on Wake
 // preference.
+//
+// On FREEINK_CAP_TOUCH boards with a touch panel these do not reboot: WiFi and
+// SNTP are stopped in place and the call returns, so the caller's normal
+// navigation continues (see finishWifiSessionWithoutRestart() in main.cpp).
 
 void silentRestart();            // home screen
 void silentRestartToReader();    // currently-open EPUB (APP_STATE.openEpubPath)
