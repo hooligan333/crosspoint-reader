@@ -45,9 +45,8 @@ constexpr uint32_t DAYS_PER_YEAR = 365;
  *
  * Insertion rather than std::sort: the list is capped at MAX_DECKS and the
  * introsort instantiation for vector<string> costs several hundred bytes of
- * IROM on a budget measured in bytes (platformio.ini, flashcards block). At 64
- * items the quadratic term is invisible next to the directory scan that
- * produced them.
+ * code for nothing. At 64 items the quadratic term is invisible next to the
+ * directory scan that produced them.
  */
 void sortLeaves(std::vector<std::string>& leaves) {
   for (size_t i = 1; i < leaves.size(); i++) {
@@ -1398,10 +1397,10 @@ void FlashcardStudyActivity::renderPicker() const {
  *
  * `windowOffset >= 0` draws deck leaves from that offset; -1 draws the mode
  * rows. Sharing it is not only tidiness: every distinct lambda handed to
- * drawButtonMenu instantiates its own std::function invoker, and this screen's
- * IROM budget is measured in bytes (platformio.ini, flashcards block). Rows
- * carry no icon, so the icon callback is a null std::function rather than a
- * second invoker (the themes that draw icons null-check it).
+ * drawButtonMenu instantiates its own std::function invoker, which is code
+ * size spent for nothing. Rows carry no icon, so the icon callback is a null
+ * std::function rather than a second invoker (the themes that draw icons
+ * null-check it).
  *
  * The deck list is handed to the theme one PAGE at a time, so RoundedRaff's
  * scrollbar -- which windows the rows it is given a second time -- describes the
