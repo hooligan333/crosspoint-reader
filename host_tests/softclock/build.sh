@@ -68,6 +68,7 @@ FILES = [
     "src/network/HttpDownloader.cpp",
     "src/activities/network/RssSyncActivity.cpp",
     "src/activities/network/FlashcardSyncActivity.cpp",
+    "src/activities/network/WifiSelectionActivity.cpp",
     "src/activities/settings/StatusBarSettingsActivity.cpp",
     "src/activities/settings/StatusBarSettingsActivity.h",
 ]
@@ -80,14 +81,15 @@ RESIDUE = re.compile(
     r"|_lastPersistMs|halClock\.tick"
 )
 
-def resolve(lines):
-    """Drop the CROSSPOINT_SOFT_CLOCK branches, leaving other conditionals alone."""
+def resolve(lines, defined=False):
+    """Resolve the CROSSPOINT_SOFT_CLOCK branches (as undefined unless
+    `defined`), leaving other conditionals alone."""
     out, stack = [], []
     for line in lines:
         s = line.strip()
         m = re.match(r"#(ifdef|ifndef)\s+(\w+)\s*$", s)
         if m and m.group(2) == MACRO:
-            stack.append(("ours", m.group(1) == "ifndef"))
+            stack.append(("ours", m.group(1) == ("ifdef" if defined else "ifndef")))
             continue
         if s.startswith("#if"):
             stack.append(("theirs", None))
@@ -111,12 +113,14 @@ def strip_comments(text):
 failed = False
 
 # The C3a review removed the broad WifiSelectionActivity auto-sync hook (M3/S1):
-# font, OTA and OPDS flows must not pay for the clock, and the file is back at
-# its pre-flag state. Assert it stays that way.
+# font, OTA and OPDS flows must not pay for the clock. Upstream's own RTC hook
+# in that file is compiled out under the flag, so with it defined no NTP call
+# may remain there. (It is also in FILES below: flag-off, the file is upstream's.)
 with open(f"{ROOT}/src/activities/network/WifiSelectionActivity.cpp") as fh:
-    if MACRO in fh.read():
-        print("FAIL: WifiSelectionActivity.cpp mentions CROSSPOINT_SOFT_CLOCK; the hook was removed on purpose")
-        failed = True
+    body = resolve(fh.read().split("\n"), defined=True)
+if any("syncFromNTP" in line or "maybeOpportunisticSync" in line for line in strip_comments("\n".join(body))):
+    print("FAIL: WifiSelectionActivity.cpp syncs the clock on soft-clock builds; the hook was removed on purpose")
+    failed = True
 
 for rel in FILES:
     with open(f"{ROOT}/{rel}") as fh:

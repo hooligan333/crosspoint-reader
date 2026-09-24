@@ -517,15 +517,23 @@ void WifiSelectionActivity::checkConnectionStatus() {
             WiFi.RSSI());
 #endif
 
+#ifndef CROSSPOINT_SOFT_CLOCK
     // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
     // drifts ~2 ppm so one sync is enough; users can force a re-sync from
     // Settings > System > Clock > Sync clock now.
+    //
+    // Not on the soft clock: there it would block every connection for up to
+    // 5 s while NTP keeps failing (an offline LAN never sets the synced flag),
+    // and that clock is fixed by the RSS / deck sync flows (HTTP Date header,
+    // then a backed-off NTP fallback) and the manual Sync-now row instead.
+    // FLASHCARD_SPEC §7b.2: font/OTA/OPDS connections must not pay for it.
     if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();
       }
     }
+#endif
 
     // Save this as the last connected network - SD card operations need lock as
     // we use SPI for both
