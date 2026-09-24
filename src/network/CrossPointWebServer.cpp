@@ -56,6 +56,7 @@
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
 #include "util/TaskWatchdog.h"
+#include "util/Timezones.h"
 
 static void sendStaticContent(WebServer* server, const char* data, size_t len, const char* etag,
                               const char* contentType);
@@ -1469,6 +1470,11 @@ void CrossPointWebServer::handlePostSettings() {
   DictionaryRegistry::discover(dictionaries);
   const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
   int applied = 0;
+  // Everything timezones::activeIndex()/applyToClock() read, to push a zone
+  // change into the clock below.
+  const uint8_t prevTimezone = SETTINGS.clockTimezone;
+  const uint8_t prevDst = SETTINGS.clockDst;
+  const uint8_t prevUtcOffsetQ = SETTINGS.clockUtcOffsetQ;
 
   for (const auto& s : settings) {
     if (!s.key || s.webHidden) continue;
@@ -1525,6 +1531,12 @@ void CrossPointWebServer::handlePostSettings() {
   }
 
   SETTINGS.saveToFile();
+  // The device-side pickers apply a zone change on the spot; without this a
+  // web change only reached the clock at the next boot's applyToClock().
+  if (SETTINGS.clockTimezone != prevTimezone || SETTINGS.clockDst != prevDst ||
+      SETTINGS.clockUtcOffsetQ != prevUtcOffsetQ) {
+    timezones::applyToClock();
+  }
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);
   server->send(200, "text/plain", String("Applied ") + String(applied) + " setting(s)");
