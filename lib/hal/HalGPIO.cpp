@@ -6,13 +6,11 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <XteinkDetect.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
+#include <hal/gpio_ll.h>
 
 #include <atomic>
-
-#ifdef CROSSPOINT_TOUCH_INT_WAKE
-#include <driver/gpio.h>
-#endif
 
 // Global HalGPIO instance
 HalGPIO gpio;
@@ -117,9 +115,42 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
   return HalGPIO::DeviceType::X4;
 }
 
+// ESP.restart() and panic restarts are CPU-only resets: they do not reset the
+// GPIO block, so every pin's interrupt enable, interrupt type and light-sleep
+// wake bit survive from the previous life. A level interrupt left armed there
+// (the GT911 touch INT, held low while a report is latched) is already pending
+// when the first attach of this boot installs the GPIO ISR service; with no
+// per-pin handler registered yet, the service's dispatch loop clears and
+// re-latches that level forever and the interrupt watchdog panics — into
+// another CPU-only reset with the same GPIO state, i.e. a boot loop.
+//
+// Scrub ONLY the interrupt/wake configuration of every valid pin, before
+// anything in this boot can attach an interrupt. Direction, pulls, IO-MUX and
+// GPIO-matrix routing are left alone, so SD, display, flash/PSRAM and strapping
+// pins are unaffected. The wake bit is cleared with the LL call rather than
+// gpio_wakeup_disable(): the driver call also flips the pin's sleep-select
+// (C3, CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND) and RTC-IO wake config, which
+// are pin-behaviour changes this scrub must not make. Runs once per boot.
+void clearStaleGpioInterrupts() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  for (int pin = 0; pin < GPIO_NUM_MAX; ++pin) {
+    if (!GPIO_IS_VALID_GPIO(pin)) continue;
+    const auto num = static_cast<gpio_num_t>(pin);
+    gpio_intr_disable(num);
+    gpio_set_intr_type(num, GPIO_INTR_DISABLE);
+    gpio_ll_wakeup_disable(&GPIO, num);
+  }
+}
+
 }  // namespace
 
 void HalGPIO::begin() {
+  // First thing, before the touch probe or any display wait (EpdBus attaches a
+  // BUSY interrupt on hosts without a busy-wait slice hook) can install the
+  // GPIO ISR service against stale state from before a soft restart.
+  clearStaleGpioInterrupts();
 #if FREEINK_MCU_C3
   _deviceType = detectDeviceTypeWithFingerprint();
   BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
@@ -397,6 +428,7 @@ bool wakePinAsserted(const WakePin& p) { return digitalRead(p.pin) == (p.activeL
 }  // namespace
 
 void HalGPIO::beginInputWake() {
+  clearStaleGpioInterrupts();  // no-op after begin(); guards a caller that skips it
   wakePinCount = 0;
   wakePinOverflow = false;
   wakeUsable = false;
