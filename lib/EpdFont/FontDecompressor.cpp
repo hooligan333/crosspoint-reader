@@ -104,9 +104,10 @@ void FontDecompressor::freeResidentGroups() {
 
 void FontDecompressor::clearCache() {
   // Frees exactly what it always has: the per-page slots and the hot group, both
-  // internal-heap. With CROSSPOINT_RESIDENT_FONT_GROUPS the resident group cache
-  // deliberately SURVIVES this call and is released only in deinit(). clearCache()
-  // is what FontCacheManager::releaseSdFontCaches() reaches for on heap-critical
+  // fiFontMalloc'd (PSRAM when the board has it, internal heap otherwise). With
+  // CROSSPOINT_RESIDENT_FONT_GROUPS the resident group cache deliberately
+  // SURVIVES this call and is released only in deinit(). clearCache() is what
+  // FontCacheManager::releaseSdFontCaches() reaches for on heap-critical
   // transitions (#3035 WiFi + web server, #3093 transparent sleep overlay decode),
   // and those exist to reclaim INTERNAL heap — the resident payloads are PSRAM-only
   // by construction, so dropping them would return zero bytes to the heap under
