@@ -497,31 +497,42 @@ void EpubReaderActivity::openDictionaryWordSelect() {
 
 void EpubReaderActivity::startClipSelection(const int initialX, const int initialY,
                                             const ClipSelectionActivity::Mode mode) {
-  if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
-
-  const int pageNumber = section->currentPage;
-  const uint16_t pageCount = section->pageCount;
+  int pageNumber = 0;
+  uint16_t pageCount = 0;
   const uint16_t spineIndex = static_cast<uint16_t>(currentSpineIndex);
   std::vector<std::unique_ptr<Page>> pages;
-  pages.reserve(CLIP_SELECTION_PAGE_WINDOW);
-  for (int pageOffset = 0; pageOffset < CLIP_SELECTION_PAGE_WINDOW && pageNumber + pageOffset < pageCount;
-       ++pageOffset) {
-    auto page = section->loadPage(pageNumber + pageOffset);
-    if (!page) break;
-    if (pageOffset == 0 && initialX >= 0 && CLIPPINGS.hasClippings()) {
-      RenderLock lock;
-      const int clippingIndex = clippingAtPoint(*page, initialX, initialY);
-      if (clippingIndex >= 0) {
-        const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
-        if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
-        clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
-        showClippingMessage = true;
-        clippingMessageTime = millis();
-        requestUpdate();
-        return;
+  {
+    // The section's file handle is shared with the background build task, which
+    // writes it under this lock; an unlocked read here can interleave with a
+    // build tick's seek/write on the same handle. Reached from loop() and result
+    // handlers only, neither of which holds the lock. Released before the push:
+    // ActivityManager takes its own lock to switch activities. (Fork r8: this is
+    // where the dictionary word-select reads its page since upstream #3932; the
+    // clipping hit test that used to take its own lock runs under this one.)
+    RenderLock lock;
+    if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
+
+    pageNumber = section->currentPage;
+    pageCount = section->pageCount;
+    pages.reserve(CLIP_SELECTION_PAGE_WINDOW);
+    for (int pageOffset = 0; pageOffset < CLIP_SELECTION_PAGE_WINDOW && pageNumber + pageOffset < pageCount;
+         ++pageOffset) {
+      auto page = section->loadPage(pageNumber + pageOffset);
+      if (!page) break;
+      if (pageOffset == 0 && initialX >= 0 && CLIPPINGS.hasClippings()) {
+        const int clippingIndex = clippingAtPoint(*page, initialX, initialY);
+        if (clippingIndex >= 0) {
+          const bool removed = CLIPPINGS.removeClippingAt(static_cast<size_t>(clippingIndex));
+          if (!removed) LOG_ERR("CLIP", "Failed to delete highlighted clipping %d", clippingIndex);
+          clippingMessage = removed ? StrId::STR_CLIPPING_REMOVED : StrId::STR_CLIPPING_DELETE_FAILED;
+          showClippingMessage = true;
+          clippingMessageTime = millis();
+          requestUpdate();
+          return;
+        }
       }
+      pages.push_back(std::move(page));
     }
-    pages.push_back(std::move(page));
   }
   if (pages.empty()) {
     LOG_ERR("CLIP", "Failed to load page %d for clipping selection", pageNumber);
@@ -565,9 +576,21 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     const auto& clipping = std::get<ClippingResult>(result.data);
     const uint16_t startPage = static_cast<uint16_t>(pageNumber + clipping.startPageOffset);
     const uint16_t endPage = static_cast<uint16_t>(pageNumber + clipping.endPageOffset);
-    if (section && currentSpineIndex == spineIndex && endPage < section->pageCount) {
-      section->currentPage = endPage;
-      currentPageVisibleOffset = section->getVisibleTextOffsetForPage(endPage);
+    std::unique_ptr<Page> lookupPage;
+    uint16_t paragraphIndex = UINT16_MAX;
+    {
+      // Section reads under the lock the background build task writes it under
+      // (see startClipSelection()); a result handler runs with it released.
+      RenderLock lock;
+      if (section && currentSpineIndex == spineIndex && endPage < section->pageCount) {
+        section->currentPage = endPage;
+        currentPageVisibleOffset = section->getVisibleTextOffsetForPage(endPage);
+      }
+      if (clipping.action == ClippingResult::Action::Lookup) {
+        if (section) lookupPage = section->loadPage(section->currentPage);
+      } else if (clipping.action != ClippingResult::Action::Bookmark && section) {
+        paragraphIndex = section->getParagraphIndexForPage(startPage).value_or(UINT16_MAX);
+      }
     }
     if (clipping.action == ClippingResult::Action::Bookmark) {
       addBookmark();
@@ -577,7 +600,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       return;
     }
     if (clipping.action == ClippingResult::Action::Lookup) {
-      auto page = section ? section->loadPage(section->currentPage) : nullptr;
+      auto page = std::move(lookupPage);
       if (!page) {
         LOG_ERR("CLIP", "Failed to load lookup page");
         requestUpdate();
@@ -598,8 +621,6 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
       });
       return;
     }
-    const uint16_t paragraphIndex =
-        section ? section->getParagraphIndexForPage(startPage).value_or(UINT16_MAX) : UINT16_MAX;
     const auto addResult = CLIPPINGS.addClipping(
         spineIndex, startPage, endPage, pageCount, clipping.startWordIndex, clipping.endWordIndex, clipping.wordCount,
         chapterTitle.c_str(), paragraphIndex, clipping.text, layoutSignature, clipping.startOffset, clipping.endOffset);
@@ -624,7 +645,14 @@ void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
     return;
   }
 
-  auto page = section->loadPage(section->currentPage);
+  std::unique_ptr<Page> page;
+  {
+    // Same shared-handle race as openDictionaryWordSelect(): read the page under
+    // the lock the background build task writes the section file under.
+    RenderLock lock;
+    if (!section) return;
+    page = section->loadPage(section->currentPage);
+  }
   if (!page) return;
 
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -2206,13 +2234,20 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
-      if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
-        std::string fullText = section->getTextFromSectionFile();
-        if (!fullText.empty()) {
-          startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
-                                 [this](const ActivityResult&) { openReaderMenu(); });
-          break;
+      std::string fullText;
+      {
+        // getTextFromSectionFile() reads the section file through the handle the
+        // background build task writes under this lock (see
+        // openDictionaryWordSelect()). Released before the push below.
+        RenderLock lock;
+        if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
+          fullText = section->getTextFromSectionFile();
         }
+      }
+      if (!fullText.empty()) {
+        startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
+                               [this](const ActivityResult&) { openReaderMenu(); });
+        break;
       }
       requestUpdate();
       break;
