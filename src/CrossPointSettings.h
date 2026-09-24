@@ -257,7 +257,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
-  // timezones::activeIndex() when clockTimezone is unset.
+  // timezones::activeIndex() when clockTimezone is unset. While a zone is
+  // chosen, toJson() writes it from that zone for fork r3-r4 images.
   uint8_t clockUtcOffsetQ = 48;
   // Clock display format: 0 = 24-hour, 1 = 12-hour
   uint8_t clockFormat = 0;
