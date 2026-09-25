@@ -108,6 +108,18 @@ class EpubReaderActivity final : public ReaderActivity {
   // UsageLog's SECTION_* codes -- where the section came from, and when it did
   // not come from the prebuild, why not.
   void ulogNoteSectionStart(bool isForward, UsageLog::SectionSource source);
+  // PT page-turn timing (see UsageLog.h). The render task publishes, per page
+  // render, when it started the first panel refresh and how long prewarm + B/W
+  // render took; displayStart is stored last with release so a loop-task
+  // acquire load that sees it also sees its render figure. The loop task arms
+  // a pending PT at each manual single turn and answers it on the same
+  // lastRenderCompleteMs edge the _RDY hook uses.
+  std::atomic<uint32_t> ulogDisplayStartMs{0};
+  std::atomic<uint32_t> ulogRenderCpuMs{0};
+  uint32_t ulogTurnStartMs = 0;
+  uint32_t ulogTurnRenderMsAtArm = 0;
+  uint8_t ulogTurnPending = 0;  // 0 none, else PT aux (1/2, +10 crossed)
+  void ulogArmTurnTiming(bool isForward);
 #endif
 #ifdef CROSSPOINT_PAGE_CACHE
   // One-entry deserialized-page cache, filled by the idle prewarm above. That
