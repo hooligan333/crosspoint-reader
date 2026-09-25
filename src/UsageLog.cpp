@@ -39,7 +39,7 @@ constexpr char CSV_HEADER[] = "datetime,millis,event,pct,mv,chg,aux,detail\n";
 // stack buffer in writeRow().
 const char* const EVENT_NAMES[] = {"BOOT",     "SLEEP",    "PAGE",   "FL_ON",  "FL_OFF",  "NIGHT_ON", "NIGHT_OFF",
                                    "WIFI_ON",  "WIFI_OFF", "DROP",   "CHG_ON", "CHG_OFF", "FR",       "BOOK_OPEN",
-                                   "BOOK_RDY", "CH_START", "CH_RDY", "LS",     "LSN"};
+                                   "BOOK_RDY", "CH_START", "CH_RDY", "LS",     "LSN",     "PT"};
 
 // Battery access mirrors HalPowerManager/HalGPIO: one function-local static
 // monitor for the process, constructed on first use so BoardConfig::ACTIVE is
@@ -146,6 +146,13 @@ void UsageLog::noteSectionStart(const bool isForward, const SectionSource source
 }
 
 void UsageLog::noteSectionReady(const bool isForward) { record(EV_CH_RDY, isForward ? 1 : 2); }
+
+void UsageLog::notePageTiming(const bool isForward, const bool crossedSection, const uint32_t latencyMs,
+                              const uint32_t renderMs) {
+  const uint32_t lat = latencyMs > 0xFFFFu ? 0xFFFFu : latencyMs;
+  const uint32_t ren = renderMs > 0xFFFFu ? 0xFFFFu : renderMs;
+  record(EV_PT, static_cast<uint8_t>((isForward ? 1 : 2) + (crossedSection ? 10 : 0)), (lat << 16) | ren);
+}
 
 void UsageLog::noteSleep() {
   if (!started) return;
@@ -313,8 +320,8 @@ bool UsageLog::writeRow(HalFile& file, const Entry& e, const uint8_t event, cons
                         const uint32_t flushWall, const uint32_t flushMs) {
   // EVENT_NAMES is indexed by the raw event byte with no bounds check, so a new
   // enumerator that never got a name would print garbage (or fault). Tie the
-  // two together at compile time; EV_LSN must stay the last enumerator.
-  static_assert(sizeof(EVENT_NAMES) / sizeof(EVENT_NAMES[0]) == EV_LSN + 1,
+  // two together at compile time; EV_PT must stay the last enumerator.
+  static_assert(sizeof(EVENT_NAMES) / sizeof(EVENT_NAMES[0]) == EV_PT + 1,
                 "EVENT_NAMES needs exactly one entry per UsageLog::Event");
 
   char stamp[20] = "";
