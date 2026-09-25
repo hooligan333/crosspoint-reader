@@ -1265,6 +1265,21 @@ void EpubReaderActivity::loop() {
       ulogPendingReady = 0;
     }
   }
+  if (ulogTurnPending != 0) {
+    if (lastRenderCompleteMs.load(std::memory_order_relaxed) != ulogTurnRenderMsAtArm) {
+      const uint32_t displayStart = ulogDisplayStartMs.load(std::memory_order_acquire);
+      const uint32_t renderMs = ulogRenderCpuMs.load(std::memory_order_relaxed);
+      // A render that painted no page (error screen) leaves displayStart from
+      // an earlier page, before this turn: no row rather than a wrong one.
+      if (static_cast<int32_t>(displayStart - ulogTurnStartMs) >= 0) {
+        usageLog.notePageTiming(ulogTurnPending % 10 == 1, ulogTurnPending > 10, displayStart - ulogTurnStartMs,
+                                renderMs);
+      }
+      ulogTurnPending = 0;
+    } else if (millis() - ulogTurnStartMs > ULOG_READY_DEADLINE_MS) {
+      ulogTurnPending = 0;
+    }
+  }
 #endif
 
   // Someone else turned the screen while this reader was stacked (the control
@@ -1619,6 +1634,7 @@ void EpubReaderActivity::loop() {
     if (pageTurn(forward)) {
 #ifdef CROSSPOINT_USAGE_LOG
       usageLog.notePageTurn(forward);
+      ulogArmTurnTiming(forward);
 #endif
     }
     requestUpdate();
@@ -1679,6 +1695,7 @@ void EpubReaderActivity::loop() {
   if (pageTurn(forward)) {
 #ifdef CROSSPOINT_USAGE_LOG
     usageLog.notePageTurn(forward);
+    ulogArmTurnTiming(forward);
 #endif
   }
   requestUpdate();
@@ -2214,6 +2231,18 @@ void EpubReaderActivity::ulogNoteSectionStart(const bool isForward, const UsageL
   ulogRenderMsAtLoad = lastRenderCompleteMs.load(std::memory_order_relaxed);
   ulogPendingReady = isForward ? 2 : 3;
   ulogPendingStartMs = millis();
+}
+
+void EpubReaderActivity::ulogArmTurnTiming(const bool isForward) {
+  // Called right after pageTurn() returned true, so "turn accepted" is stamped
+  // here; pageTurn() itself is microseconds. A CH_START armed by that same
+  // pageTurn() call is at most a tick old -- a stale one left by an earlier
+  // (e.g. automatic) turn is at least one render old -- which is how a
+  // boundary turn is told apart without touching pageTurn().
+  ulogTurnStartMs = millis();
+  const bool crossed = ulogPendingReady >= 2 && ulogTurnStartMs - ulogPendingStartMs <= 2;
+  ulogTurnRenderMsAtArm = lastRenderCompleteMs.load(std::memory_order_relaxed);
+  ulogTurnPending = static_cast<uint8_t>((isForward ? 1 : 2) + (crossed ? 10 : 0));
 }
 #endif
 
@@ -2841,6 +2870,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
   const auto tBwRender = millis();
+#ifdef CROSSPOINT_USAGE_LOG
+  // PT row inputs (see ulogDisplayStartMs in the header): every branch below
+  // starts its first panel refresh from here.
+  ulogRenderCpuMs.store(tBwRender - t0, std::memory_order_relaxed);
+  ulogDisplayStartMs.store(tBwRender, std::memory_order_release);
+#endif
 
   if (absoluteImageGrayscale) {
     // Same night-mode demotion as the other base paths below: a clean refresh

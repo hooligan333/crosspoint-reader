@@ -109,6 +109,21 @@
 //              second row rather than another field on LS because the count
 //              does not fit in the one-byte aux; detail on LS is already the
 //              slept milliseconds. Same build gating as LS.
+//   PT         page-turn timing for a single manual EPUB page turn (the ones
+//              that write PAGE aux 1/2), written once the turn's page is on
+//              the panel. aux = 1 forward / 2 backward, +10 when the turn
+//              crossed a section boundary (11/12; a CH_START row precedes it).
+//              detail packs two millisecond counts, each capped at 65535:
+//                detail >> 16    = latency: turn accepted on the loop task ->
+//                                  the render task starting the first panel
+//                                  refresh (section/page load, font prewarm
+//                                  and the B/W page render all included)
+//                detail & 0xFFFF = render: font prewarm + B/W page render only
+//                                  (renderContents' t0 -> tBwRender, pure CPU
+//                                  and flash; no SD page load, no waveform)
+//              Waveform time is in neither. No row when the turn's render
+//              painted no page (error screens) or nothing painted within the
+//              90 s _RDY deadline.
 //   DROP       the ring buffer overflowed while the card was unwritable,
 //              aux = entries lost (see the flush notes below)
 //
@@ -267,6 +282,10 @@ class UsageLog {
   // The first page of that new section is on the panel.
   void noteSectionReady(bool isForward);
 
+  // Page-turn timing for one manual EPUB turn; see PT at the top. Both
+  // durations are clamped to 16 bits here.
+  void notePageTiming(bool isForward, bool crossedSection, uint32_t latencyMs, uint32_t renderMs);
+
   // Immediately before deep sleep and BEFORE Storage.prepareForDeepSleep():
   // records LS and LSN (pmstats builds), then SLEEP, and flushes synchronously,
   // because there is no later tick().
@@ -293,6 +312,7 @@ class UsageLog {
     EV_CH_RDY,
     EV_LS,
     EV_LSN,
+    EV_PT,
   };
 
   // 16 bytes each; 32 of them is one flush's worth of a busy reading minute.
