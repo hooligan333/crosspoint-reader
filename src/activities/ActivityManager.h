@@ -117,6 +117,9 @@ class ActivityManager {
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
   void goToUsbDrive();
+#ifdef CROSSPOINT_PC_LINK
+  void goToPcLink();
+#endif
   void goToSettings();
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
