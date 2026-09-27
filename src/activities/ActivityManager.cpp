@@ -27,6 +27,9 @@
 #include "network/UsbDriveActivity.h"
 #include "plugins/PluginCatalogActivity.h"
 #include "util/HomeButtonInput.h"
+#ifdef CROSSPOINT_PC_LINK
+#include "network/PcLinkActivity.h"
+#endif
 #ifdef CROSSPOINT_RSS_SYNC
 #include "network/RssSyncActivity.h"
 #endif
@@ -362,6 +365,17 @@ void ActivityManager::goToUsbDrive() {
   LOG_ERR("ACT", "USB Drive requested in a build without USB Drive capability");
 #endif
 }
+
+#ifdef CROSSPOINT_PC_LINK
+void ActivityManager::goToPcLink() {
+  auto activity = makeUniqueNoThrow<PcLinkActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: PC Link activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+#endif
 
 void ActivityManager::goToSettings(const SettingsSection openSection) {
   replaceActivity(std::make_unique<SettingsListActivity>(renderer, mappedInput, openSection));
