@@ -17,6 +17,9 @@ constexpr StrId menuItems[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
 #if FREEINK_CAP_USB_MSC
     StrId::STR_USB_DRIVE,
 #endif
+#ifdef CROSSPOINT_PC_LINK
+    StrId::STR_PC_LINK,
+#endif
 };
 constexpr StrId menuDescs[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
     StrId::STR_JOIN_DESC,
@@ -25,6 +28,9 @@ constexpr StrId menuDescs[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
 #if FREEINK_CAP_USB_MSC
     StrId::STR_USB_DRIVE_DESC,
 #endif
+#ifdef CROSSPOINT_PC_LINK
+    StrId::STR_PC_LINK_DESC,
+#endif
 };
 constexpr UIIcon menuIcons[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
     UIIcon::Wifi,
@@ -32,6 +38,21 @@ constexpr UIIcon menuIcons[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
     UIIcon::Hotspot,
 #if FREEINK_CAP_USB_MSC
     UIIcon::Usb,
+#endif
+#ifdef CROSSPOINT_PC_LINK
+    UIIcon::Usb,
+#endif
+};
+// Row -> mode. Rows are feature-gated, so a row index is not a NetworkMode.
+constexpr NetworkMode menuModes[NetworkModeSelectionActivity::MENU_ITEM_COUNT] = {
+    NetworkMode::JOIN_NETWORK,
+    NetworkMode::CONNECT_CALIBRE,
+    NetworkMode::CREATE_HOTSPOT,
+#if FREEINK_CAP_USB_MSC
+    NetworkMode::USB_DRIVE,
+#endif
+#ifdef CROSSPOINT_PC_LINK
+    NetworkMode::PC_LINK,
 #endif
 };
 }  // namespace
@@ -59,7 +80,8 @@ void NetworkModeSelectionActivity::activateIndex(const int index) {
   app.clearTapFlash();
   nav.selected = index;
 
-  onModeSelected(static_cast<NetworkMode>(index));
+  if (index < 0 || index >= MENU_ITEM_COUNT) return;
+  onModeSelected(menuModes[index]);
 }
 
 void NetworkModeSelectionActivity::buildScreen(UiScreen& screen) {
