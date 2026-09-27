@@ -27,6 +27,9 @@ constexpr ModeRow MODE_ROWS[] = {
 #if FREEINK_CAP_USB_MSC
     {NetworkMode::USB_DRIVE, StrId::STR_USB_DRIVE, StrId::STR_USB_DRIVE_DESC, UIIcon::Usb},
 #endif
+#ifdef CROSSPOINT_PC_LINK
+    {NetworkMode::PC_LINK, StrId::STR_PC_LINK, StrId::STR_PC_LINK_DESC, UIIcon::Usb},
+#endif
 };
 static_assert(sizeof(MODE_ROWS) / sizeof(MODE_ROWS[0]) == NetworkModeSelectionActivity::MAX_ITEM_COUNT);
 }  // namespace
@@ -60,6 +63,7 @@ void NetworkModeSelectionActivity::activateIndex(const int index) {
   app.clearTapFlash();
   nav.selected = index;
 
+  if (index < 0 || index >= rowCount_) return;
   onModeSelected(rowModes_[index]);
 }
 

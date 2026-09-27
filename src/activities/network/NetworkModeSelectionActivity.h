@@ -4,7 +4,7 @@
 
 #include "activities/UiListActivity.h"
 
-enum class NetworkMode { JOIN_NETWORK, CONNECT_CALIBRE, CREATE_HOTSPOT, USB_DRIVE, OPDS_BROWSER };
+enum class NetworkMode { JOIN_NETWORK, CONNECT_CALIBRE, CREATE_HOTSPOT, USB_DRIVE, OPDS_BROWSER, PC_LINK };
 
 /**
  * NetworkModeSelectionActivity presents the user with a choice:
@@ -13,7 +13,7 @@ enum class NetworkMode { JOIN_NETWORK, CONNECT_CALIBRE, CREATE_HOTSPOT, USB_DRIV
  * - "Create Hotspot" - Create an Access Point that others can connect to (AP mode)
  * - "OPDS Browser" - Browse OPDS catalogs, or add a server when none is configured.
  *   Hidden while Home shows it (plugins off and a server configured).
- * - "USB Drive" - Expose the SD card over USB (boards with USB mass storage)
+ * - "USB Drive" / "PC Link" - the USB rows, each present only in builds with that feature
  *
  * The onModeSelected callback is called with the user's choice.
  * The onCancel callback is called if the user presses back.
@@ -25,10 +25,16 @@ class NetworkModeSelectionActivity final : public UiListActivity {
   explicit NetworkModeSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
 
 #if FREEINK_CAP_USB_MSC
-  static constexpr int MAX_ITEM_COUNT = 5;
+  static constexpr int USB_DRIVE_ITEMS = 1;
 #else
-  static constexpr int MAX_ITEM_COUNT = 4;
+  static constexpr int USB_DRIVE_ITEMS = 0;
 #endif
+#ifdef CROSSPOINT_PC_LINK
+  static constexpr int PC_LINK_ITEMS = 1;
+#else
+  static constexpr int PC_LINK_ITEMS = 0;
+#endif
+  static constexpr int MAX_ITEM_COUNT = 4 + USB_DRIVE_ITEMS + PC_LINK_ITEMS;
 
   void onModeSelected(NetworkMode mode);
   void onCancel();
