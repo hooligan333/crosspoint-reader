@@ -121,6 +121,9 @@ class ActivityManager {
   void goToFileTransfer();
   void goToJoinNetwork();  // File Transfer straight into Join Network (post heap-defrag reboot)
   void goToUsbDrive();
+#ifdef CROSSPOINT_PC_LINK
+  void goToPcLink();
+#endif
   // openSection jumps straight into one group (End = the section list).
   void goToSettings(SettingsSection openSection = SettingsSection::End);
   void goToFileBrowser(std::string path = {});
