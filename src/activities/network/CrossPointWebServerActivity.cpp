@@ -130,12 +130,24 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   } else if (mode == NetworkMode::USB_DRIVE) {
     modeName = "USB Drive";
 #endif
+#ifdef CROSSPOINT_PC_LINK
+  } else if (mode == NetworkMode::PC_LINK) {
+    modeName = "PC Link";
+#endif
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
 
 #if FREEINK_CAP_USB_MSC
   if (mode == NetworkMode::USB_DRIVE) {
     activityManager.goToUsbDrive();
+    return;
+  }
+#endif
+#ifdef CROSSPOINT_PC_LINK
+  // USB, not WiFi: leave before any radio work (WiFi was never started, so
+  // this activity's onExit does not reboot).
+  if (mode == NetworkMode::PC_LINK) {
+    activityManager.goToPcLink();
     return;
   }
 #endif
