@@ -383,21 +383,61 @@ void PcLinkActivity::forwardInput() {
     if (!touchDown && mappedInput.wasScreenTouchDown(x, y)) {
       touchDown = true;
       logicalToPhysical(renderer.getOrientation(), x, y, px, py);
-      pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, 1, px, py, now);
+      pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, pclink::INPUT_STATE_DOWN, px, py, now);
       send(MsgType::Input, payload, sizeof(payload));
     }
     if (mappedInput.wasScreenTapped(x, y)) {
       touchDown = false;
       logicalToPhysical(renderer.getOrientation(), x, y, px, py);
-      pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, 0, px, py, now);
+      pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, pclink::INPUT_STATE_UP, px, py, now);
       send(MsgType::Input, payload, sizeof(payload));
     } else if (mappedInput.wasScreenTouchReleased()) {
-      // Swipes and drags end here, without a tap position.
+      // Swipes and drags end here, without a tap position. The coordless
+      // release only closes a touch-down the host was sent; a quick flick
+      // never sent one, so it gets no orphan release (its SWIPE says it all).
+      if (touchDown) {
+        pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, pclink::INPUT_STATE_UP, pclink::COORD_NONE,
+                           pclink::COORD_NONE, now);
+        send(MsgType::Input, payload, sizeof(payload));
+      }
       touchDown = false;
-      pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, 0, 0, pclink::COORD_NONE, pclink::COORD_NONE, now);
-      send(MsgType::Input, payload, sizeof(payload));
+      // After the release, with the same t_ms: a host that predates SWIPE has
+      // already classified the release its own way and ignores this event.
+      forwardSwipe(now);
     }
   }
+}
+
+void PcLinkActivity::forwardSwipe(const uint32_t now) {
+  // The left-edge Back gesture already went out as the Back button.
+  if (mappedInput.wasBackGesture()) return;
+  float nxs = 0.0f;
+  float nys = 0.0f;
+  float nxe = 0.0f;
+  float nye = 0.0f;
+  // HalGPIO directly (as homeKeyHeld() does): MappedInputManager::wasSwipe()
+  // only yields the direction in the UI's logical frame, while the protocol
+  // speaks physical coords and wants the start point.
+  if (!gpio.wasSwipe(nxs, nys, nxe, nye)) return;
+  // Same native -> logical -> physical path as taps, so SWIPE and touch
+  // coordinates always share one frame.
+  int lx = 0;
+  int ly = 0;
+  uint16_t sx = pclink::COORD_NONE;
+  uint16_t sy = pclink::COORD_NONE;
+  uint16_t ex = pclink::COORD_NONE;
+  uint16_t ey = pclink::COORD_NONE;
+  const auto orientation = renderer.getOrientation();
+  renderer.tapToLogical(nxs, nys, lx, ly);
+  logicalToPhysical(orientation, lx, ly, sx, sy);
+  renderer.tapToLogical(nxe, nye, lx, ly);
+  logicalToPhysical(orientation, lx, ly, ex, ey);
+  if (ex == pclink::COORD_NONE || sx == pclink::COORD_NONE) return;  // off-panel: no trustworthy direction
+  const auto code = pclink::swipeCode(sx, sy, ex, ey);
+  uint8_t payload[12];
+  pclink::buildInput(payload, pclink::INPUT_SRC_TOUCH, static_cast<uint8_t>(code), pclink::INPUT_STATE_SWIPE, sx, sy,
+                     now);
+  send(MsgType::Input, payload, sizeof(payload));
 }
 
 bool PcLinkActivity::homeKeyHeld() const {
