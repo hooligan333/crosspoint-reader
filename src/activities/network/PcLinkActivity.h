@@ -40,6 +40,8 @@ class PcLinkActivity final : public Activity, private UiAppHost {
 
   static constexpr unsigned long HOST_WAIT_TIMEOUT_MS = 10UL * 60UL * 1000UL;
   static constexpr unsigned long EXIT_HOLD_MS = 1500;
+  // One hold timer per forwarded logical button, plus the Home key.
+  static constexpr uint8_t EXIT_HOLD_SLOTS = pclink::BUTTON_COUNT + 1;
   static constexpr unsigned long USB_GONE_MS = 5000;
   static constexpr unsigned long RX_BUDGET_MS = 30;
   static constexpr unsigned long TX_TIMEOUT_MS = 20;
@@ -56,6 +58,8 @@ class PcLinkActivity final : public Activity, private UiAppHost {
   void runDueRefresh();
   void executeRefresh(pclink::RefreshMode mode);
   void forwardInput();
+  bool exitHoldReached();
+  bool homeKeyHeld() const;
   void watchUsbPresence();
   void send(pclink::MsgType type, const uint8_t* payload, uint32_t len);
   void sendAck(uint16_t seq, pclink::Status status);
@@ -68,6 +72,7 @@ class PcLinkActivity final : public Activity, private UiAppHost {
   bool touchDown = false;  // INPUT touch-down already sent for this contact
   unsigned long waitStartedAt = 0;
   unsigned long usbGoneSince = 0;
+  unsigned long holdSince[EXIT_HOLD_SLOTS]{};  // millis() at press; 0 = not held
 
   // PSRAM staging, allocated on enter and freed on exit — never in the loop.
   HalMemory::PsramBuffer rxFrame;  // one whole frame: FrameParser's buffer
