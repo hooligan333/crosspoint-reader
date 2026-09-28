@@ -58,6 +58,7 @@ class PcLinkActivity final : public Activity, private UiAppHost {
   void runDueRefresh();
   void executeRefresh(pclink::RefreshMode mode);
   void forwardInput();
+  void forwardSwipe(uint32_t now);
   bool exitHoldReached();
   bool homeKeyHeld() const;
   void watchUsbPresence();
