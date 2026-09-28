@@ -94,6 +94,22 @@
 //                         button codes: 0 Back, 1 Confirm, 2 Left, 3 Right,
 //                         4 Up, 5 Down, 6 Power (logical, MappedInputManager).
 //                         Touch code 0 = contact.
+//                         state 2 = SWIPE (src touch only, additive: hosts
+//                         must ignore states they do not know). One event per
+//                         single-finger flick the SDK classifies as a swipe
+//                         (>= 60 native px within 700 ms), sent when the finger
+//                         lifts. code = direction of travel in PHYSICAL panel
+//                         coords (the frame x/y use): 0 Left (x decreasing),
+//                         1 Right, 2 Up (y decreasing), 3 Down; dominant axis
+//                         wins. x/y = the swipe's start point. The left-edge
+//                         Back gesture is NOT reported as a swipe: it stays the
+//                         Back button press+release. Quick flicks never send a
+//                         touch-down (that needs ~90 ms of dwell); if one was
+//                         sent, its coordless release (x/y 0xFFFF) comes first
+//                         and the SWIPE follows with the same t_ms, so a host
+//                         must treat that release + SWIPE as one gesture. A
+//                         coordless release is only sent to close a touch-down
+//                         (older firmware also sent it without one).
 //   0x85 PONG     len 8   u32 token, u32 rx_consumed
 //   0x86 ERR      len 4   u16 seq (0xFFFF = frame lost to CRC/header error),
 //                         u8 status code, u8 0
@@ -208,6 +224,13 @@ constexpr uint8_t INPUT_SRC_BUTTON = 0;
 constexpr uint8_t INPUT_SRC_TOUCH = 1;
 constexpr uint8_t INPUT_MASK_BUTTONS = 0x01;
 constexpr uint8_t INPUT_MASK_TOUCH = 0x02;
+// INPUT.state values.
+constexpr uint8_t INPUT_STATE_UP = 0;
+constexpr uint8_t INPUT_STATE_DOWN = 1;
+constexpr uint8_t INPUT_STATE_SWIPE = 2;  // src touch; code = SwipeCode
+
+// INPUT.code for state SWIPE: direction of travel in physical panel coords.
+enum class SwipeCode : uint8_t { Left = 0, Right = 1, Up = 2, Down = 3 };
 
 // Button codes carried in INPUT.code for src=button (logical buttons).
 enum class ButtonCode : uint8_t { Back = 0, Confirm = 1, Left = 2, Right = 3, Up = 4, Down = 5, Power = 6 };
@@ -471,6 +494,10 @@ size_t buildCaps(uint8_t* out, size_t cap, const WearConfig& cfg, uint32_t rxCon
 void buildAck(uint8_t* out8, uint16_t seq, Status status, uint32_t rxConsumed);
 void buildRefreshDone(uint8_t* out8, const RefreshPolicy::Action& a, uint32_t durationMs);
 void buildInput(uint8_t* out12, uint8_t src, uint8_t code, uint8_t state, uint16_t x, uint16_t y, uint32_t tMs);
+// SWIPE direction from physical start/end points: the dominant axis wins, a
+// tie goes horizontal (the SDK's fui::swipeDirection rule, applied in the
+// physical frame so code and x/y always agree whatever the UI orientation).
+SwipeCode swipeCode(int sx, int sy, int ex, int ey);
 
 }  // namespace pclink
 

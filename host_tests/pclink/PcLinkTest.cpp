@@ -733,6 +733,55 @@ void testPolicyScrub() {
   EXPECT(a.promoted);
 }
 
+void testSwipeInput() {
+  beginGroup("swipe input");
+  // Wire values are protocol: pclink.py hard-codes them.
+  EXPECT_EQ_U(INPUT_STATE_UP, 0);
+  EXPECT_EQ_U(INPUT_STATE_DOWN, 1);
+  EXPECT_EQ_U(INPUT_STATE_SWIPE, 2);
+  EXPECT_EQ_U(static_cast<uint8_t>(SwipeCode::Left), 0);
+  EXPECT_EQ_U(static_cast<uint8_t>(SwipeCode::Right), 1);
+  EXPECT_EQ_U(static_cast<uint8_t>(SwipeCode::Up), 2);
+  EXPECT_EQ_U(static_cast<uint8_t>(SwipeCode::Down), 3);
+  // Direction of travel in physical coords; dominant axis wins, ties horizontal.
+  EXPECT(swipeCode(600, 240, 200, 250) == SwipeCode::Left);
+  EXPECT(swipeCode(100, 240, 400, 200) == SwipeCode::Right);
+  EXPECT(swipeCode(400, 400, 420, 100) == SwipeCode::Up);
+  EXPECT(swipeCode(400, 50, 380, 300) == SwipeCode::Down);
+  EXPECT(swipeCode(0, 0, 100, 100) == SwipeCode::Right);
+  EXPECT(swipeCode(0, 0, -100, -100) == SwipeCode::Left);
+  EXPECT(swipeCode(799, 479, 0, 479) == SwipeCode::Left);
+  // Encode -> frame -> parse keeps every field (same 12-byte INPUT layout).
+  std::vector<uint8_t> swipe(12);
+  buildInput(swipe.data(), INPUT_SRC_TOUCH, static_cast<uint8_t>(SwipeCode::Up), INPUT_STATE_SWIPE, 640, 12,
+             0xFFFFFFF0U);
+  EXPECT(payloadLengthValid(MsgType::Input, static_cast<uint32_t>(swipe.size())));
+  std::vector<uint8_t> release(12);
+  buildInput(release.data(), INPUT_SRC_TOUCH, 0, INPUT_STATE_UP, COORD_NONE, COORD_NONE, 0xFFFFFFF0U);
+  std::vector<uint8_t> stream;
+  for (const auto& f : {frameBytes(MsgType::Input, 7, release), frameBytes(MsgType::Input, 8, swipe)}) {
+    stream.insert(stream.end(), f.begin(), f.end());
+  }
+  FrameParser hp(g_parseBuf.data(), g_parseBuf.size(), MAX_PAYLOAD, Direction::DeviceToHost);
+  const auto got = parseAll(hp, stream, 0);
+  EXPECT_EQ_U(got.size(), 2);
+  if (got.size() == 2) {
+    const auto& r = got[0].payload;
+    EXPECT(r[0] == INPUT_SRC_TOUCH && r[2] == INPUT_STATE_UP && rd16(&r[4]) == COORD_NONE && rd16(&r[6]) == COORD_NONE);
+    const auto& p = got[1].payload;
+    EXPECT(got[1].type == MsgType::Input && got[1].seq == 8);
+    EXPECT_EQ_U(p[0], INPUT_SRC_TOUCH);
+    EXPECT_EQ_U(p[1], static_cast<uint8_t>(SwipeCode::Up));
+    EXPECT_EQ_U(p[2], INPUT_STATE_SWIPE);
+    EXPECT_EQ_U(p[3], 0);
+    EXPECT_EQ_U(rd16(&p[4]), 640);
+    EXPECT_EQ_U(rd16(&p[6]), 12);
+    // The paired release and the SWIPE share t_ms: the host's dedupe key.
+    EXPECT_EQ_U(rd32(&p[8]), 0xFFFFFFF0U);
+    EXPECT_EQ_U(rd32(&r[8]), rd32(&p[8]));
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -749,6 +798,7 @@ int main() {
   testConfig();
   testPolicyGapAndCoalescing();
   testPolicyScrub();
+  testSwipeInput();
   printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

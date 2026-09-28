@@ -477,6 +477,15 @@ void buildInput(uint8_t* out12, const uint8_t src, const uint8_t code, const uin
   wr32(out12 + 8, tMs);
 }
 
+SwipeCode swipeCode(const int sx, const int sy, const int ex, const int ey) {
+  const int dx = ex - sx;
+  const int dy = ey - sy;
+  const int adx = dx < 0 ? -dx : dx;
+  const int ady = dy < 0 ? -dy : dy;
+  if (adx >= ady) return dx < 0 ? SwipeCode::Left : SwipeCode::Right;
+  return dy < 0 ? SwipeCode::Up : SwipeCode::Down;
+}
+
 }  // namespace pclink
 
 #endif  // CROSSPOINT_PC_LINK
