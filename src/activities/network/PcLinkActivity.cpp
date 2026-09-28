@@ -145,16 +145,20 @@ bool PcLinkActivity::growSerialRxQueue() {
 void PcLinkActivity::loop() {
   if (restartRequested) return;
 
-  // Exit: hold Back or Power in any state (their single presses are INPUT
-  // while connected); without a host, any Back/Power/Home press also exits.
-  if (mappedInput.wasLongPressed(MappedInputManager::Button::Back, EXIT_HOLD_MS) ||
-      mappedInput.wasLongPressed(MappedInputManager::Button::Power, EXIT_HOLD_MS)) {
+  // Exit: hold any button, or the Home key, for EXIT_HOLD_MS — in every state.
+  // Checked before forwardInput(), and restartToHome() reboots synchronously,
+  // so the held button's release is never forwarded (see exitHoldReached()).
+  if (exitHoldReached()) {
     restartToHome();
     return;
   }
+  // Without a host, a single Back/Power press or any Home-key action exits too.
+  // homeButtonAction(), not wasHomeGesture(): with CROSSPOINT_HOME_TAP_GO_BACK
+  // no Home-key gesture maps to the Home action on the default bindings.
   if (state != State::Connected &&
       (mappedInput.wasPressed(MappedInputManager::Button::Back) ||
-       mappedInput.wasPressed(MappedInputManager::Button::Power) || mappedInput.wasHomeGesture())) {
+       mappedInput.wasPressed(MappedInputManager::Button::Power) ||
+       mappedInput.homeButtonAction() != HomeButtonAction::Ignore)) {
     restartToHome();
     return;
   }
@@ -394,6 +398,49 @@ void PcLinkActivity::forwardInput() {
       send(MsgType::Input, payload, sizeof(payload));
     }
   }
+}
+
+bool PcLinkActivity::homeKeyHeld() const {
+#ifdef CROSSPOINT_TOUCH_INT_WAKE
+  return gpio.isHomeKeyDown();
+#else
+  // No level accessor on this SDK: the SDK's own Home long-press event
+  // (HOME_KEY_LONG_PRESS_MS) stands in for the hold.
+  return false;
+#endif
+}
+
+bool PcLinkActivity::exitHoldReached() {
+  // Timed here against millis() from the button LEVELS, not with
+  // MappedInputManager::wasLongPressed(): that one watches only the named
+  // logical button, and on the X4 Pro logical Back has no physical key at all
+  // (its three keys are Up, Down and Power; Back is only the edge-swipe
+  // gesture), while its getHeldTime() reads 0 on any frame a Home-key action
+  // is latched. Every forwarded logical button counts, so the page-turn keys
+  // exit whatever the side-button layout or orientation maps them to.
+  //
+  // A press that reaches the threshold has already been forwarded as a
+  // down-edge; its up-edge is deliberately never sent. Host tools act on
+  // release (pclink.py pages on state 0), so a synthetic up would fire an
+  // action on the way out; the reboot drops the port, which ends the session
+  // on the host side anyway.
+  const unsigned long now = millis();
+  bool reached = false;
+  for (uint8_t slot = 0; slot < EXIT_HOLD_SLOTS; ++slot) {
+    const bool held = slot < pclink::BUTTON_COUNT ? mappedInput.isPressed(FORWARDED_BUTTONS[slot]) : homeKeyHeld();
+    if (!held) {
+      holdSince[slot] = 0;
+    } else if (holdSince[slot] == 0) {
+      holdSince[slot] = now == 0 ? 1 : now;
+    } else if (now - holdSince[slot] >= EXIT_HOLD_MS) {
+      reached = true;
+    }
+  }
+#ifndef CROSSPOINT_TOUCH_INT_WAKE
+  if (gpio.hasHomeKey() && gpio.wasHomeKeyLongPressed()) reached = true;
+#endif
+  if (reached) LOG_INF("PCL", "Exit hold");
+  return reached;
 }
 
 void PcLinkActivity::watchUsbPresence() {
