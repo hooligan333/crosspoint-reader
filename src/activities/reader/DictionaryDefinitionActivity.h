@@ -47,6 +47,8 @@ class DictionaryDefinitionActivity final : public Activity {
   void wrapText();
   int measureSpan(int fontId, const char* text, size_t len) const;
   void drawBody(int fontId, int x, int startY) const;
+  void nextPage();
+  void previousPage();
 
   const std::string headword;
   // Not const: onEnter() normalizes embedded NULs (StarDict multi-type

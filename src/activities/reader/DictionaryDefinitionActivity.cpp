@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
@@ -220,38 +221,50 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
+  // Same swipe mapping and per-direction gesture settings as the reader's
+  // detectTouchPageTurn (LTR): right-to-left = next, left-to-right = previous.
+  // Checked after Back, so a left-edge swipe still exits.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Left && ReaderUtils::gestureAllowsSwipe(SETTINGS.pageTurnGesture)) {
+    nextPage();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Right && ReaderUtils::gestureAllowsSwipe(SETTINGS.previousPageGesture)) {
+    previousPage();
+    return;
+  }
+
   // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next. Back is the usual left-edge swipe.
+  // the rest = next.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
     if (tx < renderer.getScreenWidth() / 3) {
-      if (currentPage > 0) {
-        haptic_feedback::touchAction();
-        currentPage--;
-        requestUpdate();
-      }
-    } else if (currentPage + 1 < totalPages) {
-      haptic_feedback::touchAction();
-      currentPage++;
-      requestUpdate();
+      if (currentPage > 0) haptic_feedback::touchAction();
+      previousPage();
+    } else {
+      if (currentPage + 1 < totalPages) haptic_feedback::touchAction();
+      nextPage();
     }
     return;
   }
 
-  buttonNavigator.onNext([this] {
-    if (currentPage + 1 < totalPages) {
-      currentPage++;
-      requestUpdate();
-    }
-  });
+  buttonNavigator.onNext([this] { nextPage(); });
+  buttonNavigator.onPrevious([this] { previousPage(); });
+}
 
-  buttonNavigator.onPrevious([this] {
-    if (currentPage > 0) {
-      currentPage--;
-      requestUpdate();
-    }
-  });
+void DictionaryDefinitionActivity::nextPage() {
+  if (currentPage + 1 < totalPages) {
+    currentPage++;
+    requestUpdate();
+  }
+}
+
+void DictionaryDefinitionActivity::previousPage() {
+  if (currentPage > 0) {
+    currentPage--;
+    requestUpdate();
+  }
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,
