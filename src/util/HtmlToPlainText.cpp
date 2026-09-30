@@ -71,6 +71,11 @@ void appendCodepoint(std::string& output, size_t& written, uint32_t codepoint) {
   }
 }
 
+// Collapsible whitespace: at most one space, never at a line start.
+void appendSoftSpace(std::string& output, size_t& written) {
+  if (written > 0 && output[written - 1] != ' ' && output[written - 1] != '\n') output[written++] = ' ';
+}
+
 bool appendNumericEntity(std::string& output, size_t& written, const char* entity, size_t len) {
   if (len < 4 || entity[0] != '&' || entity[1] != '#' || entity[len - 1] != ';') return false;
   size_t pos = 2;
@@ -96,7 +101,10 @@ bool appendNumericEntity(std::string& output, size_t& written, const char* entit
     if (value > (0x10FFFF - digit) / base) return false;
     value = value * base + digit;
   }
-  appendCodepoint(output, written, value);
+  if (value == 0xA0)
+    appendSoftSpace(output, written);
+  else
+    appendCodepoint(output, written, value);
   return true;
 }
 
@@ -143,8 +151,14 @@ std::string htmlToPlainText(std::string html, const char headingMarker) {
         const char* value = lookupHtmlEntity(html.data() + i, len);
         const size_t valueLen = value ? strlen(value) : 0;
         if (value != nullptr && valueLen <= len) {
-          memcpy(html.data() + written, value, valueLen);
-          written += valueLen;
+          // NBSP is a breakable space here: the plain path has no nowrap
+          // styling to honor, and NBSP runs would otherwise glue words.
+          if (strcmp(value, "\xC2\xA0") == 0) {
+            appendSoftSpace(html, written);
+          } else {
+            memcpy(html.data() + written, value, valueLen);
+            written += valueLen;
+          }
           i = semicolon + 1;
           continue;
         }
@@ -155,11 +169,32 @@ std::string htmlToPlainText(std::string html, const char headingMarker) {
       }
     }
 
-    const unsigned char c = html[i++];
+    const unsigned char c = html[i];
+    if (c == '\n') {
+      // A blank line (two or more newlines, possibly CRLF or with trailing
+      // blanks between them) is a paragraph break; a lone newline is a line
+      // break. The whole whitespace run is consumed so '\r' never counts twice.
+      size_t newlines = 0;
+      size_t j = i;
+      while (j < html.size() && (html[j] == '\n' || html[j] == '\r' || html[j] == ' ' || html[j] == '\t')) {
+        if (html[j] == '\n') newlines++;
+        j++;
+      }
+      if (newlines >= 2) {
+        appendBreak(html, written, 2);
+        i = j;
+      } else {
+        appendBreak(html, written);
+        i++;
+      }
+      continue;
+    }
+    i++;
     if (c == '\r' || c == '\t') {
-      if (written > 0 && html[written - 1] != ' ' && html[written - 1] != '\n') html[written++] = ' ';
-    } else if (c == '\n') {
-      appendBreak(html, written);
+      appendSoftSpace(html, written);
+    } else if (c == 0xC2 && i < html.size() && static_cast<unsigned char>(html[i]) == 0xA0) {
+      appendSoftSpace(html, written);  // raw NBSP, as for &nbsp; above
+      i++;
     } else {
       html[written++] = static_cast<char>(c);
     }
