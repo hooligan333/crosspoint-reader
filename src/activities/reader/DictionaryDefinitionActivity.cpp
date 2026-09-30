@@ -1,11 +1,14 @@
 #include "DictionaryDefinitionActivity.h"
 
 #include <FontCacheManager.h>
+#include <FreeInkUIGfxRenderer.h>
+#include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
 #include <HalHeapGauge.h>  // free-heap gate for the cache release below
 #endif
 #include <I18n.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -14,12 +17,28 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "ReaderUtils.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
+#include "components/icons/dictionaryIcons.h"
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
 #include "util/HtmlToPlainText.h"
 
+namespace fui = freeink::ui;
+
 namespace {
+
+// Header text rows start this far below the theme's top padding.
+constexpr int HEADER_TEXT_OFFSET = 10;
+
+// Pencil button: a finger-sized square centered on the 24 px glyph, which sits
+// this far below the page-counter row, both above the body's first line.
+constexpr int EDIT_HIT_SIZE = 44;
+constexpr int EDIT_ICON_GAP = 4;
+
+// Keyboard cap for an edited word: well above any headword, well below the
+// dictionary's 256-byte scan buffer.
+constexpr size_t MAX_EDIT_WORD_BYTES = 128;
 
 // Longest measurable/drawable span. Wrapped lines stay under the screen width
 // (far below this); only pathological unbreakable tokens are split at this cap.
@@ -67,6 +86,49 @@ void DictionaryDefinitionActivity::onExit() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseSdFontCaches();
   }
+}
+
+DictionaryDefinitionActivity::ContentFrame DictionaryDefinitionActivity::contentFrame() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto orientation = renderer.getOrientation();
+  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
+  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
+  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? metrics.sideButtonHintsWidth : 0;
+  return {isLandscapeCw ? hintGutterWidth : 0, isInverted ? metrics.buttonHintsHeight : 0,
+          renderer.getScreenWidth() - hintGutterWidth};
+}
+
+// Right-aligned with the page counter, on the row below the header text. Computed the same
+// way whether or not the counter is drawn (single-page definitions hide it).
+DictionaryDefinitionActivity::EditBox DictionaryDefinitionActivity::editBox() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const ContentFrame frame = contentFrame();
+  const int headerY = frame.y + metrics.topPadding + HEADER_TEXT_OFFSET;
+  const int iconX = frame.x + frame.width - SIDE_PADDING - icon_dict_edit_24.w;
+  // Below the taller of the counter and the (bold UI_12) headword, so a long
+  // headword running to the right edge cannot touch the glyph.
+  const int rowHeight = std::max(renderer.getLineHeight(UI_10_FONT_ID), renderer.getLineHeight(UI_12_FONT_ID));
+  const int iconY = headerY + rowHeight + EDIT_ICON_GAP;
+  const int inset = (EDIT_HIT_SIZE - icon_dict_edit_24.w) / 2;
+  return {iconX - inset, iconY - inset, EDIT_HIT_SIZE};
+}
+
+// The definition stays alive under the keyboard so Cancel returns to it
+// unchanged; only a confirmed, non-empty edit finishes it.
+void DictionaryDefinitionActivity::openEditor() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_DICT_EDIT_WORD), headword,
+                                                           MAX_EDIT_WORD_BYTES);
+  if (!keyboard) {
+    LOG_ERR("DICT", "OOM: edit-word keyboard");
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    const auto* edited = std::get_if<KeyboardResult>(&result.data);
+    if (result.isCancelled || !edited || edited->text.empty()) return;
+    setResult(KeyboardResult{edited->text});
+    finish();
+  });
 }
 
 DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() const {
@@ -220,6 +282,10 @@ void DictionaryDefinitionActivity::loop() {
     finish();
     return;
   }
+  if (editable && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openEditor();
+    return;
+  }
 
   // Same swipe mapping and per-direction gesture settings as the reader's
   // detectTouchPageTurn (LTR): right-to-left = next, left-to-right = previous.
@@ -235,10 +301,17 @@ void DictionaryDefinitionActivity::loop() {
   }
 
   // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next.
+  // the rest = next. The pencil button is tested first so it never turns.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
+    if (editable) {
+      const EditBox box = editBox();
+      if (tx >= box.x && tx < box.x + box.size && ty >= box.y && ty < box.y + box.size) {
+        openEditor();
+        return;
+      }
+    }
     if (tx < renderer.getScreenWidth() / 3) {
       if (currentPage > 0) haptic_feedback::touchAction();
       previousPage();
@@ -293,23 +366,27 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto orientation = renderer.getOrientation();
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool isInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? metrics.sideButtonHintsWidth : 0;
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
-  const int contentY = isInverted ? metrics.buttonHintsHeight : 0;
+  const ContentFrame frame = contentFrame();
+  const int contentX = frame.x;
+  const int contentWidth = frame.width;
+  const int contentY = frame.y;
 
-  // Header: matched headword left, page counter right.
-  const int headerY = contentY + metrics.topPadding + 10;
+  // Header: matched headword left, page counter right, pencil below it.
+  const int headerY = contentY + metrics.topPadding + HEADER_TEXT_OFFSET;
   renderer.drawText(UI_12_FONT_ID, contentX + SIDE_PADDING, headerY, headword.c_str(), true, EpdFontFamily::BOLD);
   if (totalPages > 1) {
     char counter[16];
     snprintf(counter, sizeof(counter), "%d/%d", currentPage + 1, totalPages);
     const int counterWidth = renderer.getTextWidth(UI_10_FONT_ID, counter);
     renderer.drawText(UI_10_FONT_ID, contentX + contentWidth - SIDE_PADDING - counterWidth, headerY, counter);
+  }
+  // Touch only: button boards reach the editor through the Confirm hint.
+  if (editable && mappedInput.hasTouch()) {
+    const EditBox box = editBox();
+    const auto size = static_cast<int16_t>(box.size);
+    fui::GfxRendererTarget target(renderer);
+    target.bitmap(fui::Rect{static_cast<int16_t>(box.x), static_cast<int16_t>(box.y), size, size},
+                  fui::bitmapFromIcon(icon_dict_edit_24), fui::BitmapMode::Center);
   }
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
@@ -323,8 +400,8 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   drawBody(fontId, contentX + SIDE_PADDING, bodyStartY);
 
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), "", (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), editable ? tr(STR_DICT_EDIT_WORD) : "",
+                                            (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

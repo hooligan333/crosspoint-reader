@@ -153,7 +153,9 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
   }
 }
 
-void DictionaryWordSelectActivity::performLookup() {
+// `word` must stay valid for the call: a page token, or an edited word held by
+// the definition activity's result.
+void DictionaryWordSelectActivity::performLookup(const char* word) {
   popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
@@ -176,19 +178,35 @@ void DictionaryWordSelectActivity::performLookup() {
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result);
+  const bool found = ok && dict.lookup(word, definition, headword, &result);
 
-  if (found) {
+  // A genuine miss still opens the (blank) definition view under the cleaned
+  // word, so the pencil can correct it; only real failures get a popup.
+  const bool notFound = ok && !found && result == Dictionary::LookupResult::NotFound;
+  if (found || notFound) {
     popup = Popup::None;
+    if (notFound) {
+      headword = Dictionary::cleanWord(word);
+      if (headword.empty()) headword = word;
+    }
     startActivityForResult(
         std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                       std::move(definition), dict.definitionsAreHtml()),
-        [this](const ActivityResult&) { requestUpdate(); });
+                                                       std::move(definition), found && dict.definitionsAreHtml(),
+                                                       /*editable=*/true),
+        [this](const ActivityResult& closed) {
+          // An edited word: the finished definition is already freed, so the
+          // re-lookup holds at most one definition at a time.
+          if (const auto* edited = std::get_if<KeyboardResult>(&closed.data); edited && !closed.isCancelled) {
+            performLookup(edited->text.c_str());
+            return;
+          }
+          requestUpdate();
+        });
     return;
   }
-  // Name the failure: a genuine miss is "Not found"; a word that WAS found but
-  // couldn't be read is a real error — and we distinguish decompression from a
-  // low-memory allocation from a generic read error.
+  // Name the failure: a word that WAS found but couldn't be read is a real
+  // error — and we distinguish decompression from a low-memory allocation from
+  // a generic read error.
   if (!ok) {
     popup = Popup::Error;
     // An index build allocates a scan buffer, so it fails the same way lookups
@@ -216,13 +234,9 @@ void DictionaryWordSelectActivity::performLookup() {
         popupMsg = StrId::STR_DICT_LOW_MEMORY;
         break;
       case Dictionary::LookupResult::ReadError:
+      default:
         popup = Popup::Error;
         popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::LookupResult::NotFound:
-      default:
-        popup = Popup::NotFound;
-        popupMsg = StrId::STR_DICT_NOT_FOUND;
         break;
     }
   }
@@ -231,7 +245,7 @@ void DictionaryWordSelectActivity::performLookup() {
 }
 
 void DictionaryWordSelectActivity::loop() {
-  if (popup == Popup::NotFound || popup == Popup::Error) {
+  if (popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
       popup = Popup::None;
       requestUpdate();
@@ -244,7 +258,7 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !words.empty()) {
-    performLookup();
+    performLookup(words[selected].text);
     return;
   }
 
@@ -267,7 +281,7 @@ void DictionaryWordSelectActivity::loop() {
     if (hit >= 0) {
       haptic_feedback::touchAction();
       selected = hit;
-      performLookup();
+      performLookup(words[selected].text);
     }
     return;
   }
