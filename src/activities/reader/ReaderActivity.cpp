@@ -54,7 +54,9 @@ void ReaderActivity::applyInitialOrientation() { ReaderUtils::applyOrientation(r
 void ReaderActivity::disableFastInitialRefresh() { pagesUntilFullRefresh = 0; }
 
 void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
-  RenderLock lock(*this);
+  // No RenderLock: noteTurn() only writes the session's atomic turn flag, and
+  // a blocking acquire here parks every page turn behind an in-flight
+  // background section build (the loop task must never wait on a render).
   readerSession.noteTurn(forward, succeeded);
 }
 
