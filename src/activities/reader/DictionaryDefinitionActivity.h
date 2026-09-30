@@ -102,6 +102,8 @@ class DictionaryDefinitionActivity final : public Activity {
   void navigateDefinition(bool back);
   bool restoreCurrentDefinition(bool styled);
   void showMessage(StrId message);
+  void nextPage();
+  void previousPage();
 
   Definition content;
   const bool htmlDefinition;

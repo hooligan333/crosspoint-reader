@@ -624,44 +624,58 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
-  // Page navigation must keep polling input while the render task refreshes the display.
-  auto currentPage = std::atomic_ref(content.currentPage);
+  // Same swipe mapping and per-direction gesture settings as the reader's
+  // detectTouchPageTurn (LTR): right-to-left = next, left-to-right = previous.
+  // Checked after Back, so a left-edge swipe still exits.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Left && ReaderUtils::gestureAllowsSwipe(SETTINGS.pageTurnGesture)) {
+    nextPage();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Right && ReaderUtils::gestureAllowsSwipe(SETTINGS.previousPageGesture)) {
+    previousPage();
+    return;
+  }
+
   // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next. Back is the usual left-edge swipe.
+  // the rest = next.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
     if (tx < renderer.getScreenWidth() / 3) {
-      if (currentPage > 0) {
-        haptic_feedback::touchAction();
-        currentPage--;
-        content.selection.valid = false;
-        requestUpdate();
-      }
-    } else if (currentPage + 1 < totalPages) {
-      haptic_feedback::touchAction();
-      currentPage++;
-      content.selection.valid = false;
-      requestUpdate();
+      if (content.currentPage > 0) haptic_feedback::touchAction();
+      previousPage();
+    } else {
+      if (content.currentPage + 1 < totalPages) haptic_feedback::touchAction();
+      nextPage();
     }
     return;
   }
 
-  buttonNavigator.onNext([this, &currentPage] {
-    if (currentPage + 1 < content.totalPages) {
-      currentPage++;
-      content.selection.valid = false;
-      requestUpdate();
-    }
-  });
+  buttonNavigator.onNext([this] { nextPage(); });
+  buttonNavigator.onPrevious([this] { previousPage(); });
+}
 
-  buttonNavigator.onPrevious([this, &currentPage] {
-    if (currentPage > 0) {
-      currentPage--;
-      content.selection.valid = false;
-      requestUpdate();
-    }
-  });
+// Page navigation must keep polling input while the render task refreshes the
+// display, so the page index is stepped through an atomic_ref (render() loads it
+// the same way). A page turn drops the lookup selection, as upstream's inline
+// steppers did.
+void DictionaryDefinitionActivity::nextPage() {
+  auto currentPage = std::atomic_ref(content.currentPage);
+  if (currentPage + 1 < content.totalPages) {
+    currentPage++;
+    content.selection.valid = false;
+    requestUpdate();
+  }
+}
+
+void DictionaryDefinitionActivity::previousPage() {
+  auto currentPage = std::atomic_ref(content.currentPage);
+  if (currentPage > 0) {
+    currentPage--;
+    content.selection.valid = false;
+    requestUpdate();
+  }
 }
 
 // Draws the current page: a styled Page when the HTML layout succeeded,
