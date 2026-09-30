@@ -79,9 +79,11 @@ class DictionaryDefinitionActivity final : public Activity {
     std::string text;
     std::vector<std::unique_ptr<Page>> pages;
     std::vector<Line> lines;
+    // Plain path: first `lines` index of each page (height-based, see
+    // util/DictPlainPaging.h); size() == totalPages.
+    std::vector<uint32_t> pageStarts;
     int currentPage = 0;
     int totalPages = 1;
-    int linesPerPage = 1;
     int selectionPage = 0;
     ClipSelectionActivity::Selection selection;
 
@@ -89,6 +91,13 @@ class DictionaryDefinitionActivity final : public Activity {
       std::string{}.swap(text);
       std::vector<std::unique_ptr<Page>>{}.swap(pages);
       std::vector<Line>{}.swap(lines);
+      std::vector<uint32_t>{}.swap(pageStarts);
+    }
+
+    // [first, last) `lines` indices of plain page `page`.
+    void pageLines(const int page, size_t& first, size_t& last) const {
+      first = pageStarts[page];
+      last = static_cast<size_t>(page) + 1 < pageStarts.size() ? pageStarts[page + 1] : lines.size();
     }
   };
 
