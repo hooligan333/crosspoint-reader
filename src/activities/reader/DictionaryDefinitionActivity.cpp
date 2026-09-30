@@ -52,8 +52,12 @@ constexpr int SIDE_PADDING = 20;
 // (TextBlock arenas ≈ text + ~7 bytes/word plus per-line objects), roughly
 // doubling the string's footprint while this activity is stacked over the
 // reader and word-select. Bigger definitions take the span-based plain-text
-// path, which holds no per-page copies.
-constexpr size_t MAX_STYLED_HTML_BYTES = 16 * 1024;
+// path, which holds no per-page copies. The default is a no-PSRAM C3 bound;
+// PSRAM builds raise it through CROSSPOINT_DICT_STYLED_MAX_BYTES.
+#ifndef CROSSPOINT_DICT_STYLED_MAX_BYTES
+#define CROSSPOINT_DICT_STYLED_MAX_BYTES (16 * 1024)
+#endif
+constexpr size_t MAX_STYLED_HTML_BYTES = CROSSPOINT_DICT_STYLED_MAX_BYTES;
 
 #ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
 // Cache-release floor, enlarged-advance-table builds only. Dropping the SD font
