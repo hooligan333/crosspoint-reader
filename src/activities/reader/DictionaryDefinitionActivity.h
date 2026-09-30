@@ -14,14 +14,21 @@
 // through the EPUB chapter parser into styled Pages; anything else (plain
 // text, or HTML too damaged to parse) is word-wrapped once on entry and each
 // page renders spans of the original string, so no per-line copies are held.
+//
+// `editable` (dictionary lookups only, not the plugin README viewer) adds a
+// pencil button under the page counter, and Confirm, that open the keyboard
+// on the headword. A confirmed edit finishes this activity with a
+// KeyboardResult carrying the new word; the launcher owns the Dictionary and
+// runs the new lookup once this definition has been freed.
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
-                                        std::string definition, bool htmlDefinition = false)
+                                        std::string definition, bool htmlDefinition = false, bool editable = false)
       : Activity("DictionaryDefinition", renderer, mappedInput),
         headword(std::move(headword)),
         definition(std::move(definition)),
-        htmlDefinition(htmlDefinition) {}
+        htmlDefinition(htmlDefinition),
+        editable(editable) {}
 
   void onEnter() override;
   void onExit() override;
@@ -42,6 +49,24 @@ class DictionaryDefinitionActivity final : public Activity {
     int height;
   };
 
+  // Header/body column: left edge, top edge and width, outside the
+  // orientation's button-hint gutters.
+  struct ContentFrame {
+    int x;
+    int y;
+    int width;
+  };
+
+  // Pencil tap target (logical coords), larger than the glyph it centers.
+  struct EditBox {
+    int x;
+    int y;
+    int size;
+  };
+
+  ContentFrame contentFrame() const;
+  EditBox editBox() const;
+  void openEditor();
   BodyArea bodyArea() const;
   bool layoutHtmlPages();
   void wrapText();
@@ -55,6 +80,7 @@ class DictionaryDefinitionActivity final : public Activity {
   // separators) to newlines so C-string APIs see the whole text.
   std::string definition;
   const bool htmlDefinition;
+  const bool editable;
   // Styled path: reader-identical Pages laid out from the HTML definition.
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;

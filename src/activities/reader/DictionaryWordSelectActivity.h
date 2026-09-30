@@ -38,13 +38,13 @@ class DictionaryWordSelectActivity final : public Activity {
     EpdFontFamily::Style style;
   };
 
-  enum class Popup : uint8_t { None, Busy, NotFound, Error };
+  enum class Popup : uint8_t { None, Busy, Error };
 
   void extractWords();
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
   void moveVertical(int direction);
-  void performLookup();
+  void performLookup(const char* word);
   bool drawHighlightWithSnapshot();
   void drawHints() const;
 
