@@ -60,15 +60,25 @@ void DictionaryWordSelectActivity::performLookup() {
   DictLocation location;
   const bool found = ok && dict.lookup(lookupText.c_str(), definition, headword, &result, &location);
 
-  if (found) {
+  // Fork: a genuine miss still opens the (blank) definition view under the
+  // cleaned word, so the pencil can correct it; only real failures get a popup.
+  const bool notFound = ok && !found && result == Dictionary::LookupResult::NotFound;
+  if (found || notFound) {
     {
       RenderLock lock;
       popup = Popup::None;
       page.reset();
     }
+    if (notFound) {
+      headword = Dictionary::cleanWord(lookupText.c_str());
+      if (headword.empty()) headword = lookupText;
+    }
     auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                                    std::move(definition), dict.definitionsAreHtml());
-    if (!activity || !activity->enableLookup(dict, location)) {
+                                                                    std::move(definition),
+                                                                    found && dict.definitionsAreHtml(),
+                                                                    /*editable=*/true);
+    // A blank miss has no entry to look words up in, so it gets no lookup state.
+    if (!activity || (found && !activity->enableLookup(dict, location))) {
       LOG_ERR("DICT", "OOM: definition activity");
       popup = Popup::Error;
       popupMsg = StrId::STR_DICT_LOW_MEMORY;
@@ -77,14 +87,22 @@ void DictionaryWordSelectActivity::performLookup() {
       return;
     }
     startActivityForResult(std::move(activity), [this](const ActivityResult& result) {
+      // An edited word: the finished definition is already freed, so the
+      // re-lookup (next loop pass) holds at most one definition at a time. It
+      // stays in the dictionary the edited view was showing.
+      if (const auto* edited = std::get_if<KeyboardResult>(&result.data); edited && !result.isCancelled) {
+        lookupText = edited->text;
+        queueRelookup();
+        return;
+      }
       setResult(ActivityResult{result});
       finish();
     });
     return;
   }
-  // Name the failure: a genuine miss is "Not found"; a word that WAS found but
-  // couldn't be read is a real error — and we distinguish decompression from a
-  // low-memory allocation from a generic read error.
+  // Name the failure: a word that WAS found but couldn't be read is a real
+  // error — and we distinguish decompression from a low-memory allocation from
+  // a generic read error.
   if (!ok) {
     popup = Popup::Error;
     // An index build allocates a scan buffer, so it fails the same way lookups
@@ -112,13 +130,9 @@ void DictionaryWordSelectActivity::performLookup() {
         popupMsg = StrId::STR_DICT_LOW_MEMORY;
         break;
       case Dictionary::LookupResult::ReadError:
+      default:
         popup = Popup::Error;
         popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::LookupResult::NotFound:
-      default:
-        popup = Popup::NotFound;
-        popupMsg = StrId::STR_DICT_NOT_FOUND;
         break;
     }
   }
@@ -132,7 +146,7 @@ void DictionaryWordSelectActivity::loop() {
     performLookup();
     return;
   }
-  if (popup == Popup::NotFound || popup == Popup::Error) {
+  if (popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
       finish();
     }
@@ -153,4 +167,21 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     return;
   }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// Fork: a re-lookup requested from the definition's result handler. The
+// handler runs after the definition popped, and
+// performLookup() released `page` before pushing it, so the re-render the pop
+// requests would otherwise paint an empty white frame (FAST refresh) ahead of
+// the lookup's own popup. Put the busy popup up first, under the lock the
+// render task reads it with; the lookup itself still runs from the next loop
+// pass.
+void DictionaryWordSelectActivity::queueRelookup() {
+  {
+    RenderLock lock;
+    popupMsg = StrId::STR_DICT_LOOKING_UP;
+    popup = Popup::Busy;
+  }
+  lookupPending = true;
+  requestUpdate();
 }
