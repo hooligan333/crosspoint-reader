@@ -260,10 +260,17 @@ void HomeActivity::onEnter() {
   Activity::onEnter();
 
   hasOpdsServers = OPDS_STORE.hasServers();
+#ifdef CROSSPOINT_NO_PLUGINS_ROW
+  // With the RSS + flashcards rows on, #3114's plugin row overflows the home
+  // list past Settings; plugins are unused on these devices (owner-directed
+  // 2026-09-30), so the library slot keeps its pre-#3114 OPDS-only behavior.
+  hasPlugins = false;
+#else
   // Plugin System is the global opt-in. Once enabled, expose the Plugins entry
   // even when no SD plugins are installed yet so Plugin Hub can be installed
   // from inside the Plugins screen (or users can sideload plugins manually).
   hasPlugins = SETTINGS.pluginsEnabled != 0;
+#endif
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   if (UITheme::getInstance().hasCoverGridHome()) {
