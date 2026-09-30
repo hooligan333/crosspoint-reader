@@ -936,7 +936,8 @@ std::string FontDownloadActivity::formatSize(size_t bytes) {
   // Integer formatting rather than "%.1f"/"%.0f": newlib-nano's printf drops
   // float conversions entirely, and %zu is not one of its length modifiers
   // (it knows only h, l and L, and an unknown one shifts every later
-  // argument). See the CONFIG_LIBC_NEWLIB_NANO_FORMAT entry in platformio.ini.
+  // argument). The combo envs reverted newlib-nano on 2026-09-24; this code
+  // stays nano-safe by policy.
   if (bytes >= 1024 * 1024) {
     const uint64_t tenths = roundScaledHalfToEven(static_cast<uint64_t>(bytes) * 10u, 1024u * 1024u);
     snprintf(buf, sizeof(buf), "%lu.%lu MB", static_cast<unsigned long>(tenths / 10u),
