@@ -21,6 +21,7 @@
 #include "components/icons/dictionaryIcons.h"
 #include "fontIds.h"
 #include "util/DictHtmlPages.h"
+#include "util/DictPlainPaging.h"
 #include "util/HtmlToPlainText.h"
 
 namespace fui = freeink::ui;
@@ -168,10 +169,11 @@ int DictionaryDefinitionActivity::measureSpan(const int fontId, const char* text
   return renderer.getTextAdvanceX(fontId, buf, EpdFontFamily::REGULAR);
 }
 
-// Greedy word-wrap of `definition` into byte spans. '\n' breaks lines (blank
-// lines survive as paragraph spacing; NULs from multi-type StarDict entries
-// were normalized to newlines in onEnter); '\r' is dropped by treating it as
-// a space at a token edge.
+// Greedy word-wrap of `definition` into byte spans, then height-based
+// pagination. '\n' breaks lines; a blank line survives (runs collapsed to one)
+// as a half-height paragraph gap. NULs from multi-type StarDict entries were
+// normalized to newlines in onEnter; '\r' is dropped by treating it as a
+// space at a token edge.
 void DictionaryDefinitionActivity::wrapText() {
   lines.clear();
   lines.reserve(definition.size() / 32 + 8);
@@ -186,7 +188,6 @@ void DictionaryDefinitionActivity::wrapText() {
   const int maxWidth = body.width;
   const int spaceWidth = renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR);
   const int lineHeight = renderer.getLineHeight(fontId);
-  linesPerPage = std::max(1, body.height / lineHeight);
 
   const char* text = definition.c_str();
   const uint32_t n = static_cast<uint32_t>(definition.size());
@@ -195,7 +196,9 @@ void DictionaryDefinitionActivity::wrapText() {
   int lineWidth = 0;
 
   const auto flushLine = [&](uint32_t nextStart) {
-    lines.push_back({lineStart, static_cast<uint16_t>(lineEnd - lineStart)});
+    const auto len = static_cast<uint16_t>(lineEnd - lineStart);
+    // One blank line per gap; none before the first text line.
+    if (len != 0 || (!lines.empty() && lines.back().len != 0)) lines.push_back({lineStart, len});
     lineStart = nextStart;
     lineEnd = nextStart;
     lineWidth = 0;
@@ -272,7 +275,8 @@ void DictionaryDefinitionActivity::wrapText() {
   // Trim trailing blank lines so the last page is not empty padding.
   while (!lines.empty() && lines.back().len == 0) lines.pop_back();
 
-  totalPages = std::max(1, (static_cast<int>(lines.size()) + linesPerPage - 1) / linesPerPage);
+  dict_plain_paging::paginate(lines, lineHeight, body.height, pageStarts);
+  totalPages = static_cast<int>(pageStarts.size());
   currentPage = 0;
 }
 
@@ -346,16 +350,22 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
     pages[currentPage]->render(renderer, fontId, x, startY);
     return;
   }
+  if (pageStarts.empty()) return;
   const int lineHeight = renderer.getLineHeight(fontId);
   char buf[MAX_LINE_BYTES + 1];
-  const int firstLine = currentPage * linesPerPage;
-  const int lastLine = std::min(firstLine + linesPerPage, static_cast<int>(lines.size()));
-  for (int i = firstLine; i < lastLine; i++) {
-    if (lines[i].len == 0) continue;
-    const size_t len = std::min(static_cast<size_t>(lines[i].len), MAX_LINE_BYTES);
-    memcpy(buf, definition.c_str() + lines[i].start, len);
-    buf[len] = '\0';
-    renderer.drawText(fontId, x, startY + (i - firstLine) * lineHeight, buf);
+  const size_t firstLine = pageStarts[currentPage];
+  const size_t lastLine =
+      static_cast<size_t>(currentPage) + 1 < pageStarts.size() ? pageStarts[currentPage + 1] : lines.size();
+  int y = startY;
+  for (size_t i = firstLine; i < lastLine; i++) {
+    const int advance = dict_plain_paging::lineAdvance(lines, i, firstLine, lineHeight);
+    if (lines[i].len != 0) {
+      const size_t len = std::min(static_cast<size_t>(lines[i].len), MAX_LINE_BYTES);
+      memcpy(buf, definition.c_str() + lines[i].start, len);
+      buf[len] = '\0';
+      renderer.drawText(fontId, x, y, buf);
+    }
+    y += advance;
   }
 }
 
