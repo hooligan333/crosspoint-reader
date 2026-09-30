@@ -18,13 +18,22 @@
 // through the EPUB chapter parser into styled Pages; anything else (plain
 // text, or HTML too damaged to parse) is word-wrapped once on entry and each
 // page renders spans of the original string, so no per-line copies are held.
+//
+// `editable` (dictionary lookups only, not the plugin README viewer) adds a
+// pencil button (touch boards: an action row between the header and the body)
+// and a long-held Confirm (any Confirm when there is nothing to look up) that
+// open the keyboard on the headword. A confirmed edit finishes this activity
+// with a KeyboardResult carrying the new word; the launcher owns the Dictionary
+// and runs the new lookup once this definition has been freed. (Fork r8: short
+// Confirm stays upstream's in-definition lookup, #4063.)
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
-                                        std::string definition, bool htmlDefinition = false)
+                                        std::string definition, bool htmlDefinition = false, bool editable = false)
       : Activity("DictionaryDefinition", renderer, mappedInput),
         content{.headword = std::move(headword), .text = std::move(definition)},
-        htmlDefinition(htmlDefinition) {}
+        htmlDefinition(htmlDefinition),
+        editable(editable) {}
 
   bool enableLookup(Dictionary& dictionary, std::string&& query);
 
@@ -52,7 +61,18 @@ class DictionaryDefinitionActivity final : public Activity {
     int height;
   };
 
+  // Pencil tap target (logical coords), larger than the glyph it centers.
+  struct EditBox {
+    int x;
+    int y;
+    int size;
+  };
+
   BodyArea bodyArea() const;
+  // Height of the touch action row (pencil) above the body; 0 when not shown.
+  int actionRowHeight() const;
+  EditBox editBox() const;
+  void openEditor();
 
   struct Definition {
     std::string headword;
@@ -107,6 +127,7 @@ class DictionaryDefinitionActivity final : public Activity {
 
   Definition content;
   const bool htmlDefinition;
+  const bool editable;
   std::unique_ptr<LookupState> lookup;
   StrId message = StrId::STR_DICT_NOT_FOUND;
   unsigned long messageTime = 0;

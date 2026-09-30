@@ -2,6 +2,8 @@
 
 #include <BidiUtils.h>
 #include <FontCacheManager.h>
+#include <FreeInkUIGfxRenderer.h>
+#include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #include <HalMemory.h>
 #ifdef CROSSPOINT_SDFONT_ADVANCE_LIMIT
@@ -20,12 +22,24 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "ReaderUtils.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/HeaderBackTapTarget.h"
 #include "components/UITheme.h"
+#include "components/icons/dictionaryIcons.h"
 #include "util/DictHtmlPages.h"
 #include "util/HtmlToPlainText.h"
 
+namespace fui = freeink::ui;
+
 namespace {
+
+// Pencil button: a finger-sized square centered on the 24 px glyph, on its own
+// action row between the header and the body's first line (touch boards).
+constexpr int EDIT_HIT_SIZE = 44;
+
+// Keyboard cap for an edited word: well above any headword, well below the
+// dictionary's 256-byte scan buffer.
+constexpr size_t MAX_EDIT_WORD_BYTES = 128;
 
 // Longest measurable/drawable span. Wrapped lines stay under the screen width
 // (far below this); only pathological unbreakable tokens are split at this cap.
@@ -195,8 +209,42 @@ DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() 
   const int y = std::max(top, isInverted ? metrics.buttonHintsHeight : 0) + metrics.topPadding + metrics.headerHeight +
                 metrics.verticalSpacing;
   const int bottomArea = std::max(bottom, metrics.buttonHintsHeight) + metrics.verticalSpacing;
-  return {x, y, renderer.getScreenWidth() - contentLeft - contentRight - 2 * metrics.contentSidePadding,
-          renderer.getScreenHeight() - y - bottomArea};
+  // The touch action row (pencil) sits between the header and the first line.
+  const int bodyY = y + actionRowHeight();
+  return {x, bodyY, renderer.getScreenWidth() - contentLeft - contentRight - 2 * metrics.contentSidePadding,
+          renderer.getScreenHeight() - bodyY - bottomArea};
+}
+
+// Touch only: button boards reach the editor through a long-held Confirm.
+int DictionaryDefinitionActivity::actionRowHeight() const {
+  return editable && mappedInput.hasTouch() ? EDIT_HIT_SIZE : 0;
+}
+
+// Right-aligned with the body's right edge on the action row, i.e. under the
+// header's page counter. Computed the same way whether or not the counter is
+// drawn (single-page definitions hide it).
+DictionaryDefinitionActivity::EditBox DictionaryDefinitionActivity::editBox() const {
+  const BodyArea body = bodyArea();
+  const int inset = (EDIT_HIT_SIZE - icon_dict_edit_24.w) / 2;
+  const int iconX = body.x + body.width - icon_dict_edit_24.w;
+  return {iconX - inset, body.y - actionRowHeight(), EDIT_HIT_SIZE};
+}
+
+// The definition stays alive under the keyboard so Cancel returns to it
+// unchanged; only a confirmed, non-empty edit finishes it.
+void DictionaryDefinitionActivity::openEditor() {
+  auto keyboard = makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_DICT_EDIT_WORD),
+                                                           content.headword, MAX_EDIT_WORD_BYTES);
+  if (!keyboard) {
+    LOG_ERR("DICT", "OOM: edit-word keyboard");
+    return;
+  }
+  startActivityForResult(std::move(keyboard), [this](const ActivityResult& result) {
+    const auto* edited = std::get_if<KeyboardResult>(&result.data);
+    if (result.isCancelled || !edited || edited->text.empty()) return;
+    setResult(KeyboardResult{edited->text});
+    finish();
+  });
 }
 
 // Styled path: lay the HTML definition out through the EPUB chapter parser
@@ -620,7 +668,19 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
   if (lookup && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Fork: a long-held Confirm edits the word instead; the short press stays
+    // upstream's in-definition lookup (#4063). Button-only boards reach the
+    // editor this way.
+    if (editable && mappedInput.getHeldTime() >= ReaderUtils::GO_BACK_OR_HOME_MS) {
+      openEditor();
+      return;
+    }
     startSelection();
+    return;
+  }
+  // Fork: with nothing to look up (a blank miss view) Confirm edits the word.
+  if (editable && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openEditor();
     return;
   }
 
@@ -638,10 +698,17 @@ void DictionaryDefinitionActivity::loop() {
   }
 
   // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next.
+  // the rest = next. The pencil button is tested first so it never turns.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
+    if (actionRowHeight() > 0) {
+      const EditBox box = editBox();
+      if (tx >= box.x && tx < box.x + box.size && ty >= box.y && ty < box.y + box.size) {
+        openEditor();
+        return;
+      }
+    }
     if (tx < renderer.getScreenWidth() / 3) {
       if (content.currentPage > 0) haptic_feedback::touchAction();
       previousPage();
@@ -728,6 +795,13 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   }
   GUI.drawHeader(renderer, Rect{contentX, contentY + metrics.topPadding, contentWidth, metrics.headerHeight},
                  content.headword.c_str(), counter[0] ? counter : nullptr);
+  if (actionRowHeight() > 0) {
+    const EditBox box = editBox();
+    const auto size = static_cast<int16_t>(box.size);
+    fui::GfxRendererTarget target(renderer);
+    target.bitmap(fui::Rect{static_cast<int16_t>(box.x), static_cast<int16_t>(box.y), size, size},
+                  fui::bitmapFromIcon(icon_dict_edit_24), fui::BitmapMode::Center);
+  }
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
@@ -740,8 +814,11 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   scope.endScanAndPrewarm();
   drawBody(fontId, body.x, body.y, currentPage);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), lookup ? tr(STR_LOOKUP) : "", (currentPage > 0 ? "<" : ""),
-                                            (currentPage + 1 < totalPages ? ">" : ""));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK),
+                                            lookup     ? tr(STR_LOOKUP)
+                                            : editable ? tr(STR_DICT_EDIT_WORD)
+                                                       : "",
+                                            (currentPage > 0 ? "<" : ""), (currentPage + 1 < totalPages ? ">" : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   if (messageVisible) {
     GUI.drawPopup(renderer, I18N.get(message));
