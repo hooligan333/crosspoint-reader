@@ -261,7 +261,14 @@ void HomeActivity::onEnter() {
   Activity::onEnter();
 
   hasOpdsServers = OPDS_STORE.hasServers();
+#ifdef CROSSPOINT_NO_PLUGINS_ROW
+  // With the RSS + flashcards rows on, #3114's plugin row overflows the home
+  // list past Settings; plugins are unused on these devices (owner-directed
+  // 2026-09-30), so the library slot keeps its pre-#3114 OPDS-only behavior.
+  hasPlugins = false;
+#else
   hasPlugins = anyPluginInstalled();
+#endif
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   if (UITheme::getInstance().hasCoverGridHome()) {
