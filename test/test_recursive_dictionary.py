@@ -227,6 +227,10 @@ struct DictionaryDefinitionActivity {
   bool selectionOpened = false;
   ClipSelectionActivity::Selection pendingLookupSelection;
   ClipSelectionActivity::Selection lookupReturnSelection;
+  // Fork: the word-select result handler re-runs an edited word's lookup.
+  std::string lookupText;
+  bool lookupPending = false;
+  void queueRelookup() { lookupPending = true; }
   ActivityResult result;
   std::unique_ptr<ClipSelectionActivity> child;
   ActivityResultHandler callback;
