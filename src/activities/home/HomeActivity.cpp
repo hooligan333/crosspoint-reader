@@ -10,6 +10,7 @@
 #include <LibraryBuilder.h>
 #include <LibraryIndexFile.h>
 #include <Memory.h>
+#include <Txt.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
@@ -26,6 +27,18 @@
 #include "activities/plugins/PluginCatalogActivity.h"  // anyPluginInstalled()
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+// Reuse test for a cached cover thumb. EPUB thumbs are always generated, so they
+// must match the generated shape (a truncated or wrong-size file regenerates);
+// TXT/MD thumbs may be verbatim companion BMPs, so any structurally sane BMP
+// passes; XTC keeps the plain existence test.
+bool thumbUsable(const std::string& bookPath, const std::string& thumbPath, const int height) {
+  if (FsHelpers::hasEpubExtension(bookPath)) return Epub::hasUsableThumbBmp(thumbPath, height);
+  if (Txt::isTxtOrMd(bookPath)) return Txt::hasUsableThumbBmp(thumbPath);
+  return Storage.exists(thumbPath.c_str());
+}
+}  // namespace
 
 // Selector rows the recent-books axis contributes, mirroring what the render
 // path actually draws. With homeContinueReadingInMenu the renderer inserts
@@ -142,10 +155,8 @@ void HomeActivity::resolveGridCoverPaths() {
 void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoading, Rect& popupRect) {
   if (!book.coverBmpPath.empty()) {
     const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, height);
-    // Same epub header check as the list path below (truncated/wrong-size thumbs regenerate)
-    if (FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(coverPath, height)
-                                                : Storage.exists(coverPath.c_str()))
-      return;
+    // Same header check as the list path below (truncated/wrong-size thumbs regenerate)
+    if (thumbUsable(book.path, coverPath, height)) return;
   }
   // Only one parser lives at a time; EPUB/XTC objects exceed the stack budget.
   if (FsHelpers::hasReflowableBookExtension(book.path)) {
@@ -156,9 +167,7 @@ void HomeActivity::loadGridCover(RecentBook& book, int height, bool& showingLoad
     }
     book.coverBmpPath = epub->getThumbBmpPath();
     const std::string thumbPath = epub->getThumbBmpPath(height);
-    if (FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(thumbPath, height)
-                                                : Storage.exists(thumbPath.c_str()))
-      return;
+    if (thumbUsable(book.path, thumbPath, height)) return;
     if (!showingLoading) {
       showingLoading = true;
       popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
@@ -205,11 +214,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     }
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, thumbHeight);
-      // Epub thumbs get a header check on top of existence, so a truncated or
-      // wrong-size cached file is regenerated instead of being drawn forever
-      const bool thumbUsable = FsHelpers::hasEpubExtension(book.path) ? Epub::hasUsableThumbBmp(coverPath, thumbHeight)
-                                                                      : Storage.exists(coverPath.c_str());
-      if (!thumbUsable) {
+      // Epub and TXT/MD thumbs get a header check on top of existence, so a
+      // truncated or wrong-size cached file is regenerated instead of being drawn forever
+      if (!thumbUsable(book.path, coverPath, thumbHeight)) {
         // If epub/txt/md, try to load the metadata for title/author and cover
         if (FsHelpers::hasReflowableBookExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");

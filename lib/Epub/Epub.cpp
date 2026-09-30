@@ -358,8 +358,9 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     size_t cssFileSize = 0;
     if (getItemSize(cssPath, &cssFileSize)) {
       if (cssFileSize > MAX_CSS_FILE_SIZE) {
-        LOG_ERR("EBP", "CSS file too large (%lu bytes > %lu max), skipping: %s", static_cast<unsigned long>(cssFileSize),
-                static_cast<unsigned long>(MAX_CSS_FILE_SIZE), cssPath.c_str());
+        LOG_ERR("EBP", "CSS file too large (%lu bytes > %lu max), skipping: %s",
+                static_cast<unsigned long>(cssFileSize), static_cast<unsigned long>(MAX_CSS_FILE_SIZE),
+                cssPath.c_str());
         if (parseResult == CssParser::ParseResult::Complete) {
           parseResult = CssParser::ParseResult::Partial;
         }
@@ -902,9 +903,9 @@ bool Epub::hasUsableThumbBmp(const std::string& thumbPath, const int height) {
 
 bool Epub::generateThumbBmp(int height) const {
   // Already generated (or marked coverless) and still structurally sound — reuse.
-  // TXT/MD thumbs are not produced by this validated path (see
-  // generateThumbBmpFromSource), so they keep the plain existence test.
-  if (Txt::isTxtOrMd(filepath) ? Storage.exists(getThumbBmpPath(height).c_str())
+  // TXT/MD thumbs may be verbatim companion BMPs (see generateThumbBmpFromSource),
+  // so they get Txt's any-shape BMP sniff instead of the generated-shape check.
+  if (Txt::isTxtOrMd(filepath) ? Txt::hasUsableThumbBmp(getThumbBmpPath(height))
                                : hasUsableThumbBmp(getThumbBmpPath(height), height)) {
     return true;
   }
@@ -921,8 +922,8 @@ bool Epub::generateThumbBmpFromSource(int height) {
   if (Txt::isTxtOrMd(filepath)) {
     // TXT/MD thumbs come from Txt::convertCoverImageToBmp (a BMP companion cover
     // is copied verbatim, any size or depth), so the EPUB header check below would
-    // reject them and regenerate on every call -- existence is the right test here.
-    if (Storage.exists(getThumbBmpPath(height).c_str())) return true;
+    // reject them and regenerate on every call -- they get Txt's structural sniff.
+    if (Txt::hasUsableThumbBmp(getThumbBmpPath(height))) return true;
     std::string companionCover = Txt::findCompanionCoverImage(filepath);
     if (companionCover.empty()) return false;
     setupCacheDir();
