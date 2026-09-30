@@ -10,8 +10,8 @@ namespace {
 // newlib-nano's printf knows only the h/l/L length modifiers: it prints "lld"
 // as literal text AND leaves the argument unconsumed, which shifts every later
 // one. These are diagnostics for an image that is already being rejected, so
-// saturate into long and print "%ld". See the CONFIG_LIBC_NEWLIB_NANO_FORMAT
-// entry in platformio.ini.
+// saturate into long and print "%ld". (Nano-safe by policy; the combo envs
+// reverted newlib-nano to full libc on 2026-09-24.)
 long clampToLong(const int64_t v) {
   if (v > static_cast<int64_t>(LONG_MAX)) return LONG_MAX;
   if (v < static_cast<int64_t>(LONG_MIN)) return LONG_MIN;
