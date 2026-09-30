@@ -9,6 +9,11 @@
 
 namespace {
 
+// The fork's newline/NBSP cases predate upstream's headingMarker argument; they
+// use no headings, so they run against the same marker the upstream cases pass.
+using ::htmlToPlainText;
+std::string htmlToPlainText(const std::string& html) { return ::htmlToPlainText(html, '\x01'); }
+
 TEST(HtmlToPlainText, StripsTagsAndKeepsText) {
   EXPECT_EQ(htmlToPlainText("<b>quixotic</b> <i>adj.</i>", '\x01'), "quixotic adj.");
   EXPECT_EQ(htmlToPlainText("<span class=\"x\">in span</span>", '\x01'), "in span");
@@ -41,9 +46,8 @@ TEST(HtmlToPlainText, HeadingsBecomeBoldLabelLines) {
 
 TEST(HtmlToPlainText, DecodesEntities) {
   EXPECT_EQ(htmlToPlainText("Tom &amp; Jerry", '\x01'), "Tom & Jerry");
-  EXPECT_EQ(htmlToPlainText("a&nbsp;b", '\x01'),
-            "a\xC2\xA0"
-            "b");
+  // Fork: NBSP is a breakable space on the plain path.
+  EXPECT_EQ(htmlToPlainText("a&nbsp;b", '\x01'), "a b");
   EXPECT_EQ(htmlToPlainText("&#65;&#66;", '\x01'), "AB");
   EXPECT_EQ(htmlToPlainText("&#x2014;", '\x01'), "\xE2\x80\x94");
   // Not entities: left as written rather than swallowed.
@@ -64,6 +68,57 @@ TEST(HtmlToPlainText, SurvivesMalformedMarkup) {
   EXPECT_EQ(htmlToPlainText("a <b", '\x01'), "a <b");
   EXPECT_EQ(htmlToPlainText("x < y", '\x01'), "x < y");
   EXPECT_EQ(htmlToPlainText("<!-- comment -->kept", '\x01'), "kept");
+}
+
+TEST(HtmlToPlainText, RawBlankLinesAreParagraphBreaks) {
+  EXPECT_EQ(htmlToPlainText("a\nb"), "a\nb");
+  EXPECT_EQ(htmlToPlainText("a\n\nb"), "a\n\nb");
+  // Longer runs cap at one blank line.
+  EXPECT_EQ(htmlToPlainText("a\n\n\nb"), "a\n\nb");
+  EXPECT_EQ(htmlToPlainText("a\n\n\n\n\n\nb"), "a\n\nb");
+  // Whitespace-only lines still count as blank.
+  EXPECT_EQ(htmlToPlainText("a\n  \t\nb"), "a\n\nb");
+  // Leading/trailing blank lines are trimmed.
+  EXPECT_EQ(htmlToPlainText("\n\na\n\n"), "a");
+  // OED-style quotation list.
+  EXPECT_EQ(htmlToPlainText("1. sense\n\n1600 Q1\n\n1700 Q2"), "1. sense\n\n1600 Q1\n\n1700 Q2");
+}
+
+TEST(HtmlToPlainText, CrlfCountsOnce) {
+  EXPECT_EQ(htmlToPlainText("a\r\nb"), "a\nb");
+  EXPECT_EQ(htmlToPlainText("a\r\n\r\nb"), "a\n\nb");
+  EXPECT_EQ(htmlToPlainText("a\r\n\r\n\r\nb"), "a\n\nb");
+  // A lone '\r' is still a space.
+  EXPECT_EQ(htmlToPlainText("a\rb"), "a b");
+}
+
+TEST(HtmlToPlainText, NbspIsABreakableSpace) {
+  EXPECT_EQ(htmlToPlainText("a\xC2\xA0"
+                            "b"),
+            "a b");
+  // OED sense-letter run: collapses to one space.
+  EXPECT_EQ(htmlToPlainText("all.\xE2\x80\x9D\xC2\xA0\xC2\xA0\xCE\xB2"), "all.\xE2\x80\x9D \xCE\xB2");
+  EXPECT_EQ(htmlToPlainText("a&nbsp;&nbsp;b"), "a b");
+  EXPECT_EQ(htmlToPlainText("a&#160;b&#xA0;c"), "a b c");
+  // Never leads a line.
+  EXPECT_EQ(htmlToPlainText("a\n\xC2\xA0"
+                            "b"),
+            "a\nb");
+  EXPECT_EQ(htmlToPlainText("\xC2\xA0"
+                            "a\xC2\xA0"),
+            "a");
+  // Other sequences led by 0xC2 are untouched.
+  EXPECT_EQ(htmlToPlainText("\xC2\xA9"), "\xC2\xA9");
+}
+
+TEST(HtmlToPlainText, TagsAndRawNewlinesMix) {
+  // A tag break followed by a lone raw newline stays a single break.
+  EXPECT_EQ(htmlToPlainText("a<br>\nb"), "a\nb");
+  // A tag break followed by a raw blank line becomes a paragraph break.
+  EXPECT_EQ(htmlToPlainText("a<br>\n\nb"), "a\n\nb");
+  // Paragraph tags plus raw blank lines never exceed one blank line.
+  EXPECT_EQ(htmlToPlainText("<p>a</p>\n\n<p>b</p>"), "a\n\nb");
+  EXPECT_EQ(htmlToPlainText("<b>word</b>\n\n<i>quote</i>\n<i>next</i>"), "word\n\nquote\nnext");
 }
 
 }  // namespace

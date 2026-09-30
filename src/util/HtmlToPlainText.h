@@ -6,5 +6,7 @@
 // fallback. Styling is ignored: block elements become line breaks and HTML
 // entities are decoded. A heading becomes a label line of its own: the
 // headingMarker byte is written at the start of that line, and the definition
-// view draws a line starting with it in bold.
+// view draws a line starting with it in bold. A raw blank line becomes a
+// paragraph break ("\n\n", never more), a lone raw newline a line break, and
+// NBSP (raw or entity) a breakable space.
 std::string htmlToPlainText(const std::string& html, char headingMarker);

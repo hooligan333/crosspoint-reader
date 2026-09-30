@@ -79,6 +79,7 @@ harness = r'''
 #include <Memory.h>
 #include "activities/ActivityResult.h"
 #include "components/HeaderBackTapTarget.h"
+#include "util/DictPlainPaging.h"  // fork: wrapText()/selection pages paginate by height
 #define LOG_ERR(...) ((void)0)
 template<typename... Args> void logDebug(Args&&...) {}
 #define LOG_DBG(...) logDebug(__VA_ARGS__)

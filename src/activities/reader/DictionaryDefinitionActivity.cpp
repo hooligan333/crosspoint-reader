@@ -27,6 +27,7 @@
 #include "components/UITheme.h"
 #include "components/icons/dictionaryIcons.h"
 #include "util/DictHtmlPages.h"
+#include "util/DictPlainPaging.h"
 #include "util/HtmlToPlainText.h"
 
 namespace fui = freeink::ui;
@@ -290,6 +291,9 @@ bool DictionaryDefinitionActivity::reserveLines(Definition& next, const size_t c
   return true;
 }
 
+// Greedy word-wrap into byte spans, then height-based pagination (fork): a
+// blank line survives (runs collapsed to one, none at the top) as a half-height
+// paragraph gap, see util/DictPlainPaging.h.
 bool DictionaryDefinitionActivity::wrapText(Definition& next) {
   auto& definition = next.text;
   auto& lines = next.lines;
@@ -306,7 +310,6 @@ bool DictionaryDefinitionActivity::wrapText(Definition& next) {
   const int maxWidth = body.width;
   const int spaceWidth = renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR);
   const int lineHeight = renderer.getLineHeight(fontId, PLAIN_TEXT_LINE_SPACING);
-  next.linesPerPage = std::max(1, body.height / lineHeight);
 
   const char* text = definition.c_str();
   const uint32_t n = static_cast<uint32_t>(definition.size());
@@ -316,8 +319,12 @@ bool DictionaryDefinitionActivity::wrapText(Definition& next) {
   bool lineBold = false;
 
   const auto flushLine = [&](uint32_t nextStart) {
-    if (lines.size() == lines.capacity() && !reserveLines(next, lines.capacity() * 2)) return false;
-    lines.push_back({lineStart, static_cast<uint16_t>(lineEnd - lineStart), lineBold});
+    const auto len = static_cast<uint16_t>(lineEnd - lineStart);
+    // One blank line per gap; none before the first text line.
+    if (len != 0 || (!lines.empty() && lines.back().len != 0)) {
+      if (lines.size() == lines.capacity() && !reserveLines(next, lines.capacity() * 2)) return false;
+      lines.push_back({lineStart, len, lineBold});
+    }
     lineStart = nextStart;
     lineEnd = nextStart;
     lineWidth = 0;
@@ -409,7 +416,8 @@ bool DictionaryDefinitionActivity::wrapText(Definition& next) {
   // Trim trailing blank lines so the last page is not empty padding.
   while (!lines.empty() && lines.back().len == 0) lines.pop_back();
 
-  next.totalPages = std::max(1, (static_cast<int>(lines.size()) + next.linesPerPage - 1) / next.linesPerPage);
+  dict_plain_paging::paginate(lines, lineHeight, body.height, next.pageStarts);
+  next.totalPages = static_cast<int>(next.pageStarts.size());
   next.currentPage = 0;
   return true;
 }
@@ -546,14 +554,20 @@ bool DictionaryDefinitionActivity::buildPlainSelectionPages() {
       LOG_ERR("DICT", "OOM: selection page (%u bytes)", static_cast<unsigned>(sizeof(Page)));
       return false;
     }
-    const int firstLine = (content.selectionPage + p) * content.linesPerPage;
-    const int lastLine = std::min(firstLine + content.linesPerPage, static_cast<int>(content.lines.size()));
+    size_t firstLine = 0;
+    size_t lastLine = 0;
+    content.pageLines(content.selectionPage + p, firstLine, lastLine);
     heap = HalMemory::getDefaultHeap();
     const size_t pageBytes = (lastLine - firstLine) * (sizeof(PageLine) + sizeof(std::unique_ptr<PageElement>));
     if (heap.freeBytes < pageBytes + HEAP_HEADROOM || heap.largestBlockBytes < pageBytes) return false;
     page->elements.reserve(lastLine - firstLine);
-    for (int row = firstLine; row < lastLine; ++row) {
+    // Same vertical walk as drawBody(), so the selection overlay lines up with
+    // the height-paginated text it was drawn from.
+    int rowY = 0;
+    for (size_t row = firstLine; row < lastLine; ++row) {
       const auto& line = content.lines[row];
+      const int y = rowY;
+      rowY += dict_plain_paging::lineAdvance(content.lines, row, firstLine, lineHeight);
       if (!line.len) continue;
       const size_t length =
           utf8SafeTruncateBuffer(content.text.c_str() + line.start, std::min<size_t>(line.len, MAX_LINE_BYTES));
@@ -567,7 +581,7 @@ bool DictionaryDefinitionActivity::buildPlainSelectionPages() {
         LOG_ERR("DICT", "OOM: selection line (%u byte budget)", static_cast<unsigned>(lineBytes));
         return false;
       }
-      auto element = makeUniqueNoThrow<PageLine>(std::move(block), 0, (row - firstLine) * lineHeight);
+      auto element = makeUniqueNoThrow<PageLine>(std::move(block), 0, y);
       if (!element) {
         LOG_ERR("DICT", "OOM: selection element (%u bytes)", static_cast<unsigned>(sizeof(PageLine)));
         return false;
@@ -754,23 +768,27 @@ void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const
   const auto& pages = content.pages;
   const auto& lines = content.lines;
   const auto& definition = content.text;
-  const int linesPerPage = content.linesPerPage;
   if (!pages.empty()) {
     pages[currentPage]->render(renderer, fontId, x, startY);
     return;
   }
+  if (content.pageStarts.empty()) return;
   const int lineHeight = renderer.getLineHeight(fontId, PLAIN_TEXT_LINE_SPACING);
   char buf[MAX_LINE_BYTES + 1];
-  const int firstLine = currentPage * linesPerPage;
-  const int lastLine = std::min(firstLine + linesPerPage, static_cast<int>(lines.size()));
-  for (int i = firstLine; i < lastLine; i++) {
-    if (lines[i].len == 0) continue;
-    const size_t len = utf8SafeTruncateBuffer(definition.c_str() + lines[i].start,
-                                              std::min(static_cast<size_t>(lines[i].len), MAX_LINE_BYTES));
-    memcpy(buf, definition.c_str() + lines[i].start, len);
-    buf[len] = '\0';
-    renderer.drawText(fontId, x, startY + (i - firstLine) * lineHeight, buf, true,
-                      lines[i].bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+  size_t firstLine = 0;
+  size_t lastLine = 0;
+  content.pageLines(currentPage, firstLine, lastLine);
+  int y = startY;
+  for (size_t i = firstLine; i < lastLine; i++) {
+    const int advance = dict_plain_paging::lineAdvance(lines, i, firstLine, lineHeight);
+    if (lines[i].len != 0) {
+      const size_t len = utf8SafeTruncateBuffer(definition.c_str() + lines[i].start,
+                                                std::min(static_cast<size_t>(lines[i].len), MAX_LINE_BYTES));
+      memcpy(buf, definition.c_str() + lines[i].start, len);
+      buf[len] = '\0';
+      renderer.drawText(fontId, x, y, buf, true, lines[i].bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    }
+    y += advance;
   }
 }
 
