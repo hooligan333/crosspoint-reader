@@ -589,9 +589,9 @@ void EpubReaderActivity::stopBgBuildTask() {
   // is provably alive (give-after-store leaves a theoretical window where the
   // task polls the flag, self-deletes, and the give hits a freed TCB). Worst
   // case the woken pass misses the flag and re-sleeps on the short cadence
-  // (this caller holds the RenderLock, so its TryAcquire fails -> ~25 ms),
+  // (this caller holds the RenderLock, so its try-acquire fails -> ~25 ms),
   // keeping the join bounded. It cannot start new work either way: every step
-  // is picked under a TryAcquire this caller's lock defeats.
+  // is picked under a try-acquire this caller's lock defeats.
   xTaskNotifyGive(bgBuildTaskHandle);
   bgBuildStop.store(true, std::memory_order_release);
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
@@ -627,15 +627,19 @@ void EpubReaderActivity::bgBuildTaskLoop() {
     bool workPlausible = false;
     // Active-section build tick: same per-tick RenderLock scope, heap gate, and
     // page count as the loop pump this replaces — never holds the lock across a
-    // chapter, so pending renders interleave exactly as before. TryAcquire, not
-    // the blocking ctor: parking here would deadlock an exit path that joins
-    // this task while holding the RenderLock (see RenderLock::TryAcquire). All
+    // chapter, so pending renders interleave exactly as before. Mode::Try, not
+    // the blocking ctor: this task must NEVER park on the rendering mutex.
+    // ActivityManager calls onExit() while holding the RenderLock, and onExit
+    // joins this task — a task blocked inside the blocking ctor at that moment
+    // would deadlock the exit. Every step it takes (here, prebuildStep,
+    // htmlInflateStep, the pre-decode scan) checks ownsLock() first and, on
+    // false, backs off and retries the next pass. All
     // `section` access happens strictly under the lock: the loop-task idiom of
     // an unlocked pre-check is a benign stale read there, but this task runs
     // truly parallel on core 0, where an unlocked deref races ~Section.
     {
-      RenderLock lock{RenderLock::TryAcquire{}};
-      if (!lock.locked()) {
+      RenderLock lock(RenderLock::Mode::Try);
+      if (!lock.ownsLock()) {
         workPlausible = true;
       } else if (section && section->isBuilding()) {
         workPlausible = true;
@@ -703,7 +707,7 @@ void EpubReaderActivity::bgBuildTaskLoop() {
       // loop()'s lazy partial-extension start, and stopBgBuildTask() for exit.
       // The lock scope — not any give/store ordering — is the load-bearing
       // invariant: a pass can't interleave between state and notify, because
-      // while the writer holds the lock the pass's TryAcquire fails (25 ms
+      // while the writer holds the lock the pass's try-acquire fails (25 ms
       // cadence), and once it releases, state and pending notify are both
       // visible. What the long timeout still bounds is a retry of deferrable
       // idle work (a heap-gated or aborted pre-decode), never anything the
@@ -746,8 +750,8 @@ void EpubReaderActivity::discardPrebuiltSection() {
 // and what makes the one-live-build-context invariant provable (see the
 // header). Returns true if it made progress.
 bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase phase) {
-  RenderLock lock{RenderLock::TryAcquire{}};
-  if (!lock.locked()) {
+  RenderLock lock(RenderLock::Mode::Try);
+  if (!lock.ownsLock()) {
     workPlausible = true;
     return false;
   }
@@ -965,8 +969,8 @@ bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
   int target = -1;
 
   {
-    RenderLock lock{RenderLock::TryAcquire{}};
-    if (!lock.locked()) {
+    RenderLock lock(RenderLock::Mode::Try);
+    if (!lock.ownsLock()) {
       workPlausible = true;
       return false;
     }
@@ -1115,8 +1119,8 @@ bool EpubReaderActivity::imageDecodeStep(bool& workPlausible) {
   int offset = 0;
 
   {
-    RenderLock lock{RenderLock::TryAcquire{}};
-    if (!lock.locked()) {
+    RenderLock lock(RenderLock::Mode::Try);
+    if (!lock.ownsLock()) {
       workPlausible = true;
       return false;
     }
@@ -1318,9 +1322,9 @@ void EpubReaderActivity::loop() {
   const uint32_t lastRenderMs = lastRenderCompleteMs.load(std::memory_order_relaxed);
   {
     RenderLock lock(RenderLock::Mode::Try);
-    if (lock.ownsLock() && section && !section->isBuilding() && renderer.hasFrameBuffer() &&
-        lastRenderMs != 0 && millis() - lastRenderMs > IDLE_PREWARM_DEBOUNCE_MS &&
-        gateFreeHeap() > RENDER_MIN_FREE_HEAP && gateMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+    if (lock.ownsLock() && section && !section->isBuilding() && renderer.hasFrameBuffer() && lastRenderMs != 0 &&
+        millis() - lastRenderMs > IDLE_PREWARM_DEBOUNCE_MS && gateFreeHeap() > RENDER_MIN_FREE_HEAP &&
+        gateMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
         (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
       idlePrewarmSpine = currentSpineIndex;
       idlePrewarmPage = section->currentPage;
@@ -2478,7 +2482,7 @@ void EpubReaderActivity::renderBook() {
   // started, page turned, spec changed) flows through a render, so one notify
   // here retires its need to idle-poll — the lazy partial-extension start in
   // loop() is the exception and notifies directly. The task wakes, fails the
-  // TryAcquire while this render holds the lock, and settles on the short retry
+  // try-acquire while this render holds the lock, and settles on the short retry
   // cadence until the lock frees.
   if (bgBuildTaskHandle) xTaskNotifyGive(bgBuildTaskHandle);
 #endif
