@@ -62,6 +62,11 @@ void appendCodepoint(std::string& output, uint32_t codepoint) {
   }
 }
 
+// Collapsible whitespace: at most one space, never at a line start.
+void appendSoftSpace(std::string& output) {
+  if (!output.empty() && output.back() != ' ' && output.back() != '\n') output.push_back(' ');
+}
+
 bool appendNumericEntity(std::string& output, const char* entity, size_t len) {
   if (len < 4 || entity[0] != '&' || entity[1] != '#' || entity[len - 1] != ';') return false;
   size_t pos = 2;
@@ -87,7 +92,10 @@ bool appendNumericEntity(std::string& output, const char* entity, size_t len) {
     if (value > (0x10FFFF - digit) / base) return false;
     value = value * base + digit;
   }
-  appendCodepoint(output, value);
+  if (value == 0xA0)
+    appendSoftSpace(output);
+  else
+    appendCodepoint(output, value);
   return true;
 }
 
@@ -127,7 +135,12 @@ std::string htmlToPlainText(const std::string& html) {
         const size_t len = semicolon - i + 1;
         const char* value = lookupHtmlEntity(html.data() + i, len);
         if (value != nullptr) {
-          output.append(value);
+          // NBSP is a breakable space here: the plain path has no nowrap
+          // styling to honor, and NBSP runs would otherwise glue words.
+          if (strcmp(value, "\xC2\xA0") == 0)
+            appendSoftSpace(output);
+          else
+            output.append(value);
           i = semicolon + 1;
           continue;
         }
@@ -138,11 +151,32 @@ std::string htmlToPlainText(const std::string& html) {
       }
     }
 
-    const unsigned char c = html[i++];
+    const unsigned char c = html[i];
+    if (c == '\n') {
+      // A blank line (two or more newlines, possibly CRLF or with trailing
+      // blanks between them) is a paragraph break; a lone newline is a line
+      // break. The whole whitespace run is consumed so '\r' never counts twice.
+      size_t newlines = 0;
+      size_t j = i;
+      while (j < html.size() && (html[j] == '\n' || html[j] == '\r' || html[j] == ' ' || html[j] == '\t')) {
+        if (html[j] == '\n') newlines++;
+        j++;
+      }
+      if (newlines >= 2) {
+        appendBreak(output, 2);
+        i = j;
+      } else {
+        appendBreak(output);
+        i++;
+      }
+      continue;
+    }
+    i++;
     if (c == '\r' || c == '\t') {
-      if (!output.empty() && output.back() != ' ' && output.back() != '\n') output.push_back(' ');
-    } else if (c == '\n') {
-      appendBreak(output);
+      appendSoftSpace(output);
+    } else if (c == 0xC2 && i < html.size() && static_cast<unsigned char>(html[i]) == 0xA0) {
+      appendSoftSpace(output);  // raw NBSP, as for &nbsp; above
+      i++;
     } else {
       output.push_back(static_cast<char>(c));
     }

@@ -85,8 +85,10 @@ class DictionaryDefinitionActivity final : public Activity {
   // Empty means the plain-text span path below is active.
   std::vector<std::unique_ptr<Page>> pages;
   std::vector<Line> lines;
+  // Plain path: first `lines` index of each page (height-based, see
+  // util/DictPlainPaging.h); size() == totalPages.
+  std::vector<uint32_t> pageStarts;
   int currentPage = 0;
   int totalPages = 1;
-  int linesPerPage = 1;
   ButtonNavigator buttonNavigator;
 };
