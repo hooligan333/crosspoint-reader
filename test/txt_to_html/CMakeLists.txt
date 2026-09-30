@@ -1,5 +1,6 @@
 add_executable(TxtToHtmlTest
   TxtToHtmlTest.cpp
+  BmpSanityTest.cpp
   ${REPO_ROOT}/lib/Txt/TxtToHtml.cpp
   ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp

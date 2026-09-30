@@ -12,6 +12,7 @@
 
 #include <cstring>
 
+#include "BmpSanity.h"
 #include "TxtToHtml.h"
 
 bool Txt::isTxtOrMd(std::string_view path) {
@@ -40,6 +41,18 @@ std::string Txt::findCompanionCoverImage(const std::string& filepath) {
   return "";
 }
 
+bool Txt::hasUsableThumbBmp(const std::string& thumbPath) {
+  if (!Storage.exists(thumbPath.c_str())) return false;
+  HalFile thumb;
+  if (!Storage.openFileForRead("TXT", thumbPath, thumb)) return false;
+  const size_t fileSize = thumb.size();
+  // Written deliberately when the companion cover is unusable -- a "do not retry" marker
+  if (fileSize == 0) return true;
+  uint8_t header[bmp_sanity::kHeaderBytes];
+  if (thumb.read(header, sizeof(header)) != static_cast<int>(sizeof(header))) return false;
+  return bmp_sanity::isSaneBmp(header, fileSize);
+}
+
 bool Txt::convertCoverImageToBmp(const std::string& imagePath, const std::string& destBmpPath, int thumbHeight,
                                  bool cropped, bool originalThresholds) {
   if (!Storage.exists(imagePath.c_str())) return false;
@@ -49,10 +62,14 @@ bool Txt::convertCoverImageToBmp(const std::string& imagePath, const std::string
   const bool isPng = FsHelpers::hasPngExtension(imagePath);
   if (!isBmp && !isJpg && !isPng) return false;
 
+  // Stream to a temp name and publish via rename below: a reset mid-write must never
+  // leave a half-written BMP at the final path (same pattern as the EPUB thumbs).
+  const std::string tmpPath = destBmpPath + ".tmp";
   HalFile src, dst;
-  if (!Storage.openFileForRead("TXT", imagePath, src) || !Storage.openFileForWrite("TXT", destBmpPath, dst)) {
+  if (!Storage.openFileForRead("TXT", imagePath, src) || !Storage.openFileForWrite("TXT", tmpPath, dst)) {
     return false;
   }
+  const size_t srcSize = src.size();
 
   bool success = false;
   if (isBmp) {
@@ -85,10 +102,46 @@ bool Txt::convertCoverImageToBmp(const std::string& imagePath, const std::string
   }
 
   src.close();
-  dst.close();
+  if (!dst.close()) success = false;
 
+  // Thumbs are reused on existence + a structural sniff (hasUsableThumbBmp), so check
+  // the temp before publishing -- the converters don't check Print::write results, so
+  // a full card can report success on a short file. An empty temp must fail here, not
+  // pass as the "no cover" marker.
+  bool markUnusable = false;
+  if (success && thumbHeight > 0) {
+    HalFile written;
+    size_t writtenSize = 0;
+    uint8_t header[bmp_sanity::kHeaderBytes];
+    bool sane = false;
+    if (Storage.openFileForRead("TXT", tmpPath, written)) {
+      writtenSize = written.size();
+      sane = written.read(header, sizeof(header)) == static_cast<int>(sizeof(header)) &&
+             bmp_sanity::isSaneBmp(header, writtenSize);
+      written.close();
+    }
+    if (!sane) {
+      success = false;
+      // A complete verbatim copy of a companion BMP the renderer can't open: retrying
+      // would re-copy it (behind the loading popup) on every Home visit, so leave the
+      // empty marker instead, as the EPUB path does for an unsupported cover.
+      // Size equality is what separates a bad source from a short write (retryable).
+      markUnusable = isBmp && writtenSize == srcSize;
+    }
+  }
+
+  Storage.remove(destBmpPath.c_str());  // FAT rename cannot overwrite
+  if (success) {
+    success = Storage.rename(tmpPath.c_str(), destBmpPath.c_str());
+  }
   if (!success) {
+    Storage.remove(tmpPath.c_str());
     Storage.remove(destBmpPath.c_str());
+    if (markUnusable) {
+      LOG_ERR("TXT", "Companion cover BMP is not a usable bitmap, skipping thumbnail: %s", imagePath.c_str());
+      HalFile marker;
+      Storage.openFileForWrite("TXT", destBmpPath, marker);
+    }
   }
 
   return success;
