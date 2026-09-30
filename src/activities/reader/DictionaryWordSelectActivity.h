@@ -29,8 +29,9 @@ class DictionaryWordSelectActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum class Popup : uint8_t { None, Busy, NotFound, Error };
+  enum class Popup : uint8_t { None, Busy, Error };
 
+  void queueRelookup();
   void performLookup();
 
   std::unique_ptr<Page> page;
