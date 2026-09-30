@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 // Fixed-scalar active-reading summary. The owner reports turn outcomes before
@@ -28,5 +29,9 @@ class ReaderSession {
   uint16_t startProgress = 0;
   uint16_t endProgress = 0;
   bool hasAnchor = false;
-  bool pendingForward = false;
+  // The one field that crosses tasks: the loop task writes it in noteTurn()
+  // WITHOUT the render lock (a blocking acquire there parks page turns behind
+  // the fork's background section builds); everything else is only touched on
+  // the render side under the lock.
+  std::atomic<bool> pendingForward{false};
 };
