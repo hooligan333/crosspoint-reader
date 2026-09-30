@@ -541,8 +541,8 @@ void ActivityManager::prewarmDisplayRails() {
     display.beginDisplayWork();
     return;
   }
-  RenderLock prewarmLock{RenderLock::TryAcquire{}};
-  if (prewarmLock.locked()) display.beginDisplayWork();
+  RenderLock prewarmLock(RenderLock::Mode::Try);
+  if (prewarmLock.ownsLock()) display.beginDisplayWork();
 }
 #endif
 
@@ -627,8 +627,6 @@ RenderLock::RenderLock(Mode mode) {
 }
 
 RenderLock::RenderLock(Activity&) : RenderLock(Mode::Blocking) {}
-
-RenderLock::RenderLock(TryAcquire) { isLocked = xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE; }
 
 RenderLock::~RenderLock() {
   if (isLocked) {

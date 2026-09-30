@@ -37,8 +37,8 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "WifiCredentialStore.h"
 #include "UsageLog.h"
+#include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -1353,8 +1353,8 @@ void loop() {
       // worst (its own acquire fails while this one is held), never lands a POF
       // inside a waveform.
       {
-        RenderLock idleLock{RenderLock::TryAcquire{}};
-        if (idleLock.locked() && !activityManager.hasPendingRender()) display.controllerIdle();
+        RenderLock idleLock(RenderLock::Mode::Try);
+        if (idleLock.ownsLock() && !activityManager.hasPendingRender()) display.controllerIdle();
       }
 #endif
       // If we've been inactive for a while, increase the delay to save power
