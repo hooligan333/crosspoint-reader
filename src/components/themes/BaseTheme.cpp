@@ -39,8 +39,9 @@ namespace {
 // snprintf("%.0f") rounds to nearest and breaks a tie towards the even value.
 // newlib-nano's formatter has no float conversions at all -- it emits nothing
 // for %f and the percentage would render as a bare "%" -- so the status bar
-// rounds to an int itself and prints "%d". See the CONFIG_LIBC_NEWLIB_NANO_FORMAT
-// entry in platformio.ini. Every caller passes 0..100, so the truncating cast is
+// rounds to an int itself and prints "%d". (The combo envs reverted newlib-nano
+// on 2026-09-24, but this stays nano-safe by policy — and it is also cheaper.)
+// Every caller passes 0..100, so the truncating cast is
 // a floor; the tie rule is reproduced so the drawn string stays byte-identical
 // to what the float path produced.
 int roundHalfToEven(const float v) {
