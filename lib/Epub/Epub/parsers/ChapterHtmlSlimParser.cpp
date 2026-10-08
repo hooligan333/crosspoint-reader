@@ -15,6 +15,7 @@
 #include <cmath>
 #include <iterator>
 #include <new>
+#include <optional>
 
 #include "Epub.h"
 #include "Epub/Page.h"
@@ -1671,8 +1672,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
               bool gotDimensions = headerProbe.getDimensions(dims);
 
-              if (!gotDimensions) {
+              if (!gotDimensions && self->mayLendFrameBuffer) {
                 // Retry with framebuffer scratch when the heap cannot fit the inflate window.
+                // Skipped for a speculative build (see setMayLendFrameBuffer).
                 GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
                 ImageDimsProbe retryProbe;
                 self->epub->readItemContentsToStream(resolvedPath, retryProbe, 1024, /*allowEarlyStop=*/true);
@@ -1692,7 +1694,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
                   {
                     // Same 32 KB inflate window as the probe; the popup is already up.
-                    GfxRenderer::FrameBufferLoan extractLoan(self->renderer);
+                    // A speculative build extracts from the heap instead (see setMayLendFrameBuffer).
+                    std::optional<GfxRenderer::FrameBufferLoan> extractLoan;
+                    if (self->mayLendFrameBuffer) extractLoan.emplace(self->renderer);
                     extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
                   }
                   cachedImageFile.flush();
@@ -1711,6 +1715,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 } else {
                   LOG_ERR("EHP", "Failed to extract image");
                 }
+                // Gated off, the loan retry never ran, so a lending build might
+                // have got these dimensions: flag the layout (see the header).
+                if (!gotDimensions && !self->mayLendFrameBuffer) self->dimsUnknownWithoutLoan_ = true;
               }
 
               if (gotDimensions) {
