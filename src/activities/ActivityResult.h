@@ -80,9 +80,25 @@ struct FilePathResult {
   std::string path;
 };
 
+#ifdef CROSSPOINT_DICT_SECONDARY
+// A definition page's switch button: look the word up in the other
+// dictionary. Word-select owns the dictionaries; the result carries the page
+// the view was on, so a failed switch can reopen it there, and -- for a view
+// reached by an in-definition (recursive) lookup -- the word that view was
+// looked up with. Empty `word` means word-select's own lookup word.
+struct DictionarySwitchResult {
+  int page = 0;
+  std::string word;
+};
+
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   IntervalResult, PageResult, ClippingResult, ProgressChangeResult, NetworkModeResult,
+                                   FootnoteResult, FilePathResult, DictionarySwitchResult>;
+#else
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
                  PageResult, ClippingResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+#endif
 
 struct ActivityResult {
   bool isCancelled = false;
