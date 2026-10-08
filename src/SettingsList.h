@@ -122,44 +122,55 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
 }
 
 inline constexpr char DICTIONARY_SETTING_KEY[] = "dictionaryName";
+#ifdef CROSSPOINT_DICT_SECONDARY
+inline constexpr char SECONDARY_DICTIONARY_SETTING_KEY[] = "secondaryDictionaryName";
+#endif
 
 // Build the dictionary selection setting dynamically from the folders discovered
 // under /dictionaries. "None" plus one option per dictionary; the selected folder
 // name persists in SETTINGS.dictionaryName (saved/loaded manually in
 // CrossPointSettings::toJson/fromJson — the generic loop skips dynamic entries).
-inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries) {
+// The secondary-dictionary row (CROSSPOINT_DICT_SECONDARY) reuses this with its
+// own label, key and field; the defaults are the primary row.
+using DictionaryNameField = char (CrossPointSettings::*)[sizeof(CrossPointSettings::dictionaryName)];
+inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>& dictionaries,
+                                          const StrId nameId = StrId::STR_DICTIONARY,
+                                          const char* const key = DICTIONARY_SETTING_KEY,
+                                          const DictionaryNameField field = &CrossPointSettings::dictionaryName) {
   std::vector<std::string> folderNames;
   folderNames.reserve(dictionaries.size());
   std::transform(dictionaries.begin(), dictionaries.end(), std::back_inserter(folderNames),
                  [](const DictionaryEntry& d) { return d.name; });
 
   SettingInfo s;
-  s.nameId = StrId::STR_DICTIONARY;
-  s.key = DICTIONARY_SETTING_KEY;  // web settings API; persisted by name, not by the generic loop
+  s.nameId = nameId;
+  s.key = key;  // web settings API; persisted by name, not by the generic loop
   s.type = SettingType::ENUM;
   s.enumStringValues.reserve(folderNames.size() + 1);
   s.enumStringValues.push_back(I18N.get(StrId::STR_NONE_OPT));
   s.enumStringValues.insert(s.enumStringValues.end(), folderNames.begin(), folderNames.end());
   s.category = StrId::STR_CAT_READER;
 
-  s.valueGetter = [folderNames]() -> uint8_t {
+  s.valueGetter = [folderNames, field]() -> uint8_t {
     for (size_t i = 0; i < folderNames.size(); i++) {
       // Compare within the settings field capacity: an over-long folder name is
       // stored truncated, and must still match its list entry.
-      if (strncmp(folderNames[i].c_str(), SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName) - 1) == 0) {
+      if (strncmp(folderNames[i].c_str(), SETTINGS.*field, sizeof(SETTINGS.*field) - 1) == 0) {
         return static_cast<uint8_t>(i + 1);
       }
     }
     return 0;  // "None", also when the stored folder no longer exists
   };
 
-  s.valueSetter = [folderNames](uint8_t v) {
+  s.valueSetter = [folderNames, field](uint8_t v) {
+    char* const name = SETTINGS.*field;
+    constexpr size_t capacity = sizeof(CrossPointSettings::dictionaryName);
     if (v == 0 || v > folderNames.size()) {
-      SETTINGS.dictionaryName[0] = '\0';
+      name[0] = '\0';
       return;
     }
-    strncpy(SETTINGS.dictionaryName, folderNames[v - 1].c_str(), sizeof(SETTINGS.dictionaryName) - 1);
-    SETTINGS.dictionaryName[sizeof(SETTINGS.dictionaryName) - 1] = '\0';
+    strncpy(name, folderNames[v - 1].c_str(), capacity - 1);
+    name[capacity - 1] = '\0';
   };
 
   return s;
@@ -335,9 +346,19 @@ void forEachSetting(const SdCardFontRegistry* registry, const std::vector<Dictio
   bool dictionaryPending = dictionaries && !dictionaries->empty();
   const auto visitDictionary = [&] {
     dictionaryPending = false;
-    if (!wants(DICTIONARY_SETTING_KEY)) return;
-    SettingInfo s = buildDictionarySetting(*dictionaries);
-    visit(s);
+    if (wants(DICTIONARY_SETTING_KEY)) {
+      SettingInfo s = buildDictionarySetting(*dictionaries);
+      visit(s);
+    }
+#ifdef CROSSPOINT_DICT_SECONDARY
+    // Right after the primary row: same folder list, its own field.
+    if (wants(SECONDARY_DICTIONARY_SETTING_KEY)) {
+      SettingInfo s =
+          buildDictionarySetting(*dictionaries, StrId::STR_SECONDARY_DICTIONARY, SECONDARY_DICTIONARY_SETTING_KEY,
+                                 &CrossPointSettings::secondaryDictionaryName);
+      visit(s);
+    }
+#endif
   };
   auto each = [&](SettingInfo& s) {
     if (isHiddenOnDevice(s)) return;
@@ -353,9 +374,14 @@ void forEachSetting(const SdCardFontRegistry* registry, const std::vector<Dictio
 // UI callers own the list for runtime filtering and font/dictionary options.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
+#ifdef CROSSPOINT_DICT_SECONDARY
+  constexpr size_t dictionaryRows = 2;  // primary + secondary, see forEachSetting()
+#else
+  constexpr size_t dictionaryRows = 1;
+#endif
   std::vector<SettingInfo> v;
   // Room for every base entry and the dictionary, so the list never reallocates.
-  v.reserve(countBaseSettings() + (dictionaries && !dictionaries->empty() ? 1 : 0));
+  v.reserve(countBaseSettings() + (dictionaries && !dictionaries->empty() ? dictionaryRows : 0));
   forEachSetting(
       registry, dictionaries, [](const char*) { return true; }, [&v](SettingInfo& s) { v.push_back(std::move(s)); });
   return v;
