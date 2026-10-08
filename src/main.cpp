@@ -468,7 +468,18 @@ static void deliverSleepPluginEvents() {
     vars[varCount++] = {"percent", percent};
   }
   pluginevents::emit(pluginevents::Event::SleepEnter, vars, varCount);
+  // Every draw below (the join popup, and the drain's per-event toasts) goes
+  // straight into the framebuffer, so it takes the RenderLock like any other
+  // draw from this task. Without it the render task can be mid-render -- and,
+  // on a FrameBufferLoan (chapter-load image probes), holding a framebuffer
+  // that GfxRenderer has nulled -- while this draws, which faults instead of
+  // sleeping. The drain's HTTP runs under it too: the render task has nothing
+  // to do this close to sleep, and this task holds no other lock that a
+  // render could wait on (HalPowerManager::Lock is not a mutex here; the
+  // order RenderLock -> modeMutex is the established one). The WiFi join
+  // stays outside it.
   if (WiFi.status() == WL_CONNECTED) {
+    RenderLock lock;
     pluginevents::drain(&renderer);
     return;
   }
@@ -480,7 +491,10 @@ static void deliverSleepPluginEvents() {
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
   if (!cred) return;
 
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  {
+    RenderLock lock;
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  }
   WiFi.mode(WIFI_STA);
   WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
   const unsigned long joinDeadline = millis() + 10000;
@@ -489,6 +503,7 @@ static void deliverSleepPluginEvents() {
   }
   if (WiFi.status() == WL_CONNECTED) {
     trustedtime::startSync();  // snap the clock floor while the network is up
+    RenderLock lock;
     pluginevents::drain(&renderer);
   } else {
     LOG_DBG("MAIN", "Sleep-event WiFi join timed out; deferring delivery");
