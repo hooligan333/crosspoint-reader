@@ -19,7 +19,9 @@
 // pencil button under the page counter, and Confirm, that open the keyboard
 // on the headword. A confirmed edit finishes this activity with a
 // KeyboardResult carrying the new word; the launcher owns the Dictionary and
-// runs the new lookup once this definition has been freed.
+// runs the new lookup once this definition has been freed. The secondary
+// dictionary's switch button (CROSSPOINT_DICT_SECONDARY) round-trips the same
+// way, with a DictionarySwitchResult.
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
@@ -29,6 +31,17 @@ class DictionaryDefinitionActivity final : public Activity {
         definition(std::move(definition)),
         htmlDefinition(htmlDefinition),
         editable(editable) {}
+
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Show the switch button (editable views only, touch boards) labelled with
+  // the dictionary a tap flips to; empty hides it. A tap finishes this activity
+  // with a DictionarySwitchResult carrying the current page, and the launcher
+  // runs the lookup.
+  void setSwitchTarget(std::string targetName) { switchTarget = std::move(targetName); }
+  // Open on this page instead of the first (clamped to the laid-out pages): a
+  // failed switch reopens the previous definition where the user was.
+  void setStartPage(const int page) { startPage = page; }
+#endif
 
   void onEnter() override;
   void onExit() override;
@@ -64,6 +77,19 @@ class DictionaryDefinitionActivity final : public Activity {
     int size;
   };
 
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Switch button tap target: the swap glyph plus the target's name, left of
+  // the pencil on the same row.
+  struct SwitchBox {
+    int x;
+    int y;
+    int width;
+    int height;
+  };
+  SwitchBox switchBox() const;
+  bool hasSwitchButton() const;
+#endif
+
   ContentFrame contentFrame() const;
   EditBox editBox() const;
   void openEditor();
@@ -91,4 +117,11 @@ class DictionaryDefinitionActivity final : public Activity {
   int currentPage = 0;
   int totalPages = 1;
   ButtonNavigator buttonNavigator;
+#ifdef CROSSPOINT_DICT_SECONDARY
+  int startPage = 0;
+  std::string switchTarget;
+  // switchTarget ellipsized to the row in onEnter(), and its drawn width.
+  std::string switchLabel;
+  int switchLabelWidth = 0;
+#endif
 };

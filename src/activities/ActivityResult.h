@@ -67,9 +67,22 @@ struct FilePathResult {
   std::string path;
 };
 
+#ifdef CROSSPOINT_DICT_SECONDARY
+// A definition page's switch button: look the same word up in the other
+// dictionary. Word-select owns the word and the dictionaries; the result only
+// carries the page the view was on, so a failed switch can reopen it there.
+struct DictionarySwitchResult {
+  int page = 0;
+};
+
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   IntervalResult, PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult,
+                                   FilePathResult, DictionarySwitchResult>;
+#else
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
                  PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+#endif
 
 struct ActivityResult {
   bool isCancelled = false;

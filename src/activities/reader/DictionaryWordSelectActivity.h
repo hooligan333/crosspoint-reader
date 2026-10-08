@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "activities/Activity.h"
@@ -45,6 +46,11 @@ class DictionaryWordSelectActivity final : public Activity {
   int wordAt(int x, int y) const;
   void moveVertical(int direction);
   void performLookup(const char* word);
+#ifdef CROSSPOINT_DICT_SECONDARY
+  void switchDictionary(int fromPage);
+  const char* activeDictionaryName() const;
+  bool secondaryAvailable();
+#endif
   bool drawHighlightWithSnapshot();
   void drawHints() const;
 
@@ -63,6 +69,29 @@ class DictionaryWordSelectActivity final : public Activity {
   bool dictOpenAttempted = false;
   bool dictOpenOk = false;
   bool dictNeedsIndex = false;
+
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Secondary dictionary (settings: secondaryDictionaryName). One Dictionary
+  // stays open at a time: a switch reopens `dict` on the other folder (open()
+  // only resolves paths; each folder keeps its own .qidx/.sidx sidecars, so
+  // flipping back is cheap). Per lookup session: every new word selection
+  // starts in the primary.
+  bool usingSecondary = false;    // which dictionary lookups go to
+  bool openIsSecondary = false;   // which one `dict` was last opened on
+  bool switchPending = false;     // the next performLookup() is a switch
+  bool reopenAfterPopup = false;  // a switch failed: reopen the previous view once the popup clears
+  int switchFromPage = 0;         // page the switched-from view was on
+  int restorePage = 0;            // page the next view opens on (only a failed switch's reopen sets it)
+  // -1 unknown, 0 none/unusable (also set when a switch's target fails to open
+  // or index), 1 configured and resolvable
+  int8_t secondaryState = -1;
+  // The word the current definition was looked up with (the page token or the
+  // edited word, never the matched headword), so a switch applies the other
+  // dictionary's own synonym and stem fallbacks to it.
+  std::string sessionWord;
+  // Formatted popup text ("Not in <folder>"); empty means popupMsg is shown.
+  char popupText[64] = {};
+#endif
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;

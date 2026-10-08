@@ -8,12 +8,19 @@
 
 #include <cctype>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "HapticFeedback.h"
 #include "components/UITheme.h"
+#ifdef CROSSPOINT_DICT_SECONDARY
+#include <strings.h>  // strncasecmp
+
+#include "util/DictionaryRegistry.h"
+#endif
 
 namespace {
 
@@ -153,13 +160,63 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
   }
 }
 
+#ifdef CROSSPOINT_DICT_SECONDARY
+const char* DictionaryWordSelectActivity::activeDictionaryName() const {
+  return usingSecondary ? SETTINGS.secondaryDictionaryName : SETTINGS.dictionaryName;
+}
+
+// Checked once per word-select session (one directory listing): a secondary
+// that is unset, the same folder as the primary (compared case-insensitively,
+// as FAT resolves it), or missing from the card gets no switch button. A switch
+// whose target then fails to open or index also clears it (performLookup).
+bool DictionaryWordSelectActivity::secondaryAvailable() {
+  if (secondaryState < 0) {
+    std::string basePath;
+    const char* secondary = SETTINGS.secondaryDictionaryName;
+    secondaryState = secondary[0] != '\0' &&
+                             strncasecmp(secondary, SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName)) != 0 &&
+                             DictionaryRegistry::resolveBasePath(secondary, basePath)
+                         ? 1
+                         : 0;
+  }
+  return secondaryState == 1;
+}
+
+// The definition's switch button: the same word in the other dictionary. The
+// definition is already freed (result handlers run after the pop), and `dict`
+// is reopened on the target, so memory stays flat. `fromPage` is where the user
+// was, for the reopen if the target cannot show the word.
+void DictionaryWordSelectActivity::switchDictionary(const int fromPage) {
+  switchFromPage = fromPage;
+  usingSecondary = !usingSecondary;
+  switchPending = true;
+  performLookup(sessionWord.c_str());
+}
+#endif
+
 // `word` must stay valid for the call: a page token, or an edited word held by
 // the definition activity's result.
 void DictionaryWordSelectActivity::performLookup(const char* word) {
   popup = Popup::Busy;
+#ifdef CROSSPOINT_DICT_SECONDARY
+  const bool switching = switchPending;
+  switchPending = false;
+  const int startPage = restorePage;  // non-zero only for a failed switch's reopen
+  restorePage = 0;
+  popupText[0] = '\0';
+  if (word != sessionWord.c_str()) sessionWord = word;
+  // `dict` is open on the other dictionary: reopen it (and re-ask needsIndex(),
+  // so a never-indexed target goes through the Indexing popup below).
+  if (dictOpenAttempted && openIsSecondary != usingSecondary) dictOpenAttempted = false;
+#endif
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
+#ifdef CROSSPOINT_DICT_SECONDARY
+    openIsSecondary = usingSecondary;
+    dictOpenOk = dict.open(activeDictionaryName());
+#else
     dictOpenOk = dict.open(SETTINGS.dictionaryName);
+#endif
     // needsIndex() opens and validates the .qidx sidecar, so ask it once per
     // open rather than once per word: the answer only changes when we build
     // the sidecar ourselves, which is handled below.
@@ -180,6 +237,39 @@ void DictionaryWordSelectActivity::performLookup(const char* word) {
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
   const bool found = ok && dict.lookup(word, definition, headword, &result);
 
+#ifdef CROSSPOINT_DICT_SECONDARY
+  if (switching && !found) {
+    // Every way the target can fail to show the word (a miss, an open or index
+    // failure, a lookup error) ends the same: its popup, then -- once the popup
+    // clears, from loop() -- a best-effort reopen of the previous definition on
+    // the page the user was on. The reopen is an ordinary lookup (switching is
+    // false), so if it fails too its own popup shows and the user lands on
+    // word-select: no loop, no second retry.
+    const char* const target = activeDictionaryName();
+    usingSecondary = !usingSecondary;  // stay with the dictionary the view came from
+    restorePage = switchFromPage;
+    reopenAfterPopup = true;
+    if (!ok) {
+      // The target would not open or index (folder or card gone, index build
+      // failed): drop the switch button for the rest of the session instead of
+      // failing -- or re-running a slow failing index build -- on every tap.
+      // The reopen goes back to the other folder, so it never rebuilds this one.
+      secondaryState = 0;
+    }
+    if (ok && result == Dictionary::LookupResult::NotFound) {
+      // Translation strings bypass -Wformat: STR_DICT_NOT_IN must keep exactly
+      // one %s and no other conversion in every catalog (host-tested in
+      // test/dict_switch_layout).
+      snprintf(popupText, sizeof(popupText), tr(STR_DICT_NOT_IN), target);
+      popup = Popup::Error;
+      popupTime = millis();
+      requestUpdate();
+      return;
+    }
+    // Open, index and lookup errors fall through to their usual popups.
+  }
+#endif
+
   // A genuine miss still opens the (blank) definition view under the cleaned
   // word, so the pencil can correct it; only real failures get a popup.
   const bool notFound = ok && !found && result == Dictionary::LookupResult::NotFound;
@@ -189,19 +279,30 @@ void DictionaryWordSelectActivity::performLookup(const char* word) {
       headword = Dictionary::cleanWord(word);
       if (headword.empty()) headword = word;
     }
-    startActivityForResult(
-        std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                       std::move(definition), found && dict.definitionsAreHtml(),
-                                                       /*editable=*/true),
-        [this](const ActivityResult& closed) {
-          // An edited word: the finished definition is already freed, so the
-          // re-lookup holds at most one definition at a time.
-          if (const auto* edited = std::get_if<KeyboardResult>(&closed.data); edited && !closed.isCancelled) {
-            performLookup(edited->text.c_str());
-            return;
-          }
-          requestUpdate();
-        });
+    auto viewer = std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
+                                                                 std::move(definition),
+                                                                 found && dict.definitionsAreHtml(), /*editable=*/true);
+#ifdef CROSSPOINT_DICT_SECONDARY
+    if (secondaryAvailable()) {
+      viewer->setSwitchTarget(usingSecondary ? SETTINGS.dictionaryName : SETTINGS.secondaryDictionaryName);
+    }
+    viewer->setStartPage(startPage);
+#endif
+    startActivityForResult(std::move(viewer), [this](const ActivityResult& closed) {
+#ifdef CROSSPOINT_DICT_SECONDARY
+      if (const auto* switched = std::get_if<DictionarySwitchResult>(&closed.data); switched && !closed.isCancelled) {
+        switchDictionary(switched->page);
+        return;
+      }
+#endif
+      // An edited word: the finished definition is already freed, so the
+      // re-lookup holds at most one definition at a time.
+      if (const auto* edited = std::get_if<KeyboardResult>(&closed.data); edited && !closed.isCancelled) {
+        performLookup(edited->text.c_str());
+        return;
+      }
+      requestUpdate();
+    });
     return;
   }
   // Name the failure: a word that WAS found but couldn't be read is a real
@@ -248,6 +349,14 @@ void DictionaryWordSelectActivity::loop() {
   if (popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
       popup = Popup::None;
+#ifdef CROSSPOINT_DICT_SECONDARY
+      popupText[0] = '\0';
+      if (reopenAfterPopup) {
+        reopenAfterPopup = false;
+        performLookup(sessionWord.c_str());
+        return;
+      }
+#endif
       requestUpdate();
     }
     return;
@@ -258,6 +367,9 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !words.empty()) {
+#ifdef CROSSPOINT_DICT_SECONDARY
+    usingSecondary = false;  // a new word always starts in the primary
+#endif
     performLookup(words[selected].text);
     return;
   }
@@ -281,6 +393,9 @@ void DictionaryWordSelectActivity::loop() {
     if (hit >= 0) {
       haptic_feedback::touchAction();
       selected = hit;
+#ifdef CROSSPOINT_DICT_SECONDARY
+      usingSecondary = false;  // a new word always starts in the primary
+#endif
       performLookup(words[selected].text);
     }
     return;
@@ -404,7 +519,11 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     snapshotIdx = -1;
     // drawPopup overlays the framebuffer and refreshes the display itself.
     // I18N.get directly: tr() only accepts literal key names.
+#ifdef CROSSPOINT_DICT_SECONDARY
+    GUI.drawPopup(renderer, popupText[0] != '\0' ? popupText : I18N.get(popupMsg));
+#else
     GUI.drawPopup(renderer, I18N.get(popupMsg));
+#endif
     return;
   }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);

@@ -4,3 +4,4 @@
 #     --svgdir freeink-sdk/libs/assets/Icons/lucide/icons \
 #     --sizes 24 --out src/components/icons/dictionaryIcons.h
 dict-edit = pencil
+dict-switch = arrow-right-left
