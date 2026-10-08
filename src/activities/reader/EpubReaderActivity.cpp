@@ -239,6 +239,36 @@ void EpubReaderActivity::onExit() {
 #endif
   ReaderActivity::onExit();
 }
+
+void EpubReaderActivity::prepareForSleep() {
+  ReaderActivity::prepareForSleep();
+  // Quick Resume and Transparent sleep keep the framebuffer as the sleep
+  // frame: the moon icon or the popup is drawn onto it, Quick Resume saves it
+  // to SD and restores it on wake. A tick that lent the framebuffer leaves it
+  // white while the glass still shows the page (pageBufferStale), and the
+  // redraw is only queued for this activity's next loop(), which never comes on
+  // the way into sleep. So the sleep frame would be a blank page.
+  //
+  // Called only from enterDeepSleep() (via ActivityManager::prepareForSleep),
+  // on the loop task, with the RenderLock held, before anything there draws.
+  // Stopping the task first is what makes the check final: with it joined and
+  // the render task shut out by the lock, nothing can lend again before the
+  // sleep screen paints. stopBgBuildTask() expects exactly this context (it is
+  // what onExit() runs under) and is a no-op when onExit() later repeats it.
+  stopBgBuildTask();
+  // Only while the reader's page is what the frame is meant to hold: a screen
+  // pushed on top owns the framebuffer (and since the tick stopped lending
+  // under one, it cannot have been blanked there), and the load-failure and
+  // end-of-book screens are not drawn by renderBook(). renderBook() is the
+  // render task's own redraw, and with the lock held the loop task may run it;
+  // its stack is at least the render task's. It clears pageBufferStale once the
+  // page is back.
+  if (pageBufferStale && activityManager.isCurrentActivity(this) && !loadFailurePopup.isActive() &&
+      !isAtEndOfBook()) {
+    LOG_DBG("ERS", "Sleep entry with a lent framebuffer: redrawing the page first");
+    renderBook();
+  }
+}
 #endif
 
 bool EpubReaderActivity::loadBook() {

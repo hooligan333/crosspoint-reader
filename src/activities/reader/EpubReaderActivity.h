@@ -721,6 +721,10 @@ class EpubReaderActivity final : public ReaderActivity {
 #ifdef CROSSPOINT_BG_BUILD_TASK
   void onEnter() override;
   void onExit() override;
+  // Sleep entry (ActivityManager::prepareForSleep, under the RenderLock): stops
+  // the build task and, if a tick's framebuffer loan left the page white, puts
+  // it back before the sleep screen keeps or saves the frame. See the .cpp.
+  void prepareForSleep() override;
 #endif
   void loop() override;
   void render(RenderLock&& lock) override;
