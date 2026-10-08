@@ -440,7 +440,7 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
 }
 
 bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn,
-                         const bool mayReleaseFontCaches) {
+                         const bool mayReleaseFontCaches, const bool mayLendFrameBuffer) {
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
@@ -454,6 +454,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   }
   buildComplete_ = false;
   builtPageCount_ = 0;
+  speculativeBuild_ = !mayLendFrameBuffer;  // see the header
+  speculativeLayoutDeclined_ = false;
   // Pages from a loaded partial stay readable (from filePath) while this build writes
   // to the tmp .bin, so availability never drops below the partial's watermark.
   pageCount = partial_ ? partialPageCount_ : 0;
@@ -587,6 +589,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
   ctx->parser->setTextSpacing(spec.characterSpacing, spec.wordSpacingPercent);
   ctx->parser->setParagraphIndentSpaces(spec.paragraphIndentSpaces);
+  ctx->parser->setMayLendFrameBuffer(mayLendFrameBuffer);  // see the header
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   build_ = std::move(ctx);
 
@@ -597,6 +600,11 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   }
   build_->totalBytes = build_->parser->parseTotalBytes();
   return true;
+}
+
+void Section::setMayLendFrameBuffer(const bool may) {
+  if (build_ && build_->parser) build_->parser->setMayLendFrameBuffer(may);
+  if (may) speculativeBuild_ = false;
 }
 
 bool Section::buildSomeMore(const int maxPages, bool (*yieldNow)()) {
@@ -613,6 +621,16 @@ bool Section::buildSomeMore(const int maxPages, bool (*yieldNow)()) {
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
       LOG_ERR("SCT", "Parse error during incremental build");
       abandonBuild();
+      return false;
+    }
+    // Checked after every step, before Done can finalize: a speculative layout
+    // that lost an image's dimensions to the lending gate must never reach the
+    // card, as a finished cache or as a suspended partial (see the header).
+    if (speculativeBuild_ && build_->parser->dimsUnknownWithoutLoan()) {
+      LOG_INF("SCT", "Speculative build of spine %d hit an image it could not size without a loan; dropped",
+              spineIndex);
+      dropBuild();
+      speculativeLayoutDeclined_ = true;
       return false;
     }
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
@@ -921,6 +939,27 @@ void Section::suspendBuild() {
   }
   build_.reset();
   buildComplete_ = false;
+  pageCount = partial_ ? partialPageCount_ : 0;
+  builtPageCount_ = 0;
+}
+
+// suspendBuild() with nothing committed, and abandonBuild() without deleting
+// filePath: the in-progress tmp goes, whatever was already on the card stays.
+void Section::dropBuild() {
+  if (!build_) return;
+  if (build_->parser) build_->parser->abortParse();
+  if (build_->cssParser) build_->cssParser->clear();
+  if (file) {
+    // Explicit close() required before remove (member variable, O_RDWR handle).
+    file.close();
+    Storage.remove(binTmpPath().c_str());
+  }
+  if (!build_->reusedHtml && Storage.exists(build_->tmpHtmlPath.c_str())) {
+    Storage.remove(build_->tmpHtmlPath.c_str());
+  }
+  build_.reset();
+  buildComplete_ = false;
+  speculativeBuild_ = false;
   pageCount = partial_ ? partialPageCount_ : 0;
   builtPageCount_ = 0;
 }
