@@ -25,7 +25,9 @@
 // open the keyboard on the headword. A confirmed edit finishes this activity
 // with a KeyboardResult carrying the new word; the launcher owns the Dictionary
 // and runs the new lookup once this definition has been freed. (Fork r8: short
-// Confirm stays upstream's in-definition lookup, #4063.)
+// Confirm stays upstream's in-definition lookup, #4063.) The secondary
+// dictionary's switch button (CROSSPOINT_DICT_SECONDARY) round-trips the same
+// way, with a DictionarySwitchResult.
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
@@ -36,6 +38,18 @@ class DictionaryDefinitionActivity final : public Activity {
         editable(editable) {}
 
   bool enableLookup(Dictionary& dictionary, DictLocation location);
+
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Show the switch button (editable views only, touch boards) labelled with
+  // the dictionary a tap flips to; empty hides it. A tap finishes this activity
+  // with a DictionarySwitchResult carrying the current page (and, for a view
+  // reached by an in-definition lookup, that lookup's word), and the launcher
+  // runs the lookup.
+  void setSwitchTarget(std::string targetName) { switchTarget = std::move(targetName); }
+  // Open on this page instead of the first (clamped to the laid-out pages): a
+  // failed switch reopens the previous definition where the user was.
+  void setStartPage(const int page) { startPage = page; }
+#endif
 
   void onEnter() override;
   void onExit() override;
@@ -73,6 +87,18 @@ class DictionaryDefinitionActivity final : public Activity {
   int actionRowHeight() const;
   EditBox editBox() const;
   void openEditor();
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Switch button tap target: the swap glyph plus the target's name, left of
+  // the pencil on the same row.
+  struct SwitchBox {
+    int x;
+    int y;
+    int width;
+    int height;
+  };
+  SwitchBox switchBox() const;
+  bool hasSwitchButton() const;
+#endif
 
   struct Definition {
     std::string headword;
@@ -86,6 +112,11 @@ class DictionaryDefinitionActivity final : public Activity {
     int totalPages = 1;
     int selectionPage = 0;
     ClipSelectionActivity::Selection selection;
+#ifdef CROSSPOINT_DICT_SECONDARY
+    // The word this view was looked up with by an in-definition (recursive)
+    // lookup; empty for the root view (word-select holds that word).
+    std::string queryWord;
+#endif
 
     void releasePayload() {
       std::string{}.swap(text);
@@ -108,6 +139,9 @@ class DictionaryDefinitionActivity final : public Activity {
     int selectionPage = 0;
     ClipSelectionActivity::Selection selection;
     bool styled = false;
+#ifdef CROSSPOINT_DICT_SECONDARY
+    std::string queryWord;  // Definition::queryWord of the stacked view
+#endif
   };
 
   struct LookupState {
@@ -143,4 +177,11 @@ class DictionaryDefinitionActivity final : public Activity {
   bool messageVisible = false;
   bool initialLayoutFailed = false;
   ButtonNavigator buttonNavigator;
+#ifdef CROSSPOINT_DICT_SECONDARY
+  int startPage = 0;
+  std::string switchTarget;
+  // switchTarget ellipsized to the row in onEnter(), and its drawn width.
+  std::string switchLabel;
+  int switchLabelWidth = 0;
+#endif
 };

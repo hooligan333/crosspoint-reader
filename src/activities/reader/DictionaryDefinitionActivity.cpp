@@ -28,6 +28,10 @@
 #include "components/icons/dictionaryIcons.h"
 #include "util/DictHtmlPages.h"
 #include "util/DictPlainPaging.h"
+#ifdef CROSSPOINT_DICT_SECONDARY
+#include "fontIds.h"
+#include "util/DictSwitchLayout.h"
+#endif
 #include "util/HtmlToPlainText.h"
 
 namespace fui = freeink::ui;
@@ -37,6 +41,12 @@ namespace {
 // Pencil button: a finger-sized square centered on the 24 px glyph, on its own
 // action row between the header and the body's first line (touch boards).
 constexpr int EDIT_HIT_SIZE = 44;
+
+#ifdef CROSSPOINT_DICT_SECONDARY
+// Switch button: swap glyph at the body's left edge on the pencil's row, the
+// target dictionary's name this far to its right.
+constexpr int SWITCH_LABEL_GAP = 6;
+#endif
 
 // Keyboard cap for an edited word: well above any headword, well below the
 // dictionary's 256-byte scan buffer.
@@ -167,6 +177,23 @@ void DictionaryDefinitionActivity::onEnter() {
     content.lines.clear();
     showMessage(StrId::STR_DICT_LOW_MEMORY);
   }
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // A failed switch reopens this definition on the page the user was reading.
+  content.currentPage = dict_switch_layout::clampPage(startPage, content.totalPages);
+  // Ellipsize the target's name so the button stops short of the pencil's tap
+  // target and of the row's midpoint (the rest of the row still turns pages).
+  if (actionRowHeight() > 0 && !switchTarget.empty()) {
+    const SwitchBox box = switchBox();
+    const int pad = (EDIT_HIT_SIZE - icon_dict_switch_24.w) / 2;
+    const int labelX = box.x + pad + icon_dict_switch_24.w + SWITCH_LABEL_GAP;
+    const BodyArea body = bodyArea();
+    const int maxWidth = dict_switch_layout::labelMaxWidth(labelX, pad, editBox().x, body.x, body.width);
+    if (maxWidth > 0) {
+      switchLabel = renderer.truncatedText(UI_10_FONT_ID, switchTarget.c_str(), maxWidth);
+      switchLabelWidth = renderer.getTextWidth(UI_10_FONT_ID, switchLabel.c_str());
+    }
+  }
+#endif
   requestUpdate();
 }
 
@@ -232,6 +259,24 @@ DictionaryDefinitionActivity::EditBox DictionaryDefinitionActivity::editBox() co
   const int iconX = body.x + body.width - icon_dict_edit_24.w;
   return {iconX - inset, body.y - actionRowHeight(), EDIT_HIT_SIZE};
 }
+
+#ifdef CROSSPOINT_DICT_SECONDARY
+bool DictionaryDefinitionActivity::hasSwitchButton() const { return actionRowHeight() > 0 && !switchLabel.empty(); }
+
+// Same row and height as the pencil's tap target, starting at the body's left
+// edge less the same inset, so the glyph lines up with the text below it. Spans
+// the glyph and the drawn label plus the same inset of touch padding, at least
+// the glyph's 44 px square (switchLabelWidth is 0 before onEnter measures it).
+DictionaryDefinitionActivity::SwitchBox DictionaryDefinitionActivity::switchBox() const {
+  const BodyArea body = bodyArea();
+  const EditBox edit = editBox();
+  const int inset = (EDIT_HIT_SIZE - icon_dict_switch_24.w) / 2;
+  const int x = body.x - inset;
+  const int labelX = x + inset + icon_dict_switch_24.w + SWITCH_LABEL_GAP;
+  return {x, edit.y, dict_switch_layout::hitWidth(x, labelX, switchLabelWidth, inset, EDIT_HIT_SIZE, edit.x),
+          EDIT_HIT_SIZE};
+}
+#endif
 
 // The definition stays alive under the keyboard so Cancel returns to it
 // unchanged; only a confirmed, non-empty edit finishes it.
@@ -466,6 +511,10 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
   const bool found =
       back ? lookup->dictionary.readDefinition(lookup->history[lookup->depth - 1].location, next.text, &result)
            : lookup->dictionary.lookup(lookup->pendingWord.c_str(), next.text, next.headword, &result, &location);
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // The word a switch from the new view must look up (see Definition::queryWord).
+  if (!back) next.queryWord = lookup->pendingWord;
+#endif
   lookup->pendingWord.clear();
   const auto recover = [this, back, styled, &next](const StrId error) {
     next.releasePayload();
@@ -512,6 +561,9 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
     next.currentPage = previous.page;
     next.selectionPage = previous.selectionPage;
     next.selection = previous.selection;
+#ifdef CROSSPOINT_DICT_SECONDARY
+    next.queryWord = std::move(previous.queryWord);
+#endif
     lookup->location = previous.location;
     --lookup->depth;
   } else {
@@ -522,6 +574,9 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
     previous.selectionPage = content.selectionPage;
     previous.selection = content.selection;
     previous.styled = styled;
+#ifdef CROSSPOINT_DICT_SECONDARY
+    previous.queryWord = std::move(content.queryWord);
+#endif
     lookup->location = location;
   }
   content = std::move(next);
@@ -721,6 +776,16 @@ void DictionaryDefinitionActivity::loop() {
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTapped(tx, ty)) {
+#ifdef CROSSPOINT_DICT_SECONDARY
+    if (hasSwitchButton()) {
+      const SwitchBox box = switchBox();
+      if (tx >= box.x && tx < box.x + box.width && ty >= box.y && ty < box.y + box.height) {
+        setResult(DictionarySwitchResult{content.currentPage, content.queryWord});
+        finish();
+        return;
+      }
+    }
+#endif
     if (actionRowHeight() > 0) {
       const EditBox box = editBox();
       if (tx >= box.x && tx < box.x + box.size && ty >= box.y && ty < box.y + box.size) {
@@ -825,6 +890,19 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     target.bitmap(fui::Rect{static_cast<int16_t>(box.x), static_cast<int16_t>(box.y), size, size},
                   fui::bitmapFromIcon(icon_dict_edit_24), fui::BitmapMode::Center);
   }
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Switch button: swap glyph plus the dictionary a tap flips to.
+  if (hasSwitchButton()) {
+    const SwitchBox box = switchBox();
+    const auto size = static_cast<int16_t>(EDIT_HIT_SIZE);
+    fui::GfxRendererTarget target(renderer);
+    target.bitmap(fui::Rect{static_cast<int16_t>(box.x), static_cast<int16_t>(box.y), size, size},
+                  fui::bitmapFromIcon(icon_dict_switch_24), fui::BitmapMode::Center);
+    const int labelX = box.x + (EDIT_HIT_SIZE - icon_dict_switch_24.w) / 2 + icon_dict_switch_24.w + SWITCH_LABEL_GAP;
+    const int labelY = box.y + (EDIT_HIT_SIZE - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+    renderer.drawText(UI_10_FONT_ID, labelX, labelY, switchLabel.c_str());
+  }
+#endif
 
   // Body: two-pass draw inside a prewarm scope (same pattern as the reader's
   // renderContents) so SD-card font glyphs load from SD in one batch instead
