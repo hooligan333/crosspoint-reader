@@ -183,7 +183,16 @@ class EpubReaderActivity final : public ReaderActivity {
   // over the page instead of pushing the full-screen list menu. Select opens the
   // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
   enum class Overlay { None, Toolbar, Contents, Text, More };
+#ifdef CROSSPOINT_BG_BUILD_TASK
+  // Atomic here because the core-0 build task reads it: upstream #3802 holds
+  // build ticks off while an overlay is open (they can lend the framebuffer the
+  // chrome is painted on), and that gate lives in bgBuildTaskLoop() with this
+  // flag. Written only by the loop task; every use below goes through the
+  // implicit seq_cst load/store, so the code reads the same either way.
+  std::atomic<Overlay> overlay{Overlay::None};
+#else
   Overlay overlay = Overlay::None;
+#endif
   int focusedTool = 0;  // toolbar tool focus: 0=Contents, 1=Text, 2=More
   int panelIndex = 0;   // selected row within the active panel
   // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
@@ -210,6 +219,10 @@ class EpubReaderActivity final : public ReaderActivity {
   // A background build step lent the framebuffer: it came back white while the panel still shows the
   // page. Until renderBook() redraws, nothing may be painted straight onto it. Set by the loop task,
   // cleared by the render task.
+  // Fork (CROSSPOINT_BG_BUILD_TASK): the build ticks run on the core-0 task, which sets this
+  // instead, inside the same RenderLock scope it lent the framebuffer in, and hands the redraw
+  // to the loop task through bgPageStaleNotify. Readers that paint onto the page must therefore
+  // test it under the RenderLock (see openOverlay()).
   std::atomic<bool> pageBufferStale{false};
   // True while a deferred overlay chrome refresh (pushOverlayRefresh) may still
   // be running on the panel. settleOverlayRefresh() must run before the
@@ -275,6 +288,14 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> bgBuildExited{false};
   std::atomic<bool> bgBuildCompleteNotify{false};
   std::atomic<bool> bgBuildFailedNotify{false};
+  // Upstream #3802 for the task: a build tick lent the framebuffer (an image
+  // probe), so the page in it is gone while the panel still shows it. The task
+  // sets pageBufferStale itself; the loop task consumes this and requestUpdate()s,
+  // keeping redraws on the loop/render side like the other two notifies. Only
+  // this activity's loop() consumes it, so a tick lends only while this reader
+  // is the current activity; under a pushed screen it builds with lending off
+  // (see bgBuildTaskLoop()).
+  std::atomic<bool> bgPageStaleNotify{false};
   static void bgBuildTaskTrampoline(void* param);
   void bgBuildTaskLoop();
   void startBgBuildTask();
@@ -469,9 +490,22 @@ class EpubReaderActivity final : public ReaderActivity {
   //  * the inflate must never be running while a FrameBufferLoan is: the
   //    inflater claims the lent framebuffer bytes for its 43 KB of state
   //    (buildscratch::claim), and the loan takes them back and draws over them
-  //    with no synchronization. Both loans live inside renderBook()'s
-  //    chapter-load branch, behind that branch's cancel, and the locked phase
-  //    cannot start an inflate while a render holds the lock.
+  //    with no synchronization. Since upstream #3802 a loan can be taken inside
+  //    ANY build tick (the parser's image probe retry and whole-image
+  //    extraction), not just renderBook()'s chapter-load branch. It still
+  //    cannot overlap this inflate: the prebuild's own ticks never lend
+  //    (mayLendFrameBuffer=false); the active section's ticks on this task run
+  //    between passes, never during this step's unlocked phase; renderBook()'s
+  //    chapter-load branch cancels first; and its trailing extension loops need
+  //    a partial or building section, which this step refuses to start under
+  //    and which only a cancelling path (loop()'s deferred start, the
+  //    chapter-load branch) can create while one is in flight. Underneath all
+  //    of that, buildscratch's owner guard refuses claim() to every task but the
+  //    lender's, so an inflate on this task cannot take a render-task loan's
+  //    bytes regardless. The image pre-decode has the weaker gate (partial
+  //    allowed) and renderBook() does cancel it ahead of those trailing loops,
+  //    but not for the loan: their extraction fallback can write the same
+  //    img_<spine>_<n> file the pre-decode is extracting (see renderBook()).
   // Returns true when an inflate completed and was promoted.
   bool htmlInflateStep(bool& workPlausible);
   // Stop an in-flight background inflate and wait (bounded) for it to

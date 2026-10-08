@@ -30,6 +30,12 @@ class ChapterHtmlSlimParser {
   std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
   bool imagePopupFired = false;   // popupFn fired for the first image probe (single-shot)
+  // Whether the image probe retry and the whole-image extraction (#3802) may take a
+  // GfxRenderer::FrameBufferLoan. See setMayLendFrameBuffer().
+  bool mayLendFrameBuffer = true;
+  // Sticky: an image's dimensions stayed unknown while lending was off. See
+  // dimsUnknownWithoutLoan().
+  bool dimsUnknownWithoutLoan_ = false;
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
@@ -222,6 +228,21 @@ class ChapterHtmlSlimParser {
     wordSpacingPercent = wordPercent;
   }
   void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
+  // A loan hands the framebuffer back white while the panel still shows the page,
+  // so whoever drives a lending build has to redraw afterwards. That is fine for a
+  // build the reader is waiting on; a SPECULATIVE build (the fork's next-spine
+  // prebuild) must not blank the live page to serve work that may never be shown.
+  // false = the pre-#3802 behavior: a header probe that fails on the heap falls
+  // through to the whole-image extraction, which then inflates from the heap too
+  // (and may leave the image's dimensions unknown under heap pressure). Read on
+  // every image, so it can be switched on mid-build when a prebuild is adopted.
+  void setMayLendFrameBuffer(const bool may) { mayLendFrameBuffer = may; }
+  // True once an image was laid out with unknown dimensions while lending was off:
+  // the header probe failed, the loan retry was skipped, and the heap extraction
+  // fallback did not produce dimensions either. A lending build of the same
+  // chapter could have probed that image, so this layout may differ from a
+  // foreground one from that image on. Sticky for the parser's lifetime.
+  bool dimsUnknownWithoutLoan() const { return dimsUnknownWithoutLoan_; }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();

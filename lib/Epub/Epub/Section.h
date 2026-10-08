@@ -65,7 +65,16 @@ class Section {
   // Parse watermark from the partial's trailer, for estimating the total page count.
   uint32_t partialBytesConsumed_ = 0;
   uint32_t partialTotalBytes_ = 0;
+  // The active build was started with mayLendFrameBuffer=false (a speculative
+  // prebuild) and has not been adopted since. See startBuild().
+  bool speculativeBuild_ = false;
+  // A speculative build was dropped because its layout could differ from a
+  // foreground build's. See speculativeLayoutDeclined().
+  bool speculativeLayoutDeclined_ = false;
   bool finalizeBuild();
+  // Tear the active build down without persisting anything: no commit, no
+  // partial, and any file already at filePath is left as it was.
+  void dropBuild();
   // Write the LUTs/anchor map (and, for a partial, the watermark trailer), patch the
   // header, stamp the version byte, and swap the tmp .bin over filePath.
   bool commitBuildFile(uint8_t version, uint32_t bytesConsumed, uint32_t totalBytes);
@@ -110,8 +119,30 @@ class Section {
   // from a background/speculative caller; it declines on its own heap floors
   // instead (see EpubReaderActivity's PREBUILD_BUILD_MIN_* gates), and a
   // declined prebuild costs nothing.
+  // mayLendFrameBuffer: upstream #3802 lets the chapter parser's image probe retry
+  // and its whole-image extraction borrow the framebuffer (FrameBufferLoan), which
+  // returns it white while the panel still shows the page; the caller of a lending
+  // build owes a redraw. Same split as above: right for a build the reader is
+  // waiting on, wrong for the SPECULATIVE prebuild, which must never blank the live
+  // page. Pass false from a background/speculative caller; the parser then probes
+  // and extracts from the heap as it did before #3802. setMayLendFrameBuffer()
+  // lifts it once such a build stops being speculative (an adopted prebuild).
+  // A build started with false is also held to what a foreground build would
+  // produce: if one of its images ends up with unknown dimensions because the
+  // loan was skipped, buildSomeMore() drops the build -- nothing is finalized and
+  // no partial is suspended, since either would persist a layout that differs
+  // from the reader's own build from that image on -- and returns false with
+  // speculativeLayoutDeclined() set. Like a declined prebuild, that costs only
+  // the foreground build the reader would have paid anyway.
   bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr,
-                  bool mayReleaseFontCaches = true);
+                  bool mayReleaseFontCaches = true, bool mayLendFrameBuffer = true);
+  // Forwarded to the live build's parser; a no-op with no build active (the next
+  // startBuild() takes its own argument). true also ends the build's speculative
+  // status (see startBuild); false only gates the loans.
+  void setMayLendFrameBuffer(bool may);
+  // True when the last speculative build was dropped by buildSomeMore() because
+  // an image's dimensions stayed unknown with lending off (see startBuild).
+  bool speculativeLayoutDeclined() const { return speculativeLayoutDeclined_; }
   // Lay out up to maxPages more pages (maxPages <= 0 = build to completion). Returns
   // false on error (the build is abandoned). Sets isBuildComplete() when finished.
   bool buildSomeMore(int maxPages);

@@ -19,7 +19,9 @@ std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, 
 ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath, int16_t width, int16_t height)
     : imagePath(imagePath), srcPath(srcPath), width(width), height(height) {}
 
-bool ImageDecoderFactory::isFormatSupported(const std::string&) { return false; }
+// Off by default, so <img> is skipped; the lending-gate tests switch it on.
+bool parserTestImageFormatSupported = false;
+bool ImageDecoderFactory::isFormatSupported(const std::string&) { return parserTestImageFormatSupported; }
 ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string&) { return nullptr; }
 bool ImageToFramebufferDecoder::validateAndStoreDimensions(int64_t, int64_t, ImageDimensions&, const char*) {
   return false;

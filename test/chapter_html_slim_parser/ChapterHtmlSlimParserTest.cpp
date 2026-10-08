@@ -1,3 +1,4 @@
+#include <Epub.h>
 #include <Epub/Page.h>
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
@@ -214,6 +215,102 @@ TEST_F(ChapterHtmlSlimParserTest, PassesIndentSettingsToNewTextBlock) {
 }
 
 }  // namespace
+
+// Fork (CROSSPOINT_NEXT_SECTION_PREBUILD, upstream #3802): the image-dimension
+// probe retry and the whole-image extraction may borrow the framebuffer only
+// when setMayLendFrameBuffer() allows it. Gated off, a failed header probe goes
+// straight to a heap extraction, and an image left unsized is reported through
+// dimsUnknownWithoutLoan() so Section can refuse to persist that layout.
+extern bool parserTestImageFormatSupported;
+
+namespace {
+
+struct UnprobeableImageRun {
+  int loans = 0;
+  int reads = 0;
+  bool dimsUnknownWithoutLoan = false;
+};
+
+// One <img> whose every zip read fails: the header probe finds no dimensions
+// and the extraction fallback gets no bytes (the parser then removes the file
+// it opened, so the read count is what shows the extraction was attempted).
+// Every attempt is a zip read: the header probe, the loan-backed probe retry,
+// and the whole-image extraction.
+UnprobeableImageRun parseUnprobeableImage(const bool mayLend) {
+  const auto dir = std::filesystem::temp_directory_path() / "crosspoint-lend-gate";
+  std::filesystem::create_directories(dir);
+  const std::string filepath = "unused.xhtml";
+  const std::string contentBase;
+  const std::string imageBasePath = (dir / "img_7_").string();
+
+  GfxRenderer renderer;
+  CssParser css{"/tmp"};
+  auto epub = std::make_shared<Epub>();
+  ChapterHtmlSlimParser parser{epub, filepath, renderer, 0, 1.0f, false, 0, 480, 800, false, false, {}, true,
+                               contentBase, imageBasePath, 0, {}, nullptr, &css};
+  parser.setMayLendFrameBuffer(mayLend);
+  parser.currentTextBlock = std::make_unique<ParsedText>();
+
+  parserTestImageFormatSupported = true;
+  const XML_Char* attributes[] = {"src", "pic.jpg", nullptr};
+  ChapterHtmlSlimParser::startElement(&parser, "img", attributes);
+  ChapterHtmlSlimParser::endElement(&parser, "img");
+  parserTestImageFormatSupported = false;
+
+  UnprobeableImageRun run;
+  run.loans = renderer.loansTaken;
+  run.reads = epub->reads;
+  run.dimsUnknownWithoutLoan = parser.dimsUnknownWithoutLoan();
+  return run;
+}
+
+}  // namespace
+
+TEST(ImageLendingGate, LendingOffSkipsBothLoansAndFlagsUnknownDimensions) {
+  const auto run = parseUnprobeableImage(/*mayLend=*/false);
+  EXPECT_EQ(run.loans, 0);
+  // Header probe, then straight to the heap extraction: no loan-backed retry.
+  EXPECT_EQ(run.reads, 2);
+  EXPECT_TRUE(run.dimsUnknownWithoutLoan);
+}
+
+TEST(ImageLendingGate, LendingOnBorrowsForRetryAndExtractionWithoutFlagging) {
+  const auto run = parseUnprobeableImage(/*mayLend=*/true);
+  // #3802: one loan for the probe retry, one for the extraction.
+  EXPECT_EQ(run.loans, 2);
+  EXPECT_EQ(run.reads, 3);
+  // A lending build that still cannot size the image is what a foreground
+  // build produces, so there is nothing to flag.
+  EXPECT_FALSE(run.dimsUnknownWithoutLoan);
+}
+
+TEST(ImageLendingGate, LiftingTheGateMidBuildAppliesToTheNextImage) {
+  GfxRenderer renderer;
+  CssParser css{"/tmp"};
+  const std::string filepath = "unused.xhtml";
+  const std::string contentBase;
+  const std::string imageBasePath = (std::filesystem::temp_directory_path() / "crosspoint-lend-gate-lift-").string();
+  auto epub = std::make_shared<Epub>();
+  ChapterHtmlSlimParser parser{epub, filepath, renderer, 0, 1.0f, false, 0, 480, 800, false, false, {}, true,
+                               contentBase, imageBasePath, 0, {}, nullptr, &css};
+  parser.currentTextBlock = std::make_unique<ParsedText>();
+  const XML_Char* attributes[] = {"src", "pic.jpg", nullptr};
+
+  parserTestImageFormatSupported = true;
+  parser.setMayLendFrameBuffer(false);
+  ChapterHtmlSlimParser::startElement(&parser, "img", attributes);
+  ChapterHtmlSlimParser::endElement(&parser, "img");
+  EXPECT_EQ(renderer.loansTaken, 0);
+  EXPECT_TRUE(parser.dimsUnknownWithoutLoan());
+  // Adoption lifts the gate: the next image may borrow, and the flag stays set
+  // for the layout already produced.
+  parser.setMayLendFrameBuffer(true);
+  ChapterHtmlSlimParser::startElement(&parser, "img", attributes);
+  ChapterHtmlSlimParser::endElement(&parser, "img");
+  parserTestImageFormatSupported = false;
+  EXPECT_EQ(renderer.loansTaken, 2);
+  EXPECT_TRUE(parser.dimsUnknownWithoutLoan());
+}
 
 TEST(ParagraphIndentation, OverridesNonnegativeCssAndPreservesHangingIndent) {
   GfxRenderer renderer;

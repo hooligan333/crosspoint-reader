@@ -539,6 +539,7 @@ void EpubReaderActivity::startBgBuildTask() {
   bgBuildExited.store(false, std::memory_order_relaxed);
   bgBuildCompleteNotify.store(false, std::memory_order_relaxed);
   bgBuildFailedNotify.store(false, std::memory_order_relaxed);
+  bgPageStaleNotify.store(false, std::memory_order_relaxed);
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
   // The pre-decode interlock is process-global, not per-task, and a previous
   // stop can leave it dirty: a cancel that timed out returns with bgDecodeActive
@@ -623,10 +624,47 @@ void EpubReaderActivity::bgBuildTaskLoop() {
       RenderLock lock{RenderLock::TryAcquire{}};
       if (!lock.locked()) {
         workPlausible = true;
-      } else if (section && section->isBuilding()) {
+      } else if (section && section->isBuilding() && overlay == Overlay::None) {
+        // Not under an open toolbar or panel (upstream #3802): those repaint
+        // straight onto the page in the framebuffer, which a tick may lend. Read
+        // under the lock, and openOverlay() re-checks pageBufferStale under it,
+        // so a tick that saw None and an open racing it resolve either way. A
+        // gated tick sets no workPlausible -- the mirror of upstream's
+        // skipLoopDelay() overlay gate: nothing to pace fast for while the panel
+        // is up, so the task parks and picks the build up on the next notify
+        // (a close that re-renders) or the parked fallback, whichever is first.
         workPlausible = true;
         if (buildTickHeapGate()) {
-          if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+          // A tick can lend the framebuffer (#3802's image probes), which hands
+          // it back white while the panel still shows the page. Every other
+          // loan is taken under this same RenderLock (renderBook() on the
+          // render task, launchKOReaderSync() on the loop task; the book-open
+          // loan runs before this task exists), so a count change across this
+          // call is this tick's loan and nothing else's. Mark the page gone
+          // here, inside the lock scope, and leave the redraw to the loop task.
+          //
+          // Lend only while this reader is the activity on top. A Push does not
+          // stop this task, so the chapter keeps building under the dictionary
+          // word-select, the footnote list, the go-to-percent dialog or the
+          // frontlight sheet -- screens that keep the frame they opened over and
+          // update it differentially, and that are never told it went white
+          // (bgPageStaleNotify is consumed by this activity's loop(), which does
+          // not run while stacked). Upstream never lends there because its pump
+          // lives in that loop(). The same isCurrentActivity() test prebuildStep()
+          // arms on, read under this same RenderLock, which ActivityManager holds
+          // for every push/pop of currentActivity. Gated off, the tick builds as
+          // before #3802 (heap probe, heap extraction). Restored before the lock
+          // is released, so renderBook() and loop()'s extension never see it off.
+          const bool mayLend = activityManager.isCurrentActivity(this);
+          if (!mayLend) section->setMayLendFrameBuffer(false);
+          const uint32_t loansBefore = renderer.frameBufferLoanCount();
+          const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK);
+          if (renderer.frameBufferLoanCount() != loansBefore) {
+            pageBufferStale = true;
+            bgPageStaleNotify.store(true, std::memory_order_release);
+          }
+          if (!mayLend) section->setMayLendFrameBuffer(true);
+          if (!built) {
             // Reset/redraw belong to the loop task; just report the failure.
             bgBuildFailedNotify.store(true, std::memory_order_release);
           } else {
@@ -801,7 +839,17 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
     // since upstream #3831 either way). The gates above already decline
     // this arm when the heap is short, which is the right answer here: a
     // declined prebuild costs nothing, an evicted font cache costs a page turn.
-    if (!target.startBuild(lastRenderSpec, nullptr, /*mayReleaseFontCaches=*/false)) {
+    // mayLendFrameBuffer=false, for the same reason one layer down: upstream
+    // #3802's image probe/extraction loans hand the framebuffer back white, and
+    // a speculative layout must not blank the page the reader is looking at
+    // (and then force a visible redraw) for a chapter that may never be shown.
+    // Its image probes fall back to the heap, as before #3802, and an image that
+    // still cannot be sized that way declines the prebuild rather than lay it
+    // out differently from the foreground (see Section::startBuild and the Pump
+    // below); the adoption at the boundary turn lifts this for whatever of the
+    // build is still left.
+    if (!target.startBuild(lastRenderSpec, nullptr, /*mayReleaseFontCaches=*/false,
+                           /*mayLendFrameBuffer=*/false)) {
       LOG_ERR("ERS", "Failed to start prebuild of section %d", spine);
       settled = true;
       return false;
@@ -852,8 +900,16 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
     if (!prebuiltSection->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
       // buildSomeMore has already abandoned the build. A parse error recurs
       // against the same HTML, so stop offering this spine; the boundary turn
-      // reports it exactly as it does today.
-      LOG_ERR("ERS", "Prebuild of section %d failed", prebuiltSpineIndex);
+      // reports it exactly as it does today. The same goes for a layout dropped
+      // because an image could not be sized without a framebuffer loan (see
+      // Section::startBuild): it was never written, the next attempt would hit
+      // the same image under the same gate, and the boundary turn's foreground
+      // build -- which may lend -- lays the chapter out the way it should look.
+      if (prebuiltSection->speculativeLayoutDeclined()) {
+        LOG_DBG("ERS", "Prebuild of section %d declined: image needs a framebuffer loan", prebuiltSpineIndex);
+      } else {
+        LOG_ERR("ERS", "Prebuild of section %d failed", prebuiltSpineIndex);
+      }
       const int failedSpine = prebuiltSpineIndex;
       discardPrebuiltSection();
       prebuildDeclinedSpine.store(failedSpine, std::memory_order_relaxed);
@@ -1372,6 +1428,14 @@ void EpubReaderActivity::loop() {
   // notifications here in the loop task, so section reset, reposition, and
   // redraw run in their usual context; the loop-tick pump below stays only as
   // a runtime fallback for the (never observed) case that task creation failed.
+  // A task tick lent the framebuffer (see bgPageStaleNotify): redraw the page --
+  // unless a render that was already queued got there first. Only renderBook()
+  // clears pageBufferStale, and only once the page is back in the buffer, so a
+  // false here means the redraw has happened (a true that races that clear just
+  // costs one redundant render).
+  if (bgPageStaleNotify.exchange(false, std::memory_order_acq_rel) && pageBufferStale) {
+    requestUpdate();
+  }
   if (bgBuildFailedNotify.exchange(false, std::memory_order_acq_rel)) {
     RenderLock lock;
     LOG_ERR("ERS", "Background section build failed");
@@ -2149,6 +2213,11 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
         // side effects of renderBook()'s construction path; a still-building
         // prebuild continues via the existing incremental machinery.
         section = std::move(prebuiltSection);
+        // No longer speculative: what is left of its build is now the reader's
+        // own, so it may lend the framebuffer like any foreground build (upstream
+        // #3802; prebuildStep started it with lending off). Under this lock, which
+        // every build tick also holds.
+        section->setMayLendFrameBuffer(true);
         prebuiltSpineIndex = -1;
         prebuildDeclinedSpine.store(-1, std::memory_order_relaxed);
         section->currentPage = 0;
@@ -2639,6 +2708,29 @@ void EpubReaderActivity::renderBook() {
     }
   }
 
+#ifdef CROSSPOINT_BG_IMAGE_DECODE
+  // The two loops below build this section on the render task. A pre-decode can
+  // be in flight here -- it only requires a non-building section, so it runs on
+  // a partial one, and an adopted still-building prebuild can inherit one from
+  // the previous chapter. A build over a partial (the first loop's extension, or
+  // an adopted prebuild that resumed a parked partial) re-parses from page 0
+  // with imageCounter restarting, so the parser's whole-image extraction
+  // fallback writes the same img_<spine>_<n> file the pre-decode may be
+  // extracting: two writers on one file. loop()'s deferred partial-extension
+  // start cancels for exactly that, and these loops owe it too. For a build that
+  // started from nothing the parser only extracts images past the pages already
+  // laid out, so there the cancel is merely conservative; one condition covers
+  // both. (It is not for the framebuffer these loops may lend via #3802:
+  // buildscratch::claim() refuses every task but the lender's, so the
+  // pre-decode's inflate cannot take the lent bytes.) Stop it first, only when
+  // a tick is actually about to run; with nothing in flight the cancel is a
+  // flag test. (The pre-inflate needs no cancel here: see htmlInflateStep's
+  // header.)
+  if (section->currentPage >= static_cast<int>(section->pageCount) &&
+      (section->isPartial() || (section->isBuilding() && !section->isBuildComplete()))) {
+    ImageBlock::cancelBackgroundDecode();
+  }
+#endif
   if (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
     GUI.drawPopup(renderer, tr(STR_INDEXING));
     pagesUntilFullRefresh = 1;
@@ -3376,6 +3468,17 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     // bar included) in the shared framebuffer, and painting the chrome from
     // the loop task at the same time interleaves the two frames.
     RenderLock lock;
+#ifdef CROSSPOINT_BG_BUILD_TASK
+    // Again under the lock: the core-0 build task sets pageBufferStale inside
+    // the RenderLock scope it lent the framebuffer in, so the unlocked read
+    // above can predate a tick that was running while this waited for the
+    // lock (it saw overlay == None before the store above). The page is gone;
+    // paint nothing onto the blank buffer and let renderBook() draw both.
+    if (pageBufferStale) {
+      requestUpdate();
+      return;
+    }
+#endif
     settleOverlayRefresh();
     if (previous == Overlay::None) {
       // Snapshot the clean page so stepping back from a panel to the toolbar

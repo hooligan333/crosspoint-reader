@@ -14,11 +14,13 @@ class GfxRenderer {
  public:
   enum class TextMeasureMode { Layout, Rendered };
   // The fixture has no framebuffer to lend; image probes run as without a loan.
+  // Each loan taken is counted, so a test can see whether the parser borrowed.
   class FrameBufferLoan {
    public:
-    explicit FrameBufferLoan(GfxRenderer&) {}
+    explicit FrameBufferLoan(GfxRenderer& renderer) { ++renderer.loansTaken; }
     void end() {}
   };
+  int loansTaken = 0;
   // Fixture metrics: every glyph is 8 px wide, a space is 4 px, kerning is zero.
   static int trackingBetween(uint32_t left, uint32_t right, int8_t tracking) {
     return left == 0 || left == ' ' || right == ' ' ? 0 : tracking;
