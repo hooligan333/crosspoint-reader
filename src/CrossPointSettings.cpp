@@ -182,6 +182,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // default in its generic loop before it would look at the stamp.
   doc["homeGoBackAction"] = static_cast<uint8_t>(HomeButtonAction::GoBack);
 #endif
+#ifdef CROSSPOINT_DICT_SECONDARY
+  if (secondaryDictionaryName[0] != '\0') {
+    doc["secondaryDictionaryName"] = secondaryDictionaryName;
+  }
+#endif
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
@@ -446,6 +451,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (storedFontFamily != STORED_NOTOSANS) needsResave = true;
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
+#ifdef CROSSPOINT_DICT_SECONDARY
+  copyToField(secondaryDictionaryName, doc["secondaryDictionaryName"] | "", sizeof(secondaryDictionaryName));
+#endif
+
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {
     language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
