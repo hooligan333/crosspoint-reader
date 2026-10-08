@@ -109,4 +109,15 @@ TEST(HtmlToPlainText, TagsAndRawNewlinesMix) {
   EXPECT_EQ(htmlToPlainText("<b>word</b>\n\n<i>quote</i>\n<i>next</i>"), "word\n\nquote\nnext");
 }
 
+TEST(HtmlToPlainText, EtymonlineNestedDivEntry) {
+  // Verbatim etymonline StarDict entry: nested <div>s, numeric/named entities.
+  // The headword line and the body each get their own line, with no doubled
+  // break from the closing/opening divs in between.
+  EXPECT_EQ(htmlToPlainText("<div class=\"etymonline\"><div class=\"h\"><b>&#x27;twixt</b> <i>(prep.)</i></div>"
+                            "<div class=\"e\">also twixt , &quot;among&quot; (others or surrounding objects), early "
+                            "14c., short for betwixt or obsolete atwix .</div></div>"),
+            "'twixt (prep.)\nalso twixt , \"among\" (others or surrounding objects), early 14c., short for betwixt or "
+            "obsolete atwix .");
+}
+
 }  // namespace

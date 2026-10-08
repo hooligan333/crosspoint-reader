@@ -566,3 +566,81 @@ TEST(KoreanLayout, HangulGluedAcrossInlineStyleIsUnbreakable) {
   const std::vector<std::vector<std::string>> expected{{"가나"}, {"한국", "어"}};
   EXPECT_EQ(lines, expected);
 }
+
+// Dictionary styled path (src/util/DictHtmlPages.cpp): StarDict HTML is wrapped
+// in <html><body> and parsed with embedded styles off. The etymonline
+// conversion structures every entry as nested <div>s (headword line, then the
+// etymology body) rather than the OED's <p>s, so each <div> must open its own
+// line instead of running into the previous one. The definitions below are
+// verbatim from the etymonline StarDict .dict (two adjacent entries).
+namespace {
+
+std::vector<std::vector<std::string>> layoutDictionaryHtml(const std::string& fragment) {
+  const auto path = (std::filesystem::temp_directory_path() / "crosspoint-dict-div.xhtml").string();
+  {
+    std::FILE* out = std::fopen(path.c_str(), "wb");
+    if (!out) return {};
+    const std::string doc = "<html><body>" + fragment + "</body></html>";
+    std::fwrite(doc.data(), 1, doc.size(), out);
+    std::fclose(out);
+  }
+  GfxRenderer renderer;
+  std::vector<std::vector<std::string>> lines;
+  const auto collect = [&lines](std::unique_ptr<Page> page, uint16_t, uint16_t, uint32_t) {
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+      auto& words = lines.emplace_back();
+      for (uint16_t i = 0; i < block.wordCount(); ++i) words.emplace_back(block.wordText(i));
+    }
+  };
+  // Same arguments DictHtmlPages passes: embedded styles off, images suppressed.
+  const bool embeddedStyle = false;
+  const uint8_t imageRendering = 2;
+  ChapterHtmlSlimParser parser{nullptr, path, renderer, 0, 1.0f, false, 0, 440, 800, false, false, collect,
+                               embeddedStyle, "", "", imageRendering};
+  const bool ok = parser.parseAndBuildPages();
+  std::filesystem::remove(path);
+  if (!ok) lines.clear();
+  return lines;
+}
+
+constexpr const char* ETYMONLINE_TWO_ENTRIES =
+    "<div class=\"etymonline\"><div class=\"h\"><b>&#x27;tis</b></div><div class=\"e\">mid-15c., tys , a "
+    "contraction of it is . Very common in prose 17c.-18c. but from 19c. mostly found in poetry.</div></div>"
+    "<div class=\"etymonline\"><div class=\"h\"><b>&#x27;twixt</b> <i>(prep.)</i></div><div class=\"e\">also "
+    "twixt , &quot;among&quot; (others or surrounding objects), early 14c., short for betwixt or obsolete atwix "
+    ".</div></div>";
+
+}  // namespace
+
+TEST(DictionaryHtmlDivs, EtymonlineDivsBreakIntoSeparateLines) {
+  const auto lines = layoutDictionaryHtml(ETYMONLINE_TWO_ENTRIES);
+  ASSERT_GE(lines.size(), 4u);
+  // Headword alone on its line: the body <div> starts below it.
+  EXPECT_EQ(lines[0], (std::vector<std::string>{"'tis"}));
+  ASSERT_FALSE(lines[1].empty());
+  EXPECT_EQ(lines[1].front(), "mid-15c.,");
+  // The second entry's headword opens a fresh line after the first body, with
+  // its part of speech, and its body follows on the next line.
+  size_t second = 0;
+  for (size_t i = 1; i < lines.size(); ++i) {
+    if (!lines[i].empty() && lines[i].front() == "'twixt") second = i;
+  }
+  ASSERT_NE(second, 0u);
+  EXPECT_EQ(lines[second], (std::vector<std::string>{"'twixt", "(prep.)"}));
+  EXPECT_EQ(lines[second - 1].back(), "poetry.");
+  ASSERT_LT(second + 1, lines.size());
+  EXPECT_EQ(lines[second + 1].front(), "also");
+}
+
+TEST(DictionaryHtmlDivs, EtymonlineEntitiesDecode) {
+  const auto lines = layoutDictionaryHtml(ETYMONLINE_TWO_ENTRIES);
+  std::string all;
+  for (const auto& line : lines) {
+    for (const auto& word : line) all += word + " ";
+  }
+  EXPECT_NE(all.find("\"among\""), std::string::npos);
+  EXPECT_EQ(all.find("&quot;"), std::string::npos);
+  EXPECT_EQ(all.find("&#x27;"), std::string::npos);
+}
