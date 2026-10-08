@@ -20,8 +20,10 @@ std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, 
 ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath, int16_t width, int16_t height)
     : imagePath(imagePath), srcPath(srcPath), width(width), height(height) {}
 
+// Off by default, so <img> is skipped; the lending-gate tests switch it on.
+bool parserTestImageFormatSupported = false;
 bool ImageDecoderFactory::isFormatSupported(const std::string& path) {
-  return Epub::enableGifProbeForTest && path.ends_with(".gif");
+  return parserTestImageFormatSupported || (Epub::enableGifProbeForTest && path.ends_with(".gif"));
 }
 ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string&) { return nullptr; }
 
