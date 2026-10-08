@@ -168,6 +168,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (dictionaryName[0] != '\0') {
     doc["dictionaryName"] = dictionaryName;
   }
+#ifdef CROSSPOINT_DICT_SECONDARY
+  if (secondaryDictionaryName[0] != '\0') {
+    doc["secondaryDictionaryName"] = secondaryDictionaryName;
+  }
+#endif
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
@@ -385,6 +390,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
   copyToField(dictionaryName, doc["dictionaryName"] | "", sizeof(dictionaryName));
+#ifdef CROSSPOINT_DICT_SECONDARY
+  copyToField(secondaryDictionaryName, doc["secondaryDictionaryName"] | "", sizeof(secondaryDictionaryName));
+#endif
 
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {

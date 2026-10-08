@@ -395,6 +395,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char sdFontFamilyName[32] = "";
   // Dictionary folder name under /dictionaries (empty = no dictionary)
   char dictionaryName[32] = "";
+#ifdef CROSSPOINT_DICT_SECONDARY
+  // Second dictionary folder (empty = none), reached only through the switch
+  // button on a definition page; lookups always start in dictionaryName.
+  //
+  // Accepted limitation: the key is flag-gated, so a firmware image built
+  // without CROSSPOINT_DICT_SECONDARY rewrites settings.json without it (the
+  // same trade as clockDstRule across the r3-r4 images). Flashing a non-combo
+  // image and coming back resets it to None; the dictionary stays on the card.
+  char secondaryDictionaryName[32] = "";
+#endif
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Show the title and author read from inside each book rather than its
