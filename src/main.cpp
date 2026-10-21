@@ -53,6 +53,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
+#include "util/BleLightSleepPolicy.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
@@ -1179,6 +1180,14 @@ void loop() {
   scene.storageBusy = activityManager.requiresExclusiveStorageLoop();
   scene.wifiOn = WiFi.getMode() != WIFI_MODE_NULL;
   const bool remoteActed = bleturner::tick(scene);
+#if defined(CROSSPOINT_AUTO_LIGHT_SLEEP) && defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+  // Fork (r8b): the Bluetooth half of the no-light-sleep lock, refreshed every pass right after the
+  // tick that may have started or stopped the radio (and before the exclusive-storage return), like
+  // the USB and WiFi halves above. Fully stopped radio -> false -> nothing held: r8's light sleep.
+  // A start or stop on another task (the start task, a chapter build) is picked up next pass; in
+  // between, Host::holdFullSpeed(true) already holds the CPU lock, which keeps light sleep off too.
+  powerManager.noteBleActive(ble_light_sleep::blocksLightSleep(pageturner::holdsCpu.load(), bleturner::status()));
+#endif
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
