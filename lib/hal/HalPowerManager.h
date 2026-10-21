@@ -39,10 +39,13 @@ class HalPowerManager {
   bool pmNoSleepHeld = false;     // pmNoSleepLock is currently acquired
   bool pmWifiBlocked = false;     // WiFi is up (sampled by setPowerSaving)
   bool pmUsbBlocked = false;      // a USB host is attached (see noteUsbConnected)
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+  bool pmBleBlocked = false;  // the page turner's radio is up or changing state (see noteBleActive)
+#endif
   // Acquire/release `lock` so that `held` mirrors `want`, at most once per
   // transition. Single point of truth for the counted-lock balance.
   static void setPmLockHeld(void* lock, bool& held, bool want);
-  // Re-evaluate pmNoSleepLock from pmWifiBlocked || pmUsbBlocked.
+  // Re-evaluate pmNoSleepLock from pmWifiBlocked || pmUsbBlocked (|| pmBleBlocked).
   void updateNoLightSleepLock();
 #endif
 
@@ -94,6 +97,20 @@ class HalPowerManager {
   // unconditionally so the lock can never go stale between mode changes.
   // loopTask-only, like every other writer of the pm* flags.
   void noteWifiEnabled(bool enabled);
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+  // Fork (r8b): the Bluetooth half of the same lock. loop() passes
+  // ble_light_sleep::blocksLightSleep() every pass: true while the page
+  // turner's radio is up or starting/stopping, false once it is fully stopped
+  // (and then this half is as if the radio did not exist). Like the WiFi half
+  // it is a level refreshed per pass, not an edge.
+  //
+  // With the radio compiled in, setPowerSaving() can also run on the render
+  // task (the page turner's Host::holdFullSpeed, from a chapter build that
+  // stops the radio), and it re-evaluates this lock too. So in these builds
+  // the three note*() setters take modeMutex like setPowerSaving() does, which
+  // keeps the counted lock's acquire/release pairing single-writer.
+  void noteBleActive(bool active);
+#endif
 #ifdef CROSSPOINT_PM_STATS
   // Light-sleep residency counters (entries + total slept ms since boot),
   // maintained by the idle-task sleep-exit callback. See HalPowerManager.cpp.
