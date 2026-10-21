@@ -174,19 +174,65 @@ void HalPowerManager::setPmLockHeld(void* const lock, bool& held, const bool wan
   held = want;
 }
 
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+// Builds with the page-turner radio: setPowerSaving() can run on the render
+// task too (see noteBleActive() in the header), so the loop-task setters
+// serialize with it on modeMutex. Nothing under it blocks (flag writes and one
+// esp_pm acquire/release), and no caller holds modeMutex already: the only
+// holder, setPowerSaving(), calls updateNoLightSleepLock() directly.
+namespace {
+class PmFlagsGuard {
+  SemaphoreHandle_t mutex;
+
+ public:
+  explicit PmFlagsGuard(SemaphoreHandle_t m) : mutex(m) {
+    if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
+  }
+  ~PmFlagsGuard() {
+    if (mutex) xSemaphoreGive(mutex);
+  }
+  PmFlagsGuard(const PmFlagsGuard&) = delete;
+  PmFlagsGuard& operator=(const PmFlagsGuard&) = delete;
+};
+}  // namespace
+#define PM_FLAGS_GUARD() PmFlagsGuard pmFlagsGuard(modeMutex)
+#else
+#define PM_FLAGS_GUARD() \
+  do {                   \
+  } while (false)
+#endif
+
 void HalPowerManager::updateNoLightSleepLock() {
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+  setPmLockHeld(pmNoSleepLock, pmNoSleepHeld, pmWifiBlocked || pmUsbBlocked || pmBleBlocked);
+#else
   setPmLockHeld(pmNoSleepLock, pmNoSleepHeld, pmWifiBlocked || pmUsbBlocked);
+#endif
 }
 
 void HalPowerManager::noteUsbConnected(const bool connected) {
+  PM_FLAGS_GUARD();
   pmUsbBlocked = connected;
   updateNoLightSleepLock();
 }
 
 void HalPowerManager::noteWifiEnabled(const bool enabled) {
+  PM_FLAGS_GUARD();
   pmWifiBlocked = enabled;
   updateNoLightSleepLock();
 }
+
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+void HalPowerManager::noteBleActive(const bool active) {
+  PM_FLAGS_GUARD();
+  if (active != pmBleBlocked) {
+    LOG_DBG("PWR", "Bluetooth radio %s: light sleep %s", active ? "up" : "stopped", active ? "held off" : "allowed");
+  }
+  pmBleBlocked = active;
+  updateNoLightSleepLock();
+}
+#endif
+#undef PM_FLAGS_GUARD
 #endif
 
 void HalPowerManager::setPowerSaving(bool enabled) {
