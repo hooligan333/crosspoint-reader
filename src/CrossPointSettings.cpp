@@ -468,6 +468,15 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (!bleturner::readJson(ble, doc)) {
     needsResave = true;
   }
+  // Fork: an image without the page-turner radio (NoRadio: the fork envs build
+  // with Bluetooth off) never honours an enabled remote, but a settings.json from
+  // a build that has one can still say so. bleturner::holdsHeap() reads only the
+  // preference plus the runtime's deferred-start flag, so every reader visit's
+  // failing start would mark the start deferred and park upstream's deferred
+  // chapter-extension build (the extension then builds synchronously at the
+  // watermark). The UI hides every BLE control in such a build, so nothing could
+  // switch it back off. Kept in memory only; the next save writes it out.
+  if (ble.enabled && !bleturner::status().compiledIn) ble.enabled = 0;
 
   if (needsResave) {
     LOG_DBG("CPS", "Resaving settings to update format");
