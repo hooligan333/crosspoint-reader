@@ -16,14 +16,20 @@ trustworthy evidence is the ARTIFACT, so this guard:
      build products -- firmware.map (primarily), firmware.bin vs. the env's
      app partition, and the env's generated sdkconfig.<env> where the map
      cannot show a setting. It never reads the shared framework package.
+     One kind (extra_script) reads the env's own configuration instead: the
+     build-script list a Bluetooth env must carry.
 
 The guard is read-only: it never changes a build product.
 
-Wiring: platformio.ini [build_integrity] extra_scripts lists this file as
-both `pre:` (disk preflight) and `post:` (artifact check); fork envs only. Knobs: CROSSPOINT_MIN_FREE_GB (default 5) and, for emergencies only,
+Wiring: platformio.ini [build_integrity] / [build_integrity_ble] extra_scripts
+list this file as both `pre:` (disk preflight) and `post:` (artifact check);
+fork envs only. Knobs: CROSSPOINT_MIN_FREE_GB (default 5) and, for emergencies only,
 CROSSPOINT_BUILD_INTEGRITY=off.
 
-Standalone (vet a stashed artifact; stdlib only):
+Standalone (vet a stashed artifact; stdlib only, except that the
+extra_scripts checks read platformio.ini through PlatformIO's parser when it is
+importable -- run it with ~/.platformio/penv/bin/python -- and are skipped with
+a warning otherwise; they describe the CURRENT ini, not the artifact):
   python scripts/build_integrity.py --env x4pro-combo --map firmware.map \
       [--bin firmware.bin] [--sdkconfig sdkconfig.x4pro-combo] \
       [--partitions partitions.csv] [-v]
@@ -57,6 +63,10 @@ TAG = "[build-integrity]"
 #   sdkconfig      KEY must have VALUE in the env's generated sdkconfig.<env>
 #                  ("n" also matches "# KEY is not set"); skipped with a
 #                  warning when that file is absent
+#   extra_script   an entry of the env's extra_scripts matches pattern (the
+#                  PlatformIO hook reads the env's config; standalone runs read
+#                  platformio.ini through PlatformIO's own parser when it is
+#                  importable, and otherwise skip it with a warning)
 # --------------------------------------------------------------------------
 
 REBUILD_FIX = (
@@ -98,8 +108,9 @@ CUSTOM_KERNEL = [
        "mode: the image boots but configured kernel features are absent)"),
 ]
 
-# Bluetooth stays OFF on every fork env ([fork_no_ble] + the kernels'
-# CONFIG_BT_ENABLED=n, platformio.ini). Since upstream's page-turner fragment
+# Bluetooth stays OFF on x4-rss and x4-flash ([fork_no_ble] + [fork_c3_kernel],
+# platformio.ini; plain x4pro too, which is not guarded). The combo pair has
+# the page turner since r8b and checks BT_ON instead. Since upstream's page-turner fragment
 # (r8) the upstream C3 kernels (gh_release, default, ...) differ from
 # [fork_c3_kernel] ONLY in the BT lines, so the C3 PM/feature checks cannot
 # tell a stale BT-on kernel from ours: these can. A BT-on kernel links the
@@ -124,10 +135,51 @@ BT_OFF = [
        "configures"),
 ]
 
-COMBO_COMMON = CUSTOM_KERNEL + BT_OFF + [
-    _x("sdkconfig", "CONFIG_BT_ENABLED", "sdkconfig BT_ENABLED off",
-       "every fork kernel sets CONFIG_BT_ENABLED=n (r7; [fork_no_ble] since "
-       "r8)", "n"),
+# r8b: the combo pair HAS the Bluetooth page turner (upstream #3785's
+# [ble_page_turner] fragment, the way upstream's S3 envs take it). These fail
+# an artifact whose kernel or link lost it -- a stale BT-off kernel left in the
+# shared esp32s3 package (r7/r8 built exactly that), a link without NimBLE --
+# and one that picked up the wrong host (Bluedroid instead of NimBLE).
+BLE_CONTROLLER_SCRIPT = r"^post:scripts/patch_arduino_ble_controller\.py$"
+BT_ON = [
+    _x("sdkconfig", "CONFIG_BT_ENABLED", "sdkconfig BT_ENABLED=y",
+       "the combo kernel takes [ble_page_turner]'s CONFIG_BT_ENABLED=y since "
+       "r8b; 'not set' means the generated config came from a BT-off kernel "
+       "(r7/r8's combo, or [fork_no_ble]-era custom_sdkconfig)", "y"),
+    _x("sdkconfig", "CONFIG_BT_NIMBLE_ENABLED", "sdkconfig BT host = NimBLE",
+       "the page turner runs on NimBLE (NimBLE-Arduino over the kernel's "
+       "controller); another host means the kernel is not the configured one",
+       "y"),
+    _x("sdkconfig", "CONFIG_BT_BLUEDROID_ENABLED", "sdkconfig Bluedroid off",
+       "a Bluedroid host in the kernel is not what [ble_page_turner] "
+       "configures", "n"),
+    _x("sdkconfig", "CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE",
+       "sdkconfig NimBLE host task stack 4096 ([ble_page_turner] sizing)",
+       "the fragment's NimBLE sizing lines did not reach the kernel", "4096"),
+    _x("require_symbol", r"^esp_bt_controller_init$",
+       "BT controller entry point placed (esp_bt_controller_init)",
+       "no Bluetooth controller in the link: the artifact was linked against "
+       "a BT-off kernel (a stale r7/r8 combo core in the shared esp32s3 "
+       "package?) and the page turner cannot start"),
+    _x("require_symbol", r"^(?:nimble_port_init|ble_hs_init)$",
+       "NimBLE host entry point placed (nimble_port_init / ble_hs_init)",
+       "no NimBLE host in the link: NimBLE-Arduino is missing (lib_ignore / "
+       "[fork_no_ble] leaked into this env?) or the capability flag is off, "
+       "so the NoRadio backend was built"),
+    _x("forbid_symbol",
+       r"^(?:esp_bluedroid_init|esp_bluedroid_enable|btc_init|"
+       r"BTA_EnableBluetooth)$",
+       "no Bluedroid host entry points (NimBLE-only stack)",
+       "Bluedroid is linked next to NimBLE: ~100s of KB of a second host "
+       "stack nothing uses"),
+    _x("extra_script", BLE_CONTROLLER_SCRIPT,
+       "controller link script wired (patch_arduino_ble_controller.py)",
+       "the env does not run [base]'s Bluetooth controller link script; use "
+       "[build_integrity_ble] extra_scripts for a guarded Bluetooth env"),
+]
+
+# The combo pair's kernel invariants other than Bluetooth.
+COMBO_KERNEL = CUSTOM_KERNEL + [
     _x("require_symbol", r"^esp_pm_impl_init$",
        "esp_pm implementation placed (esp_pm_impl_init; PM_ENABLE on)",
        "no esp_pm implementation: the artifact was linked against a kernel "
@@ -153,6 +205,8 @@ COMBO_COMMON = CUSTOM_KERNEL + BT_OFF + [
        "sdkconfig LIBC_NEWLIB_NANO_FORMAT off",
        "newlib-nano was reverted on r5 (74288261)", "n"),
 ]
+
+COMBO_COMMON = COMBO_KERNEL + BT_ON
 
 PMSTATS_ONLY_SYMBOL = r"^esp_pm_light_sleep_register_cbs$"
 PMSTATS_ONLY_OBJECT = r"^\.bss\.s_time_in_mode .*libesp_pm\.a\(pm_impl\.c\.o(?:bj)?\)"
@@ -357,7 +411,7 @@ def app_slot_bytes(partitions_csv):
 
 def run_checks(env_name, map_path, bin_path=None, sdkconfig_path=None,
                partitions_path=None, verbose=False, elf_path=None,
-               max_map_age_s=120):
+               max_map_age_s=120, extra_scripts=None):
     """Return (ok, report_text)."""
     if env_name not in MANIFEST:
         return False, (f"{TAG} {env_name}: no expectations in MANIFEST "
@@ -395,8 +449,20 @@ def run_checks(env_name, map_path, bin_path=None, sdkconfig_path=None,
         sdk = read_sdkconfig(sdkconfig_path)
 
     sdk_skipped = 0
+    scripts_skipped = 0
     for ex in MANIFEST[env_name]:
         kind, pat, what = ex["kind"], ex["pattern"], ex["what"]
+        if kind == "extra_script":
+            if extra_scripts is None:
+                scripts_skipped += 1
+                continue
+            rx = re.compile(pat)
+            if any(rx.search(str(entry).strip()) for entry in extra_scripts):
+                passes.append(what)
+            else:
+                fails.append(f"{what}: not in this env's extra_scripts -- "
+                             f"{ex['why']}")
+            continue
         if kind == "sdkconfig":
             if sdk is None:
                 sdk_skipped += 1
@@ -438,6 +504,9 @@ def run_checks(env_name, map_path, bin_path=None, sdkconfig_path=None,
         where = (f"{sdkconfig_path} not found" if sdkconfig_path
                  else "no --sdkconfig given")
         warns.append(f"{sdk_skipped} sdkconfig check(s) skipped ({where})")
+    if scripts_skipped:
+        warns.append(f"{scripts_skipped} extra_scripts check(s) skipped (the "
+                     "env's configuration was not available)")
 
     size_note = ""
     if bin_path and Path(bin_path).is_file():
@@ -525,6 +594,35 @@ def _pio_hook(env):
         env.Exit(1)
 
 
+def _as_list(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [line for line in value.splitlines() if line.strip()]
+    return [str(v) for v in value]
+
+
+def _env_extra_scripts(env, env_name):
+    """The env's extra_scripts as configured (None when unavailable)."""
+    try:
+        return _as_list(env.GetProjectConfig().get(f"env:{env_name}",
+                                                   "extra_scripts"))
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def _ini_extra_scripts(env_name, ini_path):
+    """Standalone: the env's extra_scripts through PlatformIO's own parser
+    (interpolation and `extends` included), or None when PlatformIO is not
+    importable from this interpreter."""
+    try:
+        from platformio.project.config import ProjectConfig  # pylint: disable=import-error,import-outside-toplevel
+        return _as_list(ProjectConfig(str(ini_path)).get(f"env:{env_name}",
+                                                         "extra_scripts"))
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
 def _pio_register_check(env, env_name):
     from SCons.Script import AlwaysBuild, Default  # pylint: disable=import-error
 
@@ -544,6 +642,7 @@ def _pio_register_check(env, env_name):
             sdkconfig_path=project_dir / f"sdkconfig.{env_name}",
             partitions_path=partitions,
             elf_path=build_dir / f"{progname}.elf",
+            extra_scripts=_env_extra_scripts(env, env_name),
         )
         print(f"{report} [{time.monotonic() - t0:.1f} s]")
         return 0 if ok else 1
@@ -575,6 +674,10 @@ if __name__ == "__main__":
     ap.add_argument("--partitions", default=str(
         Path(__file__).resolve().parent.parent / "partitions.csv"),
         help="partition table CSV (default: repo partitions.csv)")
+    ap.add_argument("--ini", default=str(
+        Path(__file__).resolve().parent.parent / "platformio.ini"),
+        help="platformio.ini for the extra_scripts checks (default: the "
+             "repo's; read only when PlatformIO is importable)")
     ap.add_argument("--preflight", action="store_true",
                     help="run only the disk preflight (cwd + ~/.platformio)")
     ap.add_argument("--list", action="store_true",
@@ -598,8 +701,12 @@ if __name__ == "__main__":
     if not a.env or not a.map:
         ap.error("--env and --map are required (or --preflight / --list)")
     t0 = time.monotonic()
+    needs_scripts = any(ex["kind"] == "extra_script"
+                        for ex in MANIFEST.get(a.env, []))
     ok, report = run_checks(a.env, a.map, a.bin, a.sdkconfig, a.partitions,
-                            verbose=a.verbose)
+                            verbose=a.verbose,
+                            extra_scripts=(_ini_extra_scripts(a.env, a.ini)
+                                           if needs_scripts else None))
     print(f"{report} [{time.monotonic() - t0:.1f} s]")
     sys.exit(0 if ok else 1)
 elif "Import" in globals():
