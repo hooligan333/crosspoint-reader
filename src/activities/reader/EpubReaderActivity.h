@@ -339,9 +339,11 @@ class EpubReaderActivity final : public ReaderActivity {
   static_assert(BACKGROUND_IDLE_PARKED_WAIT_MS >= 25,
                 "CROSSPOINT_BG_IDLE_STRETCH_MS must not undercut the 25 ms transient cadence");
   // Fork (r8b): the task's arbitration with the Bluetooth page turner's radio
-  // (BgBuildRadioGate.h). radioAllowsBgBuild() gates every chapter build tick it
-  // runs -- the active section's buildSomeMore, a prebuild's layout start and its
-  // ticks; radioAllowsBgIdleWork() gates the HTML pre-inflate and the image
+  // (BgBuildRadioGate.h). radioAllowsBgBuild() gates STARTING a prebuild's layout
+  // (fresh arm or partial resume); radioAllowsBgBuildTick() gates the ticks of a
+  // build already in flight -- the active section's buildSomeMore and a prebuild's
+  // Pump -- and, unlike the start gate, lets them finish while a start refused for
+  // memory waits to retry; radioAllowsBgIdleWork() gates the HTML pre-inflate and the image
   // pre-decode. A closed gate SKIPS the step for this pass (the task never waits
   // on the radio: it must not block core 0, and onExit() joins it) and parks on
   // the long cadence; loop() wakes it the moment a gate opens again
@@ -349,12 +351,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // Bluetooth-off builds compile the steps exactly as before.
 #if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
   static bool radioAllowsBgBuild();
+  static bool radioAllowsBgBuildTick();
   static bool radioAllowsBgIdleWork();
-  // Loop task only: which gates were closed on the last loop() pass (bit 0 build,
-  // bit 1 idle work).
+  // Loop task only: which gates were closed on the last loop() pass (bit 0 build
+  // start, bit 1 idle work, bit 2 build tick).
   uint8_t bgRadioGatesClosed = 0;
 #else
   static constexpr bool radioAllowsBgBuild() { return true; }
+  static constexpr bool radioAllowsBgBuildTick() { return true; }
   static constexpr bool radioAllowsBgIdleWork() { return true; }
 #endif
 #endif
