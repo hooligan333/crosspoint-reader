@@ -265,8 +265,9 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   // not enough on this path: unlike the manual-DFS branch below, where "no
   // power saving" simply meant staying at full speed, light sleep here would
   // halt the whole chip and drop the association. Sampled from the same
-  // WiFi.getMode() read the branch above already does, on the same loop task
-  // that owns the USB half of this lock, so the two never race.
+  // WiFi.getMode() read the branch above already does. Under modeMutex, which
+  // the note*() setters also take in builds with the page turner's radio (where
+  // this can run on the render task too), so the halves never race.
   pmWifiBlocked = wifiMode != WIFI_MODE_NULL;
   updateNoLightSleepLock();
   if (enabled == pmActiveHeld) {  // the lock state is about to change
