@@ -18,6 +18,7 @@
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
 #include "util/PluginLocations.h"
+#include "util/SettingsActionMigration.h"
 #include "util/Timezones.h"
 
 namespace {
@@ -420,14 +421,15 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // r8-r10 stored it as 10, which upstream #4435 has since given to
   // PWR_FRONTLIGHT -- a double-click-only action no board offers for the short
   // press, so a stored 10 is the fork's on every board: move it to 11 too.
-  if ((BoardConfig::hasTouch() && shortPwrBtn == LEGACY_TOGGLE_LIGHT) || shortPwrBtn == R10_TOGGLE_LIGHT) {
-    shortPwrBtn = TOGGLE_LIGHT;
-    needsResave = true;
-  }
+  static_assert(LEGACY_TOGGLE_LIGHT == settings_migration::R7B_TOGGLE_LIGHT &&
+                R10_TOGGLE_LIGHT == settings_migration::R10_TOGGLE_LIGHT &&
+                TOGGLE_LIGHT == settings_migration::TOGGLE_LIGHT);
+  if (settings_migration::remapLegacyToggleLight(BoardConfig::hasTouch(), shortPwrBtn)) needsResave = true;
 #endif
 #ifdef CROSSPOINT_HOME_TAP_GO_BACK
   // Home-key gestures bound to "Go Back": r7b and earlier persisted GoBack as 11,
-  // which upstream has since given to CreateClipping (GoBack is now 12). Fork
+  // which upstream has since given to CreateClipping (GoBack was 12 in r8-r10;
+  // upstream #4460 then appended FileBrowser at 12, so it is 13 now). Fork
   // builds stamp the GoBack value they write ("homeGoBackAction", toJson()), so a
   // file without the stamp was written by an older fork image -- or by a build
   // without the flag, which never persists GoBack at all -- and its 11 is GoBack.
@@ -435,13 +437,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // migration below, which may legitimately produce CreateClipping itself.
   {
     const uint8_t storedGoBack = doc["homeGoBackAction"] | HOME_GO_BACK_LEGACY_VALUE;
-    const auto goBack = static_cast<uint8_t>(HomeButtonAction::GoBack);
-    if (storedGoBack != goBack) {
-      for (uint8_t* action : {&homeButtonTapAction, &homeButtonDoubleTapAction, &homeButtonLongPressAction}) {
-        if (*action == storedGoBack) *action = goBack;
-      }
+    uint8_t* const actions[] = {&homeButtonTapAction, &homeButtonDoubleTapAction, &homeButtonLongPressAction};
+    if (settings_migration::remapHomeGoBack(!doc["homeGoBackAction"].isNull(), storedGoBack,
+                                            static_cast<uint8_t>(HomeButtonAction::GoBack), actions)) {
+      needsResave = true;
     }
-    if (doc["homeGoBackAction"].isNull() || storedGoBack != goBack) needsResave = true;
   }
 #endif
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
