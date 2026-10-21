@@ -98,7 +98,36 @@ CUSTOM_KERNEL = [
        "mode: the image boots but configured kernel features are absent)"),
 ]
 
-COMBO_COMMON = CUSTOM_KERNEL + [
+# Bluetooth stays OFF on every fork env ([fork_no_ble] + the kernels'
+# CONFIG_BT_ENABLED=n, platformio.ini). Since upstream's page-turner fragment
+# (r8) the upstream C3 kernels (gh_release, default, ...) differ from
+# [fork_c3_kernel] ONLY in the BT lines, so the C3 PM/feature checks cannot
+# tell a stale BT-on kernel from ours: these can. A BT-on kernel links the
+# controller library even when the app never starts it (the Arduino core's
+# init releases the controller memory through it), so the archive names and
+# the controller entry points are the evidence. Map checks only, because the
+# C3 envs' sdkconfig is not per-env (see the x4-rss entry); the S3 envs also
+# check their sdkconfig (COMBO_COMMON).
+BT_OFF = [
+    _x("forbid_text", r"lib(?:bt|btdm_app)\.a\(",
+       "no Bluetooth controller/host library in the link (libbt.a, "
+       "libbtdm_app.a)",
+       "Bluetooth objects are linked: this artifact was built against a "
+       "CONFIG_BT_ENABLED=y kernel (an upstream env's, left in the shared "
+       "framework package), not the fork's BT-off one"),
+    _x("forbid_symbol",
+       r"^(?:esp_bt_controller_init|esp_bt_controller_mem_release|"
+       r"btdm_controller_init|nimble_port_init|ble_hs_init)$",
+       "no Bluetooth controller/NimBLE entry points",
+       "a Bluetooth controller or NimBLE host entry point is linked: the "
+       "kernel (or the app's lib set) has Bluetooth on, which no fork env "
+       "configures"),
+]
+
+COMBO_COMMON = CUSTOM_KERNEL + BT_OFF + [
+    _x("sdkconfig", "CONFIG_BT_ENABLED", "sdkconfig BT_ENABLED off",
+       "every fork kernel sets CONFIG_BT_ENABLED=n (r7; [fork_no_ble] since "
+       "r8)", "n"),
     _x("require_symbol", r"^esp_pm_impl_init$",
        "esp_pm implementation placed (esp_pm_impl_init; PM_ENABLE on)",
        "no esp_pm implementation: the artifact was linked against a kernel "
@@ -161,7 +190,7 @@ MANIFEST = {
     # C3 envs: base + firmware_tuned_c3 kernel, PM deliberately off. Their
     # generated sdkconfig is written under whichever C3 env last rebuilt the
     # core (usually sdkconfig.default), so it is not per-env: map checks only.
-    "x4-rss": CUSTOM_KERNEL + [
+    "x4-rss": CUSTOM_KERNEL + BT_OFF + [
         _x("forbid_symbol", r"^esp_pm_impl_init$",
            "no esp_pm (C3 kernel has PM off)",
            "esp_pm is linked, which no C3 env configures -- wrong kernel"),
@@ -174,7 +203,7 @@ MANIFEST = {
            "flashcard/soft-clock code is linked: this is an x4-flash "
            "artifact, not x4-rss"),
     ],
-    "x4-flash": CUSTOM_KERNEL + [
+    "x4-flash": CUSTOM_KERNEL + BT_OFF + [
         _x("forbid_symbol", r"^esp_pm_impl_init$",
            "no esp_pm (C3 kernel has PM off)",
            "esp_pm is linked, which no C3 env configures -- wrong kernel"),
