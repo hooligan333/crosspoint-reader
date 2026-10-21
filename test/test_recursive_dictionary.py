@@ -25,6 +25,7 @@ def block(source, signature, semicolon=False):
 
 
 methods = "\n".join(block(viewer, signature) for signature in (
+    "void DictionaryDefinitionActivity::onEnter",  # fork: lays the first view out under the RenderLock
     "bool DictionaryDefinitionActivity::prepareDefinition",
     "bool DictionaryDefinitionActivity::layoutHtmlPages",
     "int DictionaryDefinitionActivity::measureSpan",
@@ -90,7 +91,18 @@ template<typename... Args> void logDebug(Args&&...) {}
 
 enum class StrId { STR_DICT_LOOKING_UP, STR_DICT_NOT_FOUND, STR_DICT_LOW_MEMORY, STR_DICT_READ_FAILED,
                    STR_DICT_DECOMPRESS_ERROR, STR_DICT_RESTORE_FAILED, STR_DICT_HISTORY_FULL };
-struct RenderLock { ~RenderLock() {} };
+// Fork: counts holders, so a test can tell a cache release made under the lock from one made outside it.
+int renderLockDepth = 0;
+struct RenderLock {
+  bool held = true;
+  RenderLock() { ++renderLockDepth; }
+  ~RenderLock() { unlock(); }
+  void unlock() {
+    if (held) --renderLockDepth;
+    held = false;
+  }
+};
+struct Activity { static void onEnter() {} };
 unsigned long millis() { return 0; }
 struct HalMemory {
   struct Heap { size_t freeBytes = 1024 * 1024, largestBlockBytes = 1024 * 1024; };
@@ -121,7 +133,12 @@ struct PageLine : PageElement {
 struct Page { std::vector<std::unique_ptr<PageElement>> elements; };
 struct FontCacheManager {
   bool released = false;
-  void releaseSdFontCaches() { released = true; }
+  unsigned releases = 0, unlockedReleases = 0;
+  void releaseSdFontCaches() {
+    released = true;
+    ++releases;
+    if (renderLockDepth == 0) ++unlockedReleases;
+  }
 };
 struct Renderer {
   FontCacheManager cache;
@@ -224,6 +241,7 @@ struct DictionaryDefinitionActivity {
   StrId message{};
   unsigned long messageTime = 0;
   bool messageVisible = false;
+  bool initialLayoutFailed = false;
   bool finished = false;
   bool selectionOpened = false;
   ClipSelectionActivity::Selection pendingLookupSelection;
@@ -248,6 +266,7 @@ struct DictionaryDefinitionActivity {
     child = std::move(next);
     callback = std::move(handler);
   }
+  void onEnter();
   bool prepareDefinition(Definition&, bool forcePlain = false);
   bool layoutHtmlPages(Definition&);
   bool reserveLines(Definition&, size_t);
@@ -276,6 +295,19 @@ int main() {
   }
   Dictionary dictionary;
   dictionary.entries = {{10, "first entry one two three four five six"}, {20, "other definition"}};
+  // Fork (r8 review M1): the first view's plain-text fallback frees the SD font caches, which the
+  // reader's background build task may be measuring through on the other core -- so onEnter() must
+  // do it under the RenderLock (ActivityManager releases its own before calling onEnter()).
+  {
+    DictionaryDefinitionActivity entering;
+    entering.htmlDefinition = true;
+    styledAvailable = false;  // the styled layout fails, so the fallback runs
+    entering.content.text = dictionary.entries.at(10);
+    entering.onEnter();
+    assert(!entering.initialLayoutFailed && !entering.content.lines.empty());
+    assert(entering.renderer.cache.releases > 0 && entering.renderer.cache.unlockedReleases == 0);
+    assert(renderLockDepth == 0);
+  }
   DictionaryDefinitionActivity view;
   view.lookup = std::make_unique<DictionaryDefinitionActivity::LookupState>(dictionary);
   view.lookup->query = "same";
