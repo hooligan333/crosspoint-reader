@@ -28,6 +28,7 @@
 #include <limits>
 
 #include "../../util/BookmarkFile.h"
+#include "BgBuildRadioGate.h"
 #include "BookmarkEntry.h"
 #include "ChapterBuildGate.h"
 #include "ClipSelectionActivity.h"
@@ -868,6 +869,19 @@ void EpubReaderActivity::stopBgBuildTask() {
   bgBuildTaskHandle = nullptr;
 }
 
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+// Both read lock-free module state (status() and holdsHeap() may be called from any
+// task), so the build task can ask them under its own RenderLock without ever waiting
+// for the radio.
+bool EpubReaderActivity::radioAllowsBgBuild() {
+  return bg_radio_gate::buildMayRun(bleturner::status(), bleturner::holdsHeap());
+}
+
+bool EpubReaderActivity::radioAllowsBgIdleWork() {
+  return bg_radio_gate::idleWorkMayRun(bleturner::status(), bleturner::holdsHeap());
+}
+#endif
+
 void EpubReaderActivity::bgBuildTaskLoop() {
   while (!bgBuildStop.load(std::memory_order_acquire)) {
     bool didWork = false;
@@ -888,9 +902,13 @@ void EpubReaderActivity::bgBuildTaskLoop() {
     // truly parallel on core 0, where an unlocked deref races ~Section.
     {
       RenderLock lock(RenderLock::Mode::Try);
+      // Not next to the page turner's radio either (r8b; see radioAllowsBgBuild()): a
+      // radio-gated tick sets no workPlausible. The build resumes once the radio lets go --
+      // loop() wakes this task then -- and a page the reader turns to that is not built yet
+      // goes through renderBook()'s makeRoomForChapterBuild(), which stops the radio for it.
       if (!lock.ownsLock()) {
         workPlausible = true;
-      } else if (section && section->isBuilding() && overlay == Overlay::None) {
+      } else if (section && section->isBuilding() && overlay == Overlay::None && radioAllowsBgBuild()) {
         // Not under an open toolbar or panel (upstream #3802): those repaint
         // straight onto the page in the framebuffer, which a tick may lend. Read
         // under the lock, and openOverlay() re-checks pageBufferStale under it,
@@ -1069,6 +1087,9 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
   // too; that only defers the adoption to a later pass, and the boundary turn
   // loads the very same cache synchronously in the worst case.
   const auto layoutStartDeferred = [&]() -> bool {
+    // r8b: never start a speculative layout next to the page turner's radio. No
+    // workPlausible: loop() wakes the task once the radio lets go.
+    if (!radioAllowsBgBuild()) return true;
     // No workPlausible on the heap gate: a shortfall persists, so the 25 ms
     // cadence would just spend a reading session probing SD against it.
     // htmlInflateStep() and imageDecodeStep() set nothing on their heap gates
@@ -1157,6 +1178,10 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
       return true;
     }
     if (phase != PrebuildPhase::Pump) return false;  // build ticks run at the bottom of the ladder
+    // r8b: no prebuild tick next to the page turner's radio either (parked, no
+    // workPlausible; the boundary turn adopts whatever is built and its foreground
+    // build stops the radio for the rest).
+    if (!radioAllowsBgBuild()) return false;
     // Still laying itself out: same tick size, heap gate and per-tick lock
     // scope as the active section's ticks above, and never at the same time as
     // one — the arming gate below refuses to start while `section` builds.
@@ -1304,6 +1329,8 @@ bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
     // own foreground extension rather than special-cased here.
     if (prebuiltSection && prebuiltSpineIndex == target) return false;
     if (gateFreeHeap() < HTML_INFLATE_MIN_FREE_HEAP || gateMaxAllocHeap() < HTML_INFLATE_MIN_MAX_ALLOC) return false;
+    // r8b: not while the page turner's radio is taking or giving back its heap.
+    if (!radioAllowsBgIdleWork()) return false;
 
     if (Storage.exists(Section::htmlCachePath(*epub, target).c_str())) {
       htmlInflateDeclinedSpine = target;  // already inflated by an earlier visit
@@ -1441,6 +1468,8 @@ bool EpubReaderActivity::imageDecodeStep(bool& workPlausible) {
       imageDecodeDeclined = 0;
     }
     if (gateFreeHeap() < IMAGE_DECODE_MIN_FREE_HEAP || gateMaxAllocHeap() < IMAGE_DECODE_MIN_MAX_ALLOC) return false;
+    // r8b: not while the page turner's radio is taking or giving back its heap.
+    if (!radioAllowsBgIdleWork()) return false;
 
     std::unique_ptr<Page> page;
     // The page this scan reads: either `page` above, or the resident cache entry
@@ -1737,6 +1766,19 @@ void EpubReaderActivity::loop() {
   if (bgPageStaleNotify.exchange(false, std::memory_order_acq_rel) && pageBufferStale) {
     requestUpdate();
   }
+#if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
+  // r8b: the task skips what the page turner's radio forbids and parks on the long
+  // cadence. Wake it as soon as a gate it was refused on opens again (the radio stopped
+  // for a build, went idle, or finished starting), rather than leave the pickup to that
+  // fallback. A notify is latched, so one given while the task is still deciding to park
+  // ends that park at once.
+  if (bgBuildTaskHandle) {
+    const uint8_t closed =
+        static_cast<uint8_t>((radioAllowsBgBuild() ? 0 : 1) | (radioAllowsBgIdleWork() ? 0 : 2));
+    if ((bgRadioGatesClosed & ~closed) != 0) xTaskNotifyGive(bgBuildTaskHandle);
+    bgRadioGatesClosed = closed;
+  }
+#endif
   if (bgBuildFailedNotify.exchange(false, std::memory_order_acq_rel)) {
     RenderLock lock;
     LOG_ERR("ERS", "Background section build failed");
