@@ -203,8 +203,28 @@ TEST(BgBuildRadioGate, ARadioStoppedForTheBuildReopensTheGate) {
   EXPECT_TRUE(bg_radio_gate::idleWorkMayRun(released, false));
 }
 
-// The two gates never disagree in the direction that matters: whenever a build may run, the
-// idle steps may too.
+// r8b review m1: a start refused for memory (radio down, deferral waiting to retry) must not
+// freeze a build already in flight -- its parser holds heap the retry needs, and a frozen build
+// never frees it. It may not START a new layout, though.
+TEST(BgBuildRadioGate, InFlightBuildFinishesWhileARefusedStartWaits) {
+  auto deferred = stopped();
+  deferred.compiledIn = true;
+  deferred.readerDeferred = true;
+  EXPECT_FALSE(bg_radio_gate::buildMayRun(deferred, true));
+  EXPECT_TRUE(bg_radio_gate::buildTickMayRun(deferred));
+}
+
+TEST(BgBuildRadioGate, InFlightBuildStillFreezesNextToARadioUpOrChanging) {
+  for (const Active a : {Active::Starting, Active::Running, Active::Stopping}) {
+    EXPECT_FALSE(bg_radio_gate::buildTickMayRun(with(a))) << static_cast<int>(a);
+  }
+  auto up = with(Active::Running);
+  up.connected = true;
+  EXPECT_FALSE(bg_radio_gate::buildTickMayRun(up));
+}
+
+// The gates never disagree in the direction that matters: whenever a new layout may start, its
+// ticks may run and so may the idle steps.
 TEST(BgBuildRadioGate, BuildGateIsTheStricter) {
   for (int bits = 0; bits < (1 << 9); ++bits) {
     bleturner::Status s{};
@@ -219,6 +239,11 @@ TEST(BgBuildRadioGate, BuildGateIsTheStricter) {
     const bool holds = bits & 256;
     if (bg_radio_gate::buildMayRun(s, holds)) {
       EXPECT_TRUE(bg_radio_gate::idleWorkMayRun(s, holds)) << bits;
+      EXPECT_TRUE(bg_radio_gate::buildTickMayRun(s)) << bits;
+    }
+    // A tick only ever runs next to a radio that is fully down.
+    if (bg_radio_gate::buildTickMayRun(s)) {
+      EXPECT_FALSE(s.starting || s.running || s.stopping) << bits;
     }
   }
 }

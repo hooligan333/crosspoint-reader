@@ -923,6 +923,8 @@ bool EpubReaderActivity::radioAllowsBgBuild() {
   return bg_radio_gate::buildMayRun(bleturner::status(), bleturner::holdsHeap());
 }
 
+bool EpubReaderActivity::radioAllowsBgBuildTick() { return bg_radio_gate::buildTickMayRun(bleturner::status()); }
+
 bool EpubReaderActivity::radioAllowsBgIdleWork() {
   return bg_radio_gate::idleWorkMayRun(bleturner::status(), bleturner::holdsHeap());
 }
@@ -948,13 +950,13 @@ void EpubReaderActivity::bgBuildTaskLoop() {
     // truly parallel on core 0, where an unlocked deref races ~Section.
     {
       RenderLock lock(RenderLock::Mode::Try);
-      // Not next to the page turner's radio either (r8b; see radioAllowsBgBuild()): a
+      // Not next to the page turner's radio either (r8b; see radioAllowsBgBuildTick()): a
       // radio-gated tick sets no workPlausible. The build resumes once the radio lets go --
       // loop() wakes this task then -- and a page the reader turns to that is not built yet
       // goes through renderBook()'s makeRoomForChapterBuild(), which stops the radio for it.
       if (!lock.ownsLock()) {
         workPlausible = true;
-      } else if (section && section->isBuilding() && overlay == Overlay::None && radioAllowsBgBuild()) {
+      } else if (section && section->isBuilding() && overlay == Overlay::None && radioAllowsBgBuildTick()) {
         // Not under an open toolbar or panel (upstream #3802): those repaint
         // straight onto the page in the framebuffer, which a tick may lend. Read
         // under the lock, and openOverlay() re-checks pageBufferStale under it,
@@ -1226,8 +1228,10 @@ bool EpubReaderActivity::prebuildStep(bool& workPlausible, const PrebuildPhase p
     if (phase != PrebuildPhase::Pump) return false;  // build ticks run at the bottom of the ladder
     // r8b: no prebuild tick next to the page turner's radio either (parked, no
     // workPlausible; the boundary turn adopts whatever is built and its foreground
-    // build stops the radio for the rest).
-    if (!radioAllowsBgBuild()) return false;
+    // build stops the radio for the rest). The tick gate, not the start gate: a
+    // layout already running finishes, and frees its parser, while a start refused
+    // for memory waits to retry (BgBuildRadioGate.h).
+    if (!radioAllowsBgBuildTick()) return false;
     // Still laying itself out: same tick size, heap gate and per-tick lock
     // scope as the active section's ticks above, and never at the same time as
     // one — the arming gate below refuses to start while `section` builds.
@@ -1376,6 +1380,7 @@ bool EpubReaderActivity::htmlInflateStep(bool& workPlausible) {
     if (prebuiltSection && prebuiltSpineIndex == target) return false;
     if (gateFreeHeap() < HTML_INFLATE_MIN_FREE_HEAP || gateMaxAllocHeap() < HTML_INFLATE_MIN_MAX_ALLOC) return false;
     // r8b: not while the page turner's radio is taking or giving back its heap.
+    // Checked before the step, not held during it (BgBuildRadioGate.h).
     if (!radioAllowsBgIdleWork()) return false;
 
     if (Storage.exists(Section::htmlCachePath(*epub, target).c_str())) {
@@ -1515,6 +1520,7 @@ bool EpubReaderActivity::imageDecodeStep(bool& workPlausible) {
     }
     if (gateFreeHeap() < IMAGE_DECODE_MIN_FREE_HEAP || gateMaxAllocHeap() < IMAGE_DECODE_MIN_MAX_ALLOC) return false;
     // r8b: not while the page turner's radio is taking or giving back its heap.
+    // Checked before the step, not held during it (BgBuildRadioGate.h).
     if (!radioAllowsBgIdleWork()) return false;
 
     std::unique_ptr<Page> page;
@@ -1820,8 +1826,8 @@ void EpubReaderActivity::loop() {
   // fallback. A notify is latched, so one given while the task is still deciding to park
   // ends that park at once.
   if (bgBuildTaskHandle) {
-    const uint8_t closed =
-        static_cast<uint8_t>((radioAllowsBgBuild() ? 0 : 1) | (radioAllowsBgIdleWork() ? 0 : 2));
+    const uint8_t closed = static_cast<uint8_t>((radioAllowsBgBuild() ? 0 : 1) | (radioAllowsBgIdleWork() ? 0 : 2) |
+                                                (radioAllowsBgBuildTick() ? 0 : 4));
     if ((bgRadioGatesClosed & ~closed) != 0) xTaskNotifyGive(bgBuildTaskHandle);
     bgRadioGatesClosed = closed;
   }
