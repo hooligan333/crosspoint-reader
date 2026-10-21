@@ -16,8 +16,8 @@ trustworthy evidence is the ARTIFACT, so this guard:
      build products -- firmware.map (primarily), firmware.bin vs. the env's
      app partition, and the env's generated sdkconfig.<env> where the map
      cannot show a setting. It never reads the shared framework package.
-     One kind (extra_script) reads the env's own configuration instead: the
-     build-script list a Bluetooth env must carry.
+     One kind (extra_script) reads the env's own configuration instead (a
+     build script an env must carry); no current entry uses it.
 
 The guard is read-only: it never changes a build product.
 
@@ -139,8 +139,10 @@ BT_OFF = [
 # [ble_page_turner] fragment, the way upstream's S3 envs take it). These fail
 # an artifact whose kernel or link lost it -- a stale BT-off kernel left in the
 # shared esp32s3 package (r7/r8 built exactly that), a link without NimBLE --
-# and one that picked up the wrong host (Bluedroid instead of NimBLE).
-BLE_CONTROLLER_SCRIPT = r"^post:scripts/patch_arduino_ble_controller\.py$"
+# and one that picked up the wrong host (Bluedroid instead of NimBLE). The fix
+# round adds the fork's half: the light-sleep power policy must be linked, the
+# controller must keep its own no-light-sleep lock, and the NimBLE host must be
+# the PSRAM build the S3 radio profile was measured with.
 BT_ON = [
     _x("sdkconfig", "CONFIG_BT_ENABLED", "sdkconfig BT_ENABLED=y",
        "the combo kernel takes [ble_page_turner]'s CONFIG_BT_ENABLED=y since "
@@ -172,10 +174,25 @@ BT_ON = [
        "no Bluedroid host entry points (NimBLE-only stack)",
        "Bluedroid is linked next to NimBLE: ~100s of KB of a second host "
        "stack nothing uses"),
-    _x("extra_script", BLE_CONTROLLER_SCRIPT,
-       "controller link script wired (patch_arduino_ble_controller.py)",
-       "the env does not run [base]'s Bluetooth controller link script; use "
-       "[build_integrity_ble] extra_scripts for a guarded Bluetooth env"),
+    _x("sdkconfig", "CONFIG_BT_CTRL_MODEM_SLEEP",
+       "sdkconfig BT controller modem sleep off",
+       "with modem sleep on, the controller drops its own no-light-sleep "
+       "lock ('btLS') while enabled, and keeping light sleep off while the "
+       "radio is up would rest on the app's lock alone", "n"),
+    # Mangled: the map lists C++ symbols as the linker sees them. With
+    # --gc-sections an uncalled function is dropped, so this is placed only
+    # when loop() (CROSSPOINT_AUTO_LIGHT_SLEEP && FREEINK_CAP_BLE_HID_HOST)
+    # actually feeds the radio state to the no-light-sleep lock.
+    _x("require_symbol", r"^_ZN15HalPowerManager13noteBleActiveEb$",
+       "Bluetooth light-sleep policy linked (HalPowerManager::noteBleActive)",
+       "the fork's power policy is compiled out: light sleep would NOT be "
+       "held off while the radio is up (CROSSPOINT_AUTO_LIGHT_SLEEP or the "
+       "capability flag missing from this env's build flags?)"),
+    _x("require_symbol", r"^_ZN9bleturner10kS3ProfileE$",
+       "S3 radio profile linked (NimBLE host in PSRAM, s3_nimble_psram.h)",
+       "the page turner was built with the X3 profile: [base]'s -include "
+       "scripts/s3_nimble_psram.h did not reach this env, so NimBLE's host "
+       "allocates ~21 KB more internal RAM than the heap gates assume"),
 ]
 
 # The combo pair's kernel invariants other than Bluetooth.
