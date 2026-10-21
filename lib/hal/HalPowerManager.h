@@ -95,7 +95,10 @@ class HalPowerManager {
   // Refresh the WiFi half of the no-light-sleep lock. setPowerSaving() samples
   // WiFi too, but is not called on every loop pass; loop() calls this one
   // unconditionally so the lock can never go stale between mode changes.
-  // loopTask-only, like every other writer of the pm* flags.
+  // Called from the loop task. Without the page turner's radio every writer of
+  // the pm* flags runs there; with it (FREEINK_CAP_BLE_HID_HOST) setPowerSaving()
+  // can also run on the render task, so the setters take modeMutex (see
+  // noteBleActive() below).
   void noteWifiEnabled(bool enabled);
 #if defined(FREEINK_CAP_BLE_HID_HOST) && FREEINK_CAP_BLE_HID_HOST
   // Fork (r8b): the Bluetooth half of the same lock. loop() passes

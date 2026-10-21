@@ -1524,8 +1524,13 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !pageturner::holdsCpu.load()) {
+    const bool inactive = millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS;
 #ifdef FREEINK_UC8179_RAIL_POWEROFF
+    // r8b: keyed on inactivity alone, not on the page turner's CPU hold below. A
+    // connected remote keeps the radio (and so the hold) up for the whole session,
+    // and the rails would otherwise stay latched through it; a remote press counts
+    // as activity (remoteActed), so this never lands between remote page turns.
+    if (inactive) {
       // Park the panel's analog rails on the same 3 s inactivity threshold the
       // CPU power saving already uses, and for the same reason: the reader
       // otherwise sits on a page with the booster, VGH/VGL, VSH/VSL and VCOM
@@ -1558,7 +1563,13 @@ void loop() {
         RenderLock idleLock(RenderLock::Mode::Try);
         if (idleLock.ownsLock() && !activityManager.hasPendingRender()) display.controllerIdle();
       }
+    }
 #endif
+    // The page turner's radio holds full CPU speed while it is up (holdFullSpeed), and
+    // the loop must keep polling it every 10 ms: the touch-INT wait below would park
+    // remote key presses for up to a second (they wake no GPIO), and the long window it
+    // opens is only worth having for light sleep, which the radio blocks anyway.
+    if (inactive && !pageturner::holdsCpu.load()) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
 #ifdef CROSSPOINT_TOUCH_INT_WAKE
