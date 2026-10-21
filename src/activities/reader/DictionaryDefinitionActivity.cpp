@@ -174,6 +174,16 @@ bool DictionaryDefinitionActivity::enableLookup(Dictionary& dictionary, std::str
 
 void DictionaryDefinitionActivity::onEnter() {
   Activity::onEnter();
+  // Fork: lay the first view out under the RenderLock, like every other
+  // prepareDefinition() caller (navigateDefinition() holds it). onEnter() runs
+  // after ActivityManager released its own lock, and a Push does not stop the
+  // reader underneath: its background build task can still be laying out the
+  // chapter (or prebuilding the next one) on the other core, measuring text
+  // through the SD font caches. The plain-text fallback frees exactly those
+  // caches and the styled layout inserts into them. Nothing on this path holds
+  // the lock and nothing inside takes it again (showMessage() only requests a
+  // deferred update), so the blocking acquire cannot deadlock.
+  RenderLock lock;
   initialLayoutFailed = !prepareDefinition(content);
   if (initialLayoutFailed) {
     content.lines.clear();
@@ -196,6 +206,7 @@ void DictionaryDefinitionActivity::onEnter() {
     }
   }
 #endif
+  lock.unlock();
   requestUpdate();
 }
 
