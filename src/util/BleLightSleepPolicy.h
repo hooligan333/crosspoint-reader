@@ -5,7 +5,7 @@
 // Fork (r8b): when the Bluetooth page turner keeps the chip out of automatic
 // light sleep (CROSSPOINT_AUTO_LIGHT_SLEEP builds that also have the radio,
 // FREEINK_CAP_BLE_HID_HOST). Pure, so it is host-tested in
-// test/ble_light_sleep_policy; main.cpp's loop() feeds the answer to
+// test/ble_radio_policy; main.cpp's loop() feeds the answer to
 // HalPowerManager::noteBleActive() once per pass, the same way it refreshes the
 // WiFi half of the no-light-sleep lock.
 //
