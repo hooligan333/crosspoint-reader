@@ -18,6 +18,7 @@
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
 #include "util/PluginLocations.h"
+#include "util/SettingsActionMigration.h"
 #include "util/Timezones.h"
 
 namespace {
@@ -406,10 +407,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // r7b and earlier stored Toggle Light as 6, which upstream has since given to
   // CREATE_CLIPPING. Touch boards never offer CREATE_CLIPPING as a short press,
   // so there a stored 6 can only be the fork's legacy value: move it to 10.
-  if (BoardConfig::hasTouch() && shortPwrBtn == LEGACY_TOGGLE_LIGHT) {
-    shortPwrBtn = TOGGLE_LIGHT;
-    needsResave = true;
-  }
+  static_assert(LEGACY_TOGGLE_LIGHT == settings_migration::R7B_TOGGLE_LIGHT &&
+                TOGGLE_LIGHT == settings_migration::TOGGLE_LIGHT);
+  if (settings_migration::remapLegacyToggleLight(BoardConfig::hasTouch(), shortPwrBtn)) needsResave = true;
 #endif
 #ifdef CROSSPOINT_HOME_TAP_GO_BACK
   // Home-key gestures bound to "Go Back": r7b and earlier persisted GoBack as 11,
@@ -421,13 +421,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // migration below, which may legitimately produce CreateClipping itself.
   {
     const uint8_t storedGoBack = doc["homeGoBackAction"] | HOME_GO_BACK_LEGACY_VALUE;
-    const auto goBack = static_cast<uint8_t>(HomeButtonAction::GoBack);
-    if (storedGoBack != goBack) {
-      for (uint8_t* action : {&homeButtonTapAction, &homeButtonDoubleTapAction, &homeButtonLongPressAction}) {
-        if (*action == storedGoBack) *action = goBack;
-      }
+    uint8_t* const actions[] = {&homeButtonTapAction, &homeButtonDoubleTapAction, &homeButtonLongPressAction};
+    if (settings_migration::remapHomeGoBack(!doc["homeGoBackAction"].isNull(), storedGoBack,
+                                            static_cast<uint8_t>(HomeButtonAction::GoBack), actions)) {
+      needsResave = true;
     }
-    if (doc["homeGoBackAction"].isNull() || storedGoBack != goBack) needsResave = true;
   }
 #endif
   if (BoardConfig::hasHomeKey() && doc["homeButtonLongPressAction"].isNull() &&
