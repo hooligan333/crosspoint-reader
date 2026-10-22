@@ -156,14 +156,17 @@ bool localNow(DateTime& out) {
   return true;
 }
 
-AppendResult appendEntry(const Item& item, const char* value) {
+AppendResult appendEntry(const Item& item, const char* value, const DateTime* overrideTimestamp) {
   auto scratch = makeUniqueNoThrow<AppendScratch>();
   if (!scratch) {
     LOG_ERR("TRK", "OOM: append buffers (%u bytes)", static_cast<unsigned>(sizeof(AppendScratch)));
     return AppendResult::NotWritten;
   }
   DateTime now{};
-  if (!localNow(now)) {
+  if (overrideTimestamp) {
+    now = *overrideTimestamp;
+    clampDateTime(now);  // the timestamp column must stay a valid date
+  } else if (!localNow(now)) {
     // The entry is still logged: the user's input is never dropped, and this
     // stamp is easy to find and fix on the PC.
     LOG_ERR("TRK", "Clock unset; logging with the epoch timestamp");

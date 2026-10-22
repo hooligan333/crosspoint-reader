@@ -114,6 +114,86 @@ TEST(TrackingConfig, NumberRulesAndUnknownKeys) {
   EXPECT_EQ(note.optionCount, 0);
 }
 
+TEST(TrackingConfig, TimestampOverrideOnEveryType) {
+  const auto p = parse(itemsJson(R"(
+    {"label":"a","type":"number","timestamp_override":true},
+    {"label":"b","type":"text","timestamp_override":true},
+    {"label":"c","type":"date","timestamp_override":true},
+    {"label":"d","type":"datetime","timestamp_override":true},
+    {"label":"e","type":"boolean","timestamp_override":true},
+    {"label":"f","type":"stars","timestamp_override":true},
+    {"label":"g","type":"list","options":["x"],"timestamp_override":true},
+    {"label":"h","type":"none","timestamp_override":true},
+    {"label":"off","type":"number","timestamp_override":false},
+    {"label":"absent","type":"number","timestamp":true,"override":true},
+    {"label":"twice","type":"text","timestamp_override":true,"timestamp_override":false}
+  )"));
+  ASSERT_EQ(p.error, ParseError::None);
+  ASSERT_EQ(p.config->itemCount, 11);
+  EXPECT_EQ(p.config->skippedCount, 0);
+  for (int i = 0; i < 8; i++) EXPECT_TRUE(p.config->items[i].timestampOverride) << i;
+  EXPECT_FALSE(p.config->items[8].timestampOverride);
+  // Look-alike keys are unknown keys: ignored, and the default stays false.
+  EXPECT_FALSE(p.config->items[9].timestampOverride);
+  EXPECT_FALSE(p.config->items[10].timestampOverride);
+  EXPECT_STREQ(p.config->option(p.config->items[6], 0), "x");
+}
+
+TEST(TrackingConfig, TimestampOverrideNonBooleanSkipsItem) {
+  const auto p = parse(itemsJson(R"(
+    {"label":"ok","type":"text","timestamp_override":true},
+    {"label":"string","type":"text","timestamp_override":"true"},
+    {"label":"number","type":"number","timestamp_override":1},
+    {"label":"null","type":"none","timestamp_override":null},
+    {"label":"object","type":"date","timestamp_override":{"on":true}},
+    {"label":"array","type":"stars","timestamp_override":[true]},
+    {"label":"list","type":"list","options":["a","b"],"timestamp_override":0},
+    {"label":"also ok","type":"none"}
+  )"));
+  ASSERT_EQ(p.error, ParseError::None);
+  ASSERT_EQ(p.config->itemCount, 2);
+  EXPECT_STREQ(p.config->items[0].label, "ok");
+  EXPECT_TRUE(p.config->items[0].timestampOverride);
+  EXPECT_STREQ(p.config->items[1].label, "also ok");
+  EXPECT_FALSE(p.config->items[1].timestampOverride);
+  EXPECT_EQ(p.config->skippedCount, 6);
+  // The broken list's options are rolled back with it.
+  EXPECT_EQ(p.config->optionTotal, 0);
+  EXPECT_EQ(p.config->optionPoolUsed, 0);
+}
+
+TEST(TrackingConfig, TimestampOverrideScopedToItsItem) {
+  const auto p = parse(R"({"timestamp_override":1,"items":[
+    {"label":"on","type":"number","timestamp_override":true},
+    {"label":"next","type":"number"},
+    {"label":"nested","type":"text","meta":{"timestamp_override":"x"}}
+  ]})");
+  ASSERT_EQ(p.error, ParseError::None);
+  ASSERT_EQ(p.config->itemCount, 3);
+  EXPECT_EQ(p.config->skippedCount, 0);
+  EXPECT_TRUE(p.config->items[0].timestampOverride);
+  // No carry-over from the previous item.
+  EXPECT_STREQ(p.config->items[1].label, "next");
+  EXPECT_FALSE(p.config->items[1].timestampOverride);
+  // A same-named key in a nested object is not the item's key.
+  EXPECT_STREQ(p.config->items[2].label, "nested");
+  EXPECT_FALSE(p.config->items[2].timestampOverride);
+}
+
+TEST(TrackingConfig, TimestampOverrideAloneOrRepairedStillSkips) {
+  const auto p = parse(itemsJson(R"(
+    {"timestamp_override":true},
+    {"label":"sticky","type":"text","timestamp_override":null,"timestamp_override":true},
+    {"label":"ok","type":"none"}
+  )"));
+  ASSERT_EQ(p.error, ParseError::None);
+  ASSERT_EQ(p.config->itemCount, 1);
+  EXPECT_STREQ(p.config->items[0].label, "ok");
+  EXPECT_FALSE(p.config->items[0].timestampOverride);
+  // Missing label/type, and a later valid value does not unbreak an item.
+  EXPECT_EQ(p.config->skippedCount, 2);
+}
+
 TEST(TrackingConfig, EscapesAndUnicodePassThrough) {
   const auto p = parse(itemsJson(R"({"label":"Café \"x\"","type":"list","options":["日本","a,b"]})"));
   ASSERT_EQ(p.error, ParseError::None);

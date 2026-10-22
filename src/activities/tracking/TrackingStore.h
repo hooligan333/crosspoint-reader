@@ -36,12 +36,13 @@ enum class AppendResult : uint8_t {
 
 /**
  * Appends one row (timestamp, item key, type, value) and closes the file.
- * Writes the header first when the file is new, and moves a file whose first
- * line is not the expected header to a free log.old*.csv slot. Anything but Ok
- * is an SD failure, including an unreadable existing log, which is never
- * rotated.
+ * The timestamp is `overrideTimestamp` when given (a copy, clamped to a valid
+ * date and time), else local now. Writes the header first when the file is new,
+ * and moves a file whose first line is not the expected header to a free
+ * log.old*.csv slot. Anything but Ok is an SD failure, including an
+ * unreadable existing log, which is never rotated.
  */
-AppendResult appendEntry(const Item& item, const char* value);
+AppendResult appendEntry(const Item& item, const char* value, const DateTime* overrideTimestamp = nullptr);
 
 }  // namespace tracking
 

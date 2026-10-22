@@ -296,6 +296,8 @@ void ConfigParser::sOnKey(void* ctx, const char* key, size_t) {
         self->pendingKey = Key::Max;
       } else if (strcmp(key, "integer") == 0) {
         self->pendingKey = Key::Integer;
+      } else if (strcmp(key, "timestamp_override") == 0) {
+        self->pendingKey = Key::TimestampOverride;
       }
       break;
     default:
@@ -451,6 +453,15 @@ void ConfigParser::onValue(const ValueKind kind, const char* text, const size_t 
           current.integerOnly = flag;
         } else if (kind != ValueKind::Null) {
           numberRuleBroken = true;
+        }
+        break;
+      case Key::TimestampOverride:
+        // Applies to every type, so unlike the number-only keys a wrong shape
+        // always breaks the item. Null too: it has no "unset" meaning here.
+        if (kind == ValueKind::Bool) {
+          current.timestampOverride = flag;
+        } else {
+          itemBroken = true;
         }
         break;
       case Key::Items:
