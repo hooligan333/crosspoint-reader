@@ -68,6 +68,15 @@ TrackingEntryActivity::TrackingEntryActivity(GfxRenderer& renderer, MappedInputM
     case tracking::ItemType::None:
       break;
   }
+  if (item.timestampOverride) {
+    prefillStamp();
+    addRow(RowKind::TsMode, StrId::STR_TRACKING_TIMESTAMP);
+    addRow(RowKind::TsYear, StrId::STR_TRACKING_TS_YEAR);
+    addRow(RowKind::TsMonth, StrId::STR_TRACKING_TS_MONTH);
+    addRow(RowKind::TsDay, StrId::STR_TRACKING_TS_DAY);
+    addRow(RowKind::TsHour, StrId::STR_TRACKING_TS_HOUR);
+    addRow(RowKind::TsMinute, StrId::STR_TRACKING_TS_MINUTE);
+  }
   addRow(RowKind::Confirm, StrId::STR_CONFIRM);
   addRow(RowKind::GoBack, StrId::STR_GO_BACK);
   refreshRowValues();
@@ -120,6 +129,31 @@ void TrackingEntryActivity::refreshRowValues() {
         break;
       case RowKind::Option:
         GUI.setCheckboxRow(row, optionChoice == args[i]);
+        break;
+      case RowKind::TsMode:
+        row.value = tsCustom ? tr(STR_TRACKING_TS_CUSTOM) : tr(STR_TRACKING_TS_NOW);
+        break;
+      // In Now mode the stamp is taken at Confirm; digits here would read as a
+      // stale clock, so the fields show Not set until Custom.
+      case RowKind::TsYear:
+        snprintf(tsText[0], sizeof(tsText[0]), "%u", static_cast<unsigned>(tsDateTime.year));
+        row.value = tsCustom ? tsText[0] : tr(STR_NOT_SET);
+        break;
+      case RowKind::TsMonth:
+        snprintf(tsText[1], sizeof(tsText[1]), "%02u", static_cast<unsigned>(tsDateTime.month));
+        row.value = tsCustom ? tsText[1] : tr(STR_NOT_SET);
+        break;
+      case RowKind::TsDay:
+        snprintf(tsText[2], sizeof(tsText[2]), "%02u", static_cast<unsigned>(tsDateTime.day));
+        row.value = tsCustom ? tsText[2] : tr(STR_NOT_SET);
+        break;
+      case RowKind::TsHour:
+        snprintf(tsText[3], sizeof(tsText[3]), "%02u", static_cast<unsigned>(tsDateTime.hour));
+        row.value = tsCustom ? tsText[3] : tr(STR_NOT_SET);
+        break;
+      case RowKind::TsMinute:
+        snprintf(tsText[4], sizeof(tsText[4]), "%02u", static_cast<unsigned>(tsDateTime.minute));
+        row.value = tsCustom ? tsText[4] : tr(STR_NOT_SET);
         break;
       case RowKind::Star:
       case RowKind::Confirm:
@@ -236,7 +270,27 @@ void TrackingEntryActivity::activateIndex(const int index) {
     case RowKind::Hour:
     case RowKind::Minute:
       app.clearTapFlash();
-      editDateField(kinds[index]);
+      editDateField(kinds[index], false);
+      return;
+    case RowKind::TsYear:
+      app.clearTapFlash();
+      editStampField(RowKind::Year);
+      return;
+    case RowKind::TsMonth:
+      app.clearTapFlash();
+      editStampField(RowKind::Month);
+      return;
+    case RowKind::TsDay:
+      app.clearTapFlash();
+      editStampField(RowKind::Day);
+      return;
+    case RowKind::TsHour:
+      app.clearTapFlash();
+      editStampField(RowKind::Hour);
+      return;
+    case RowKind::TsMinute:
+      app.clearTapFlash();
+      editStampField(RowKind::Minute);
       return;
     case RowKind::Confirm:
       confirm();
@@ -248,6 +302,7 @@ void TrackingEntryActivity::activateIndex(const int index) {
     case RowKind::False:
     case RowKind::Option:
     case RowKind::Star:
+    case RowKind::TsMode:
       break;
   }
   {
@@ -268,6 +323,11 @@ void TrackingEntryActivity::activateIndex(const int index) {
         stars = stars == value ? 0 : value;
         break;
       }
+      case RowKind::TsMode:
+        tsCustom = !tsCustom;
+        // Untouched fields would otherwise show the time the screen opened.
+        if (tsCustom && !tsEdited) prefillStamp();
+        break;
       default:
         break;
     }
@@ -294,37 +354,54 @@ void TrackingEntryActivity::editValue() {
   });
 }
 
-void TrackingEntryActivity::editDateField(const RowKind field) {
-  StrId title = StrId::STR_TRACKING_YEAR;
-  int value = dateTime.year;
+// Caller holds the RenderLock once the screen is up.
+void TrackingEntryActivity::prefillStamp() {
+  if (!tracking::localNow(tsDateTime)) tsDateTime = tracking::DateTime{tracking::FALLBACK_YEAR, 1, 1, 0, 0, 0};
+  tracking::clampDateTime(tsDateTime);
+}
+
+void TrackingEntryActivity::editStampField(const RowKind field) {
+  if (!tsCustom && !tsEdited) {
+    // The picker starts from now, not from when the screen opened.
+    RenderLock lock(*this);
+    prefillStamp();
+    refreshRowValues();
+  }
+  editDateField(field, true);
+}
+
+void TrackingEntryActivity::editDateField(const RowKind field, const bool stamp) {
+  const tracking::DateTime& current = stamp ? tsDateTime : dateTime;
+  StrId title = stamp ? StrId::STR_TRACKING_TS_YEAR : StrId::STR_TRACKING_YEAR;
+  int value = current.year;
   int minValue = tracking::YEAR_MIN;
   int maxValue = tracking::YEAR_MAX;
   int largeStep = 10;
   switch (field) {
     case RowKind::Month:
-      title = StrId::STR_TRACKING_MONTH;
-      value = dateTime.month;
+      title = stamp ? StrId::STR_TRACKING_TS_MONTH : StrId::STR_TRACKING_MONTH;
+      value = current.month;
       minValue = 1;
       maxValue = 12;
       largeStep = 3;
       break;
     case RowKind::Day:
-      title = StrId::STR_TRACKING_DAY;
-      value = dateTime.day;
+      title = stamp ? StrId::STR_TRACKING_TS_DAY : StrId::STR_TRACKING_DAY;
+      value = current.day;
       minValue = 1;
-      maxValue = tracking::daysInMonth(dateTime.year, dateTime.month);
+      maxValue = tracking::daysInMonth(current.year, current.month);
       largeStep = 7;
       break;
     case RowKind::Hour:
-      title = StrId::STR_TRACKING_HOUR;
-      value = dateTime.hour;
+      title = stamp ? StrId::STR_TRACKING_TS_HOUR : StrId::STR_TRACKING_HOUR;
+      value = current.hour;
       minValue = 0;
       maxValue = 23;
       largeStep = 6;
       break;
     case RowKind::Minute:
-      title = StrId::STR_TRACKING_MINUTE;
-      value = dateTime.minute;
+      title = stamp ? StrId::STR_TRACKING_TS_MINUTE : StrId::STR_TRACKING_MINUTE;
+      value = current.minute;
       minValue = 0;
       maxValue = 59;
       largeStep = 10;
@@ -338,32 +415,38 @@ void TrackingEntryActivity::editDateField(const RowKind field) {
     LOG_ERR("TRK", "OOM: field picker (%u bytes)", static_cast<unsigned>(sizeof(IntervalSelectionActivity)));
     return;
   }
-  startActivityForResult(std::move(picker), [this, field](const ActivityResult& result) {
+  startActivityForResult(std::move(picker), [this, field, stamp](const ActivityResult& result) {
     const auto* picked = std::get_if<IntervalResult>(&result.data);
     if (result.isCancelled || !picked) return;
     RenderLock lock(*this);
+    tracking::DateTime& target = stamp ? tsDateTime : dateTime;
     const auto v = static_cast<uint8_t>(picked->value);
     switch (field) {
       case RowKind::Year:
-        dateTime.year = static_cast<uint16_t>(picked->value);
+        target.year = static_cast<uint16_t>(picked->value);
         break;
       case RowKind::Month:
-        dateTime.month = v;
+        target.month = v;
         break;
       case RowKind::Day:
-        dateTime.day = v;
+        target.day = v;
         break;
       case RowKind::Hour:
-        dateTime.hour = v;
+        target.hour = v;
         break;
       case RowKind::Minute:
-        dateTime.minute = v;
+        target.minute = v;
         break;
       default:
         break;
     }
     // A year or month change can leave the day past the new month's end.
-    tracking::clampDateTime(dateTime);
+    tracking::clampDateTime(target);
+    // Editing a stamp field asks for that stamp; Now would drop the edit.
+    if (stamp) {
+      tsCustom = true;
+      tsEdited = true;  // later Custom toggles keep the picked stamp
+    }
     refreshRowValues();
   });
 }
@@ -450,7 +533,15 @@ void TrackingEntryActivity::confirm() {
       break;
   }
 
-  switch (tracking::appendEntry(item, value)) {
+  tracking::DateTime stampTime{};
+  const tracking::DateTime* overrideTimestamp = nullptr;
+  if (tsCustom) {
+    stampTime = tsDateTime;
+    stampTime.second = 0;  // the pickers stop at minutes
+    tracking::clampDateTime(stampTime);
+    overrideTimestamp = &stampTime;
+  }
+  switch (tracking::appendEntry(item, value, overrideTimestamp)) {
     case tracking::AppendResult::Ok:
       break;
     case tracking::AppendResult::NotWritten:
