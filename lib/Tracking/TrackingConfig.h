@@ -16,6 +16,10 @@
 //            1..MAX_OPTION_BYTES bytes
 //   min/max  number only, optional numbers; min must not exceed max
 //   integer  number only, optional bool
+//   timestamp_override
+//            optional bool, any type; true lets the entry screen set the
+//            row's timestamp column instead of taking the clock's now.
+//            Any other value, null included, breaks the item
 // Unknown keys are ignored. An item that breaks a rule, or arrives after
 // MAX_ITEMS valid ones, is skipped and counted in Config::skippedCount; the
 // file as a whole fails only on broken JSON or a missing "items" array.
@@ -55,6 +59,7 @@ struct Item {
   bool hasMin;
   bool hasMax;
   bool integerOnly;
+  bool timestampOverride;
 
   /** The CSV `label` column: the stable id when given, else the label. */
   const char* key() const { return id[0] != '\0' ? id : label; }
@@ -108,7 +113,7 @@ class ConfigParser {
   bool failed() const { return error != ParseError::None; }
 
  private:
-  enum class Key : uint8_t { Other, Items, Label, Type, Id, Options, Min, Max, Integer };
+  enum class Key : uint8_t { Other, Items, Label, Type, Id, Options, Min, Max, Integer, TimestampOverride };
   enum class Context : uint8_t { Other, Root, ItemsArray, Item, Options };
 
   static void sOnKey(void* ctx, const char* key, size_t len);
