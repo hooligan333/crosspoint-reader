@@ -149,6 +149,10 @@ void FlashcardStudyActivity::scanDeckFolder() {
     deckLeaves.emplace_back(name);
   }
   sortLeaves(deckLeaves);
+#ifdef CROSSPOINT_TRACKING
+  // Open on the first deck, not the Sync row: studying is the daily path.
+  if (!deckLeaves.empty()) deckSelection = SYNC_ROW_COUNT;
+#endif
 }
 
 int FlashcardStudyActivity::deckRowsPerPage() const {
@@ -160,11 +164,20 @@ int FlashcardStudyActivity::deckRowsPerPage() const {
 }
 
 void FlashcardStudyActivity::openSelectedDeck() {
+#ifdef CROSSPOINT_TRACKING
+  const int deckIndex = deckSelection - SYNC_ROW_COUNT;
+  if (deckIndex < 0 || deckIndex >= static_cast<int>(deckLeaves.size())) {
+#else
   if (deckSelection < 0 || deckSelection >= static_cast<int>(deckLeaves.size())) {
+#endif
     fail(StrId::STR_DECK_OPEN_FAILED);
     return;
   }
+#ifdef CROSSPOINT_TRACKING
+  const std::string& leaf = deckLeaves[deckIndex];
+#else
   const std::string& leaf = deckLeaves[deckSelection];
+#endif
   closeDeck();
 
   const flashcards::DeckError deckError = deck.open(flashcards::deckPathFor(destFolder, leaf));
@@ -1077,8 +1090,29 @@ void FlashcardStudyActivity::loop() {
   }
 }
 
+#ifdef CROSSPOINT_TRACKING
+void FlashcardStudyActivity::activatePickerRow() {
+  if (deckSelection < SYNC_ROW_COUNT) {
+    // Same route the old Home row took. Sync replaces this screen and, when it
+    // is done, comes back to a fresh picker that re-scans the folder.
+    activityManager.goToFlashcardSync();
+    return;
+  }
+  pendingWork = Work::OpenDeck;
+  {
+    RenderLock lock(*this);
+    screen = Screen::Busy;
+  }
+  requestUpdate();
+}
+#endif
+
 void FlashcardStudyActivity::loopPicker() {
+#ifdef CROSSPOINT_TRACKING
+  const int count = pickerRowCount();
+#else
   const int count = static_cast<int>(deckLeaves.size());
+#endif
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     onGoHome();
     return;
@@ -1112,22 +1146,30 @@ void FlashcardStudyActivity::loopPicker() {
       requestUpdate();
       return;
     }
+#ifdef CROSSPOINT_TRACKING
+    activatePickerRow();
+#else
     pendingWork = Work::OpenDeck;
     {
       RenderLock lock(*this);
       screen = Screen::Busy;
     }
     requestUpdate();
+#endif
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+#ifdef CROSSPOINT_TRACKING
+    activatePickerRow();
+#else
     pendingWork = Work::OpenDeck;
     {
       RenderLock lock(*this);
       screen = Screen::Busy;
     }
     requestUpdate();
+#endif
   }
 }
 
@@ -1382,6 +1424,11 @@ void FlashcardStudyActivity::formatInterval(const uint8_t grade, char* out, cons
 void FlashcardStudyActivity::renderPicker() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
+#ifdef CROSSPOINT_TRACKING
+  // The Sync row is always there; an empty folder adds the no-decks hint below.
+  const int perPage = deckRowsPerPage();
+  const int count = pickerRowCount();
+#else
   if (deckLeaves.empty()) {
     drawTwoLineMessage(tr(STR_DECK_NONE_FOUND), tr(STR_DECK_SYNC_HINT));
     return;
@@ -1389,9 +1436,14 @@ void FlashcardStudyActivity::renderPicker() const {
 
   const int perPage = deckRowsPerPage();
   const int count = static_cast<int>(deckLeaves.size());
+#endif
   const int windowTop = (deckSelection / perPage) * perPage;
   drawRows(metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing, std::min(perPage, count - windowTop),
            deckSelection - windowTop, windowTop);
+#ifdef CROSSPOINT_TRACKING
+  // Mid-screen, clear of the lone Sync row at the top.
+  if (deckLeaves.empty()) drawTwoLineMessage(tr(STR_DECK_NONE_FOUND), tr(STR_DECK_SYNC_HINT));
+#endif
 }
 
 /**
@@ -1422,7 +1474,13 @@ void FlashcardStudyActivity::drawRows(const int top, const int count, const int 
       count, selected,
       [this, windowOffset, &modeRows, modeBase](const int index) {
         if (windowOffset < 0) return std::string(I18N.get(modeRows[modeBase + index]));
+#ifdef CROSSPOINT_TRACKING
+        const int row = windowOffset + index;
+        if (row < SYNC_ROW_COUNT) return std::string(tr(STR_DECK_SYNC));
+        return deckLabel(deckLeaves[row - SYNC_ROW_COUNT]);
+#else
         return deckLabel(deckLeaves[windowOffset + index]);
+#endif
       },
       nullptr);
 }
@@ -1660,9 +1718,13 @@ void FlashcardStudyActivity::render(RenderLock&&) {
   switch (screen) {
     case Screen::Picker:
       renderPicker();
+#ifdef CROSSPOINT_TRACKING
+      labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+#else
       labels =
           mappedInput.mapLabels(tr(STR_BACK), deckLeaves.empty() ? "" : tr(STR_SELECT),
                                 deckLeaves.empty() ? "" : tr(STR_DIR_UP), deckLeaves.empty() ? "" : tr(STR_DIR_DOWN));
+#endif
       break;
     case Screen::Busy:
       renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LOADING));
