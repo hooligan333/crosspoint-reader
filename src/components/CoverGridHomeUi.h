@@ -67,7 +67,14 @@ class CoverGridHomeUi final : public UiAppHost {
                                   + 1
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+#ifdef CROSSPOINT_TRACKING
+                                  + 1
+#else
                                   + 2
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+                                  + 1
 #endif
       ;
   std::array<freeink::ui::TabItem, MAX_TABS> tabItems;
