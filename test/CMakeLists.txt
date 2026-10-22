@@ -87,6 +87,7 @@ add_subdirectory(sd_card_font)
 add_subdirectory(clipping_preview)
 add_subdirectory(glyph_bitmap)
 add_subdirectory(deck_sync)
+add_subdirectory(tracking_logic)
 
 add_subdirectory(clipping_store)
 add_subdirectory(reader_session)

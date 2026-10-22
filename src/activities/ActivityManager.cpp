@@ -717,3 +717,18 @@ void RenderLock::unlock() {
  *
  */
 bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };
+
+#ifdef CROSSPOINT_TRACKING
+// At the end of the file, with its include: the assert()s above embed their
+// __LINE__ in the image, and flag-off builds must stay byte-identical.
+#include "tracking/TrackingMenuActivity.h"
+
+void ActivityManager::goToTracking() {
+  auto activity = makeUniqueNoThrow<TrackingMenuActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: tracking activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+#endif

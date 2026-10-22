@@ -59,7 +59,14 @@ int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Library, File transfer, Settings
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
+#ifdef CROSSPOINT_TRACKING
+  count += 1;  // Flashcards (Sync Decks is the deck picker's first row)
+#else
   count += 2;  // Flashcards, Sync Decks
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+  count += 1;  // Tracking
 #endif
   count += recentRowCount();
   if (hasLibrarySlot()) {
@@ -381,6 +388,11 @@ void HomeActivity::loop() {
         onFlashcardSyncOpen();
         break;
 #endif
+#ifdef CROSSPOINT_TRACKING
+      case HomeMenuItem::TRACKING:
+        onTrackingOpen();
+        break;
+#endif
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -604,7 +616,17 @@ void HomeActivity::render(RenderLock&&) {
   // the study screen, which is the row a user visits daily.
   menuItems.insert(menuItems.end() - 1, tr(STR_DECK_STUDY));
   menuIcons.insert(menuIcons.end() - 1, Text);
+#ifndef CROSSPOINT_TRACKING
   menuItems.insert(menuItems.end() - 1, tr(STR_DECK_SYNC));
+  menuIcons.insert(menuIcons.end() - 1, Bookmark);
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+  // Tracking takes the slot directly above Settings that Sync Decks held (Sync
+  // Decks moves into the deck picker), so the row count, and with it the list's
+  // fit above Settings, is unchanged. Bookmark goes with the slot: the UIIcon
+  // set has no checklist glyph, and every theme maps Bookmark.
+  menuItems.insert(menuItems.end() - 1, tr(STR_TRACKING));
   menuIcons.insert(menuIcons.end() - 1, Bookmark);
 #endif
 
@@ -663,6 +685,10 @@ void HomeActivity::onRssSyncOpen() { activityManager.goToRssSync(); }
 void HomeActivity::onFlashcardStudyOpen() { activityManager.goToFlashcardStudy(); }
 
 void HomeActivity::onFlashcardSyncOpen() { activityManager.goToFlashcardSync(); }
+#endif
+
+#ifdef CROSSPOINT_TRACKING
+void HomeActivity::onTrackingOpen() { activityManager.goToTracking(); }
 #endif
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }

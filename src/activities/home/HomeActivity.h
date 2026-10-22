@@ -56,7 +56,17 @@ class HomeActivity final : public Activity {
 #ifdef CROSSPOINT_FLASHCARDS
     if (item == HomeMenuItem::FLASHCARD_STUDY) return i;
     ++i;
+#ifdef CROSSPOINT_TRACKING
+    // Sync Decks lives in the deck picker here; its activity still maps to
+    // this item when Home is reached from it.
+    if (item == HomeMenuItem::FLASHCARD_SYNC) return i - 1;
+#else
     if (item == HomeMenuItem::FLASHCARD_SYNC) return i;
+    ++i;
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+    if (item == HomeMenuItem::TRACKING) return i;
     ++i;
 #endif
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
@@ -79,7 +89,12 @@ class HomeActivity final : public Activity {
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
     if (idx == i++) return HomeMenuItem::FLASHCARD_STUDY;
+#ifndef CROSSPOINT_TRACKING
     if (idx == i++) return HomeMenuItem::FLASHCARD_SYNC;
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+    if (idx == i++) return HomeMenuItem::TRACKING;
 #endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
@@ -95,6 +110,9 @@ class HomeActivity final : public Activity {
 #ifdef CROSSPOINT_FLASHCARDS
   void onFlashcardStudyOpen();
   void onFlashcardSyncOpen();
+#endif
+#ifdef CROSSPOINT_TRACKING
+  void onTrackingOpen();
 #endif
   void onOpdsBrowserOpen();
   void onPluginsOpen();

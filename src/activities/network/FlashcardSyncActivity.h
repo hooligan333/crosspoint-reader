@@ -145,6 +145,11 @@ class FlashcardSyncActivity final : public UiListActivity {
   // Drop the radio before leaving to somewhere other than home; see
   // RssSyncActivity::shutdownWifi for the full reasoning.
   void shutdownWifi();
+#ifdef CROSSPOINT_TRACKING
+  // This build opens Sync from the deck picker (Home's slot went to Tracking),
+  // so Back / Done / the error page return there instead of Home.
+  void leaveToPicker();
+#endif
 
   void buildListScreen(UiScreen& screen);
   void buildSummaryScreen(UiScreen& screen);
