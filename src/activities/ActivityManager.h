@@ -31,6 +31,9 @@ enum class HomeMenuItem {
   FLASHCARD_STUDY,
   FLASHCARD_SYNC,
 #endif
+#ifdef CROSSPOINT_TRACKING
+  TRACKING,
+#endif
   SETTINGS_MENU
 };
 
@@ -136,6 +139,9 @@ class ActivityManager {
 #ifdef CROSSPOINT_FLASHCARDS
   void goToFlashcardStudy();
   void goToFlashcardSync();
+#endif
+#ifdef CROSSPOINT_TRACKING
+  void goToTracking();
 #endif
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);

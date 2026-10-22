@@ -173,6 +173,14 @@ class FlashcardStudyActivity final : public Activity {
   void scanDeckFolder();
   int deckRowsPerPage() const;
   void openSelectedDeck();
+#ifdef CROSSPOINT_TRACKING
+  // Row 0 of the picker is Sync Decks (moved off Home to make room for
+  // Tracking); deck rows follow it, so deckSelection is offset by one.
+  static constexpr int SYNC_ROW_COUNT = 1;
+  int pickerRowCount() const { return static_cast<int>(deckLeaves.size()) + SYNC_ROW_COUNT; }
+  /** Confirm/tap on the selected picker row: Sync Decks or a deck. */
+  void activatePickerRow();
+#endif
 
   // --- Session ---
   bool allocateSessionBuffers();

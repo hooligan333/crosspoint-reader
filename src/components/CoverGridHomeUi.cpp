@@ -16,7 +16,7 @@
 #include "icons/library.h"
 #include "icons/settings2.h"
 #include "icons/transfer.h"
-#if defined(CROSSPOINT_FLASHCARDS)
+#if defined(CROSSPOINT_FLASHCARDS) || defined(CROSSPOINT_TRACKING)
 #include "icons/bookmark.h"
 #endif
 #if defined(CROSSPOINT_RSS_SYNC)
@@ -306,6 +306,12 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
 #endif
 #ifdef CROSSPOINT_FLASHCARDS
   tabIcons[count++] = BookIcon;
+#ifndef CROSSPOINT_TRACKING
+  tabIcons[count++] = BookmarkIcon;
+#endif
+#endif
+#ifdef CROSSPOINT_TRACKING
+  // Tracking, in the slot Sync Decks leaves (it moves into the deck picker).
   tabIcons[count++] = BookmarkIcon;
 #endif
   tabIcons[count++] = Settings2Icon;

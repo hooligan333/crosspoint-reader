@@ -320,6 +320,23 @@ void FlashcardSyncActivity::shutdownWifi() {
   delay(30);
 }
 
+#ifdef CROSSPOINT_TRACKING
+void FlashcardSyncActivity::leaveToPicker() {
+  // The same teardown onExit() runs on the way Home, done first because onExit
+  // only runs after the picker is built. On touch boards it stops SNTP and the
+  // radio in place and returns; elsewhere it is the heap-defrag reboot to Home.
+  // Assumes a touch board (TRACKING ships on combo only): a non-touch port must
+  // revisit the reboot path (RenderLock around silentRestart, lands on Home).
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.disconnect(false);
+    delay(30);
+    silentRestart();
+  }
+  // A fresh picker re-scans the deck folder, so added and removed decks show.
+  activityManager.goToFlashcardStudy();
+}
+#endif
+
 void FlashcardSyncActivity::onWifiSelectionComplete(const bool connected) {
   if (!connected) {
     // Leave the radio up; onExit's silent reboot handles teardown without
@@ -546,7 +563,11 @@ void FlashcardSyncActivity::activateIndex(const int index) {
       shutdownWifi();
       activityManager.goToFileBrowser(destFolder);
     } else {
+#ifdef CROSSPOINT_TRACKING
+      leaveToPicker();
+#else
       onGoHome();
+#endif
     }
     return;
   }
@@ -580,7 +601,11 @@ void FlashcardSyncActivity::activateIndex(const int index) {
 void FlashcardSyncActivity::onBackButton() {
   // Back leaves the feature entirely from either list; onExit tears the radio
   // down and reboots into home.
+#ifdef CROSSPOINT_TRACKING
+  leaveToPicker();
+#else
   onGoHome();
+#endif
 }
 
 bool FlashcardSyncActivity::handleCustomInput() {
@@ -594,7 +619,11 @@ bool FlashcardSyncActivity::handleCustomInput() {
     // A tap works too: this screen is a dead end, and a touch-only user should
     // not have to reach for the home gesture to leave it.
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasScreenTapped(tx, ty)) {
+#ifdef CROSSPOINT_TRACKING
+      leaveToPicker();
+#else
       onGoHome();
+#endif
     }
   }
   // WIFI_SELECTION: the child activity owns input. FETCHING/SYNCING block the
