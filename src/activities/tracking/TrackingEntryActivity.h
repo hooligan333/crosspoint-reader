@@ -24,6 +24,12 @@
  *                 indices 0..4 ahead of the rows, so button navigation walks
  *                 the stars first
  *   none          a prompt line above the two rows
+ * When the log holds a row for the item, two lines above the list (below the
+ * prompt or stars) show its value and timestamp; a none item shows "Last
+ * logged:" and the timestamp. The row is the most recently recorded one (file
+ * order), which for a timestamp_override item may not carry the latest
+ * timestamp. Read once in the constructor and never changed; it never
+ * pre-fills the input.
  * An item with timestamp_override adds, before Confirm, a Timestamp row that
  * toggles Now / Custom and Stamp year..minute rows for the custom stamp. Now
  * stamps at Confirm and its rows show Not set; until a stamp field has been
@@ -82,6 +88,7 @@ class TrackingEntryActivity final : public UiListActivity {
   void addRow(RowKind kind, StrId label, int16_t arg = 0);
   void refreshRowValues();
   void drawStars(UiScreen& screen);
+  void drawLastEntry(UiScreen& screen);
 
   void editValue();
   // `field` is Year..Minute; `stamp` edits tsDateTime instead of dateTime.
@@ -120,6 +127,11 @@ class TrackingEntryActivity final : public UiListActivity {
   char tsText[5][6] = {};  // TsYear..TsMinute row values
   bool tsCustom = false;   // false: stamp with local now at Confirm
   bool tsEdited = false;   // a stamp field was picked; no more re-fills
+
+  // The item's newest logged row, composed in the constructor and constant
+  // afterwards, so the render task reads it without the lock. Empty: no hint.
+  char lastLine[tracking::MAX_TEXT_BYTES + 64] = {};  // a full text value plus a translated prefix
+  char lastTime[tracking::TIMESTAMP_BYTES] = {};
 
   OptionPopup problemPopup;
 };

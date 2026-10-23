@@ -21,6 +21,16 @@ namespace fui = freeink::ui;
 
 namespace {
 
+// A datetime item's logged value, "YYYY-MM-DDTHH:MM"; loose on purpose, it
+// only picks the display form.
+bool isDateTimeValue(const char* v) {
+  if (strlen(v) < 16 || v[10] != 'T') return false;
+  for (int i = 0; i < 4; i++) {
+    if (v[i] < '0' || v[i] > '9') return false;
+  }
+  return true;
+}
+
 // A five-point star as ten vertices, outer and inner alternating clockwise
 // from the top, in thousandths of the outer radius (inner radius 0.382, the
 // regular star). Integer constants keep trig off the render path.
@@ -80,6 +90,28 @@ TrackingEntryActivity::TrackingEntryActivity(GfxRenderer& renderer, MappedInputM
   addRow(RowKind::Confirm, StrId::STR_CONFIRM);
   addRow(RowKind::GoBack, StrId::STR_GO_BACK);
   refreshRowValues();
+
+  // Blocking SD read, like the menu's config load on its way in.
+  tracking::LastEntry last;  // ~150 B
+  if (tracking::lastEntry(item, last)) {
+    if (last.value[0] != '\0') {
+      const char* shown = last.value;
+      // Gated on the item's type: a text value that merely looks like a
+      // boolean or datetime must be shown verbatim.
+      if (item.type == tracking::ItemType::Boolean && strcmp(shown, tracking::booleanValue(true)) == 0) {
+        shown = tr(STR_TRACKING_TRUE);
+      } else if (item.type == tracking::ItemType::Boolean && strcmp(shown, tracking::booleanValue(false)) == 0) {
+        shown = tr(STR_TRACKING_FALSE);
+      } else if (item.type == tracking::ItemType::DateTime && isDateTimeValue(shown)) {
+        last.value[10] = ' ';  // shown like the timestamp below it
+      }
+      snprintf(lastLine, sizeof(lastLine), tr(STR_TRACKING_LAST_FORMAT), shown);
+    } else {
+      snprintf(lastLine, sizeof(lastLine), "%s", tr(STR_TRACKING_LAST_LOGGED));
+    }
+    snprintf(lastTime, sizeof(lastTime), "%s", last.timestamp);
+    if (lastTime[10] == 'T') lastTime[10] = ' ';  // "YYYY-MM-DD HH:MM:SS" reads better than the CSV form
+  }
 }
 
 void TrackingEntryActivity::addRow(const RowKind kind, const StrId label, const int16_t arg) {
@@ -214,6 +246,15 @@ void TrackingEntryActivity::drawStars(UiScreen& screen) {
   screen.target().text(screen.takeTop(lineH, screen.theme().spaceMd), starsText, readout);
 }
 
+void TrackingEntryActivity::drawLastEntry(UiScreen& screen) {
+  auto hint = screen.theme().bodyText;
+  hint.align = fui::TextAlign::Center;
+  hint.maxLines = 1;  // a long text value is cut, not wrapped
+  const int16_t lineH = screen.target().lineHeight(hint.font);
+  screen.target().text(screen.takeTop(lineH), lastLine, hint);
+  screen.target().text(screen.takeTop(lineH, screen.theme().spaceMd), lastTime, hint);
+}
+
 void TrackingEntryActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
@@ -229,6 +270,7 @@ void TrackingEntryActivity::buildScreen(UiScreen& screen) {
                          tr(STR_TRACKING_NONE_PROMPT), prompt);
   }
   if (leadingRows > 0) drawStars(screen);
+  if (lastLine[0] != '\0') drawLastEntry(screen);
 
   fui::ListProps props;
   props.items = rows + leadingRows;

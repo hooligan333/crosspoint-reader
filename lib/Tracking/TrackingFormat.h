@@ -111,4 +111,94 @@ unsigned findFreeRotatedLog(bool (*taken)(const char* path, void* ctx), void* ct
 
 const char* booleanValue(bool value);
 
+// Longest typeName() ("datetime") plus its NUL.
+constexpr size_t CSV_TYPE_BYTES = sizeof("datetime");
+
+/** One log row's columns. Each buffer fits the longest value this firmware writes there. */
+struct CsvRow {
+  char timestamp[TIMESTAMP_BYTES];
+  char key[MAX_LABEL_BYTES + 1];  // a label, or an id (MAX_ID_BYTES is shorter)
+  char type[CSV_TYPE_BYTES];
+  char value[MAX_TEXT_BYTES + 1];
+};
+
+/**
+ * Splits one line (no line end) into exactly four RFC 4180 fields, unquoting
+ * quoted ones. False for any other field count, an unterminated quote, text
+ * after a closing quote, a quote inside an unquoted field, or a field longer
+ * than its CsvRow buffer: such a row was not written by this firmware.
+ */
+bool parseCsvRow(const char* line, size_t len, CsvRow& out);
+
+struct LastEntry {
+  char timestamp[TIMESTAMP_BYTES];
+  char value[MAX_TEXT_BYTES + 1];  // empty for a none item
+  bool found;
+};
+
+/**
+ * Finds the newest log row whose key column equals `key`, fed the log from
+ * its end: each feedBackward() chunk is the bytes directly before the
+ * previous one. Lines are assembled across chunk boundaries and tested
+ * newest-first; scanning stops at the first match.
+ *
+ * Skipped, without ending the scan: blank lines, header lines, lines longer
+ * than ROW_BYTES, lines parseCsvRow() rejects, and rows whose timestamp is
+ * not exactly YYYY-MM-DDTHH:MM:SS (digits at the digit positions). A CR
+ * before the LF is dropped, and a last line without a line end still counts.
+ *
+ * Accepted limit: a quoted field holding a line break (only a PC edit can
+ * make one; the device keyboard cannot) splits into separate lines here. The
+ * pieces normally fail to parse or lack a timestamp and are skipped; a piece
+ * that is itself a well-formed, timestamped row is read as one.
+ *
+ * `key` must outlive the scanner. ~0.9 KB: device callers heap-allocate it.
+ */
+class LastEntryScanner {
+ public:
+  explicit LastEntryScanner(const char* key);
+
+  /** Returns true once a match is found; later calls are no-ops. */
+  bool feedBackward(const char* data, size_t len);
+  /**
+   * Call once the file's first byte has been fed: tests the pending first
+   * line. Skip it when the scan stopped short of the file start, since the
+   * pending bytes are then only the tail of a line.
+   */
+  void finishAtFileStart();
+
+  bool found() const { return entry.found; }
+  const LastEntry& result() const { return entry; }
+
+ private:
+  void endLine();
+
+  const char* key;
+  // The line being assembled, filled from the back: bytes [start, ROW_BYTES).
+  char line[ROW_BYTES];
+  size_t start = ROW_BYTES;
+  bool overlong = false;
+  CsvRow row{};
+  LastEntry entry{};
+};
+
+// scanLogTail() starts each read on a multiple of this (the SD sector size),
+// except one that begins at the cap boundary.
+constexpr size_t LOG_READ_ALIGN = 512;
+
+/** Reads exactly `len` bytes at `pos` into `buf`; false on any failure or short read. */
+using LogReadFn = bool (*)(void* ctx, size_t pos, char* buf, size_t len);
+
+/**
+ * Feeds `scanner` the last `capBytes` of a `fileSize`-byte log, newest bytes
+ * first, through `read` into the caller's `chunk` (at most `chunkBytes`, > 0,
+ * per read; a multiple of LOG_READ_ALIGN keeps every read aligned). Stops at
+ * the first match. The scanner tests the file's first line only when the scan
+ * reached byte 0: past the cap, the pending bytes may be the tail of a cut
+ * line, so a row whose preceding line end lies outside the cap is not found.
+ * False when a read fails; the scanner's result is then not used.
+ */
+bool scanLogTail(size_t fileSize, size_t capBytes, LogReadFn read, void* ctx, LastEntryScanner& scanner, char* chunk,
+                 size_t chunkBytes);
+
 }  // namespace tracking

@@ -14,6 +14,15 @@ bool isDigit(const char c) { return c >= '0' && c <= '9'; }
 
 uint8_t clampU8(const uint8_t v, const uint8_t lo, const uint8_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+// Exactly "YYYY-MM-DDTHH:MM:SS", the only stamp this firmware writes.
+bool isLogTimestamp(const char* ts) {
+  static constexpr char SHAPE[] = "DDDD-DD-DDTDD:DD:DD";
+  for (size_t i = 0; i + 1 < sizeof(SHAPE); i++) {
+    if (SHAPE[i] == 'D' ? !isDigit(ts[i]) : ts[i] != SHAPE[i]) return false;
+  }
+  return ts[sizeof(SHAPE) - 1] == '\0';
+}
+
 }  // namespace
 
 bool isLeapYear(const uint16_t year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
@@ -199,6 +208,114 @@ unsigned findFreeRotatedLog(bool (*taken)(const char* path, void* ctx), void* ct
 }
 
 const char* booleanValue(const bool value) { return value ? "true" : "false"; }
+
+bool parseCsvRow(const char* line, const size_t len, CsvRow& out) {
+  char* const fields[4] = {out.timestamp, out.key, out.type, out.value};
+  const size_t caps[4] = {sizeof(out.timestamp), sizeof(out.key), sizeof(out.type), sizeof(out.value)};
+  for (char* field : fields) field[0] = '\0';
+
+  size_t p = 0;
+  for (int f = 0; f < 4; f++) {
+    char* const dst = fields[f];
+    size_t n = 0;
+    const auto put = [&](const char c) {
+      if (n + 1 >= caps[f]) return false;
+      dst[n++] = c;
+      return true;
+    };
+    if (p < len && line[p] == '"') {
+      p++;
+      bool closed = false;
+      while (p < len) {
+        const char c = line[p++];
+        if (c == '"') {
+          if (p < len && line[p] == '"') {
+            p++;
+          } else {
+            closed = true;
+            break;
+          }
+        }
+        if (!put(c)) return false;
+      }
+      if (!closed) return false;
+    } else {
+      while (p < len && line[p] != ',') {
+        if (line[p] == '"' || !put(line[p])) return false;
+        p++;
+      }
+    }
+    dst[n] = '\0';
+    // Each field ends at a comma, or the last one at the line's end.
+    if (f < 3) {
+      if (p >= len || line[p] != ',') return false;
+      p++;
+    } else if (p != len) {
+      return false;
+    }
+  }
+  return true;
+}
+
+LastEntryScanner::LastEntryScanner(const char* key) : key(key) {}
+
+bool LastEntryScanner::feedBackward(const char* data, const size_t len) {
+  for (size_t i = len; i > 0 && !entry.found; i--) {
+    const char c = data[i - 1];
+    if (c == '\n') {
+      endLine();
+    } else if (overlong) {
+      // Dropping the rest of a line that cannot be ours.
+    } else if (start == 0) {
+      overlong = true;
+    } else {
+      line[--start] = c;
+    }
+  }
+  return entry.found;
+}
+
+void LastEntryScanner::finishAtFileStart() {
+  if (!entry.found) endLine();
+}
+
+void LastEntryScanner::endLine() {
+  const char* text = line + start;
+  size_t len = ROW_BYTES - start;
+  const bool skip = overlong;
+  start = ROW_BYTES;
+  overlong = false;
+  if (skip) return;
+  if (len > 0 && text[len - 1] == '\r') len--;
+  if (len == 0) return;
+  // A header has a "label" key column; never let it pass for a row.
+  if (startsWithCsvHeader(text, len, true)) return;
+  if (!parseCsvRow(text, len, row) || strcmp(row.key, key) != 0 || !isLogTimestamp(row.timestamp)) return;
+  memcpy(entry.timestamp, row.timestamp, sizeof(entry.timestamp));
+  memcpy(entry.value, row.value, sizeof(entry.value));
+  entry.found = true;
+}
+
+bool scanLogTail(const size_t fileSize, const size_t capBytes, const LogReadFn read, void* const ctx,
+                 LastEntryScanner& scanner, char* const chunk, const size_t chunkBytes) {
+  if (chunkBytes == 0) return false;  // the loop below could not make progress
+  const size_t scanStart = fileSize > capBytes ? fileSize - capBytes : 0;
+  size_t pos = fileSize;
+  while (pos > scanStart && !scanner.found()) {
+    size_t start = pos - (pos - scanStart < chunkBytes ? pos - scanStart : chunkBytes);
+    if (start > scanStart) {
+      // The first read takes the unaligned remainder, so later ones start aligned.
+      const size_t up = (start + LOG_READ_ALIGN - 1) / LOG_READ_ALIGN * LOG_READ_ALIGN;
+      if (up < pos) start = up;
+    }
+    const size_t n = pos - start;
+    if (!read(ctx, start, chunk, n)) return false;
+    pos = start;
+    scanner.feedBackward(chunk, n);
+  }
+  if (pos == 0) scanner.finishAtFileStart();
+  return true;
+}
 
 }  // namespace tracking
 
