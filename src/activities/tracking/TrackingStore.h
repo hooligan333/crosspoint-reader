@@ -44,6 +44,18 @@ enum class AppendResult : uint8_t {
  */
 AppendResult appendEntry(const Item& item, const char* value, const DateTime* overrideTimestamp = nullptr);
 
+// lastEntry() reads at most this much of the log's end, so opening an entry
+// screen stays quick on a years-old log. An item last logged further back
+// gets no hint.
+constexpr size_t LAST_ENTRY_SCAN_BYTES = 256 * 1024;
+
+/**
+ * The newest log row for `item`, read backward from the end of the log.
+ * Best-effort: false (and out.found false) when there is no log, no match
+ * within LAST_ENTRY_SCAN_BYTES, or any read or memory failure.
+ */
+bool lastEntry(const Item& item, LastEntry& out);
+
 }  // namespace tracking
 
 #endif  // CROSSPOINT_TRACKING
