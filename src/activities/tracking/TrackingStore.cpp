@@ -224,6 +224,49 @@ AppendResult appendEntry(const Item& item, const char* value, const DateTime* ov
   return result;
 }
 
+bool lastEntry(const Item& item, LastEntry& out) {
+  out = LastEntry{};
+  HalFile file = Storage.open(LOG_PATH, O_RDONLY);
+  if (!file) return false;  // no log yet, or unreadable: no hint either way
+
+  // The scanner (~0.9 KB) and the 4 KB read chunk stay off the stack.
+  struct Scratch {
+    explicit Scratch(const char* key) : scanner(key) {}
+    LastEntryScanner scanner;
+    char chunk[8 * LOG_READ_ALIGN];
+  };
+  auto scratch = makeUniqueNoThrow<Scratch>(item.key());
+  if (!scratch) {
+    LOG_ERR("TRK", "OOM: last-entry scan (%u bytes)", static_cast<unsigned>(sizeof(Scratch)));
+    file.close();
+    return false;
+  }
+
+  struct Reader {
+    HalFile& file;
+    size_t bytes;
+  } reader{file, 0};
+  const auto readAt = [](void* ctx, const size_t pos, char* buf, const size_t len) {
+    auto& r = *static_cast<Reader*>(ctx);
+    if (r.file.seek(pos) && r.file.read(buf, len) == static_cast<int>(len)) {
+      r.bytes += len;
+      return true;
+    }
+    LOG_ERR("TRK", "Read failed: %s at %u", LOG_PATH, static_cast<unsigned>(pos));
+    return false;
+  };
+
+  const unsigned long startMs = millis();
+  const bool ok = scanLogTail(file.fileSize(), LAST_ENTRY_SCAN_BYTES, readAt, &reader, scratch->scanner, scratch->chunk,
+                              sizeof(scratch->chunk));
+  file.close();
+  LOG_DBG("TRK", "Last-entry scan: %u bytes in %lu ms", static_cast<unsigned>(reader.bytes), millis() - startMs);
+
+  if (!ok || !scratch->scanner.found()) return false;
+  out = scratch->scanner.result();
+  return true;
+}
+
 }  // namespace tracking
 
 #endif  // CROSSPOINT_TRACKING

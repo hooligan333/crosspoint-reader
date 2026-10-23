@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "TrackingConfig.h"
@@ -736,4 +738,476 @@ TEST(TrackingDate, Formatting) {
   char dtOut[VALUE_DATE_BYTES];
   formatDateTime(dt, dtOut, sizeof(dtOut));
   EXPECT_STREQ(dtOut, "2024-02-09T07:05");
+}
+
+// --- Log rows ---
+
+namespace {
+
+bool parseRow(const std::string& line, CsvRow& out) { return parseCsvRow(line.data(), line.size(), out); }
+
+struct TailLog {
+  const std::string& log;
+  std::vector<std::pair<size_t, size_t>> reads;  // (pos, len) of each read, in order
+  int failAtRead = -1;                           // this read (0-based) fails
+};
+
+bool readTail(void* ctx, const size_t pos, char* buf, const size_t len) {
+  auto& t = *static_cast<TailLog*>(ctx);
+  if (static_cast<int>(t.reads.size()) == t.failAtRead) return false;
+  t.reads.emplace_back(pos, len);
+  EXPECT_LE(pos + len, t.log.size());
+  memcpy(buf, t.log.data() + pos, len);
+  return true;
+}
+
+struct TailScan {
+  bool ok;
+  LastEntry entry;
+  std::vector<std::pair<size_t, size_t>> reads;
+};
+
+// Runs scanLogTail() over `log` as the store runs it over the file.
+TailScan scanTail(const std::string& log, const char* key, const size_t chunk = 8 * LOG_READ_ALIGN,
+                  const size_t cap = SIZE_MAX, const int failAtRead = -1) {
+  TailLog t{log, {}, failAtRead};
+  auto scanner = std::make_unique<LastEntryScanner>(key);
+  std::vector<char> buf(chunk);
+  const bool ok = scanLogTail(log.size(), cap, readTail, &t, *scanner, buf.data(), chunk);
+  return {ok, scanner->result(), t.reads};
+}
+
+LastEntry scanLog(const std::string& log, const char* key, const size_t chunk = 8 * LOG_READ_ALIGN) {
+  const TailScan r = scanTail(log, key, chunk);
+  EXPECT_TRUE(r.ok);
+  return r.entry;
+}
+
+std::string withHeader(const std::string& rows) { return std::string(CSV_HEADER) + "\n" + rows; }
+
+// Chunk sizes 1, 2, 3, 5, 7, 13, 64, 511, 512, 513, 700, 1024 must all agree
+// with the device's 4096; returns the 4096-byte result.
+LastEntry scanAllChunkings(const std::string& log, const char* key) {
+  const LastEntry ref = scanLog(log, key);
+  for (size_t chunk : {1u, 2u, 3u, 5u, 7u, 13u, 64u, 511u, 512u, 513u, 700u, 1024u}) {
+    const LastEntry e = scanLog(log, key, chunk);
+    EXPECT_EQ(e.found, ref.found) << "chunk " << chunk;
+    EXPECT_STREQ(e.timestamp, ref.timestamp) << "chunk " << chunk;
+    EXPECT_STREQ(e.value, ref.value) << "chunk " << chunk;
+  }
+  return ref;
+}
+
+// Header, then filler rows for another key up to at least `bytes`.
+std::string fillerLog(const size_t bytes) {
+  std::string log = withHeader("");
+  while (log.size() < bytes) log += row("2026-10-01T08:00:00", "Filler", "number", "1");
+  return log;
+}
+
+}  // namespace
+
+TEST(TrackingRow, PlainAndQuotedFields) {
+  CsvRow r;
+  ASSERT_TRUE(parseRow("2026-10-22T07:05:09,Weight,number,72.5", r));
+  EXPECT_STREQ(r.timestamp, "2026-10-22T07:05:09");
+  EXPECT_STREQ(r.key, "Weight");
+  EXPECT_STREQ(r.type, "number");
+  EXPECT_STREQ(r.value, "72.5");
+
+  ASSERT_TRUE(parseRow("2026-10-22T07:05:09,\"a,\"\"b\"\"\",text,\"Good day, mostly \"\"fine\"\"\"", r));
+  EXPECT_STREQ(r.key, "a,\"b\"");
+  EXPECT_STREQ(r.value, "Good day, mostly \"fine\"");
+
+  ASSERT_TRUE(parseRow("\"2026-10-22T07:05:09\",\"k\",\"list\",\"\"", r));
+  EXPECT_STREQ(r.timestamp, "2026-10-22T07:05:09");
+  EXPECT_STREQ(r.key, "k");
+  EXPECT_STREQ(r.value, "");
+
+  // A none row: empty last field.
+  ASSERT_TRUE(parseRow("2026-10-22T07:05:09,Took meds,none,", r));
+  EXPECT_STREQ(r.value, "");
+  ASSERT_TRUE(parseRow(",,,", r));
+  EXPECT_STREQ(r.timestamp, "");
+  EXPECT_STREQ(r.key, "");
+
+  ASSERT_TRUE(parseRow("t,k,text,\"\"\"\"", r));
+  EXPECT_STREQ(r.value, "\"");
+  ASSERT_TRUE(parseRow("t,k,text,Café ☕ 日本", r));
+  EXPECT_STREQ(r.value, "Café ☕ 日本");
+}
+
+TEST(TrackingRow, RoundTripsEveryFormattedRow) {
+  const char* ts = "2026-10-22T07:05:09";
+  const std::string label(MAX_LABEL_BYTES, '"');
+  const std::string text(MAX_TEXT_BYTES, '"');
+  const std::string commas(MAX_TEXT_BYTES, ',');
+  const char* cases[][3] = {
+      {"Weight", "number", "72.5"},
+      {"Journal", "text", "a \"b\", c"},
+      {"Woke up", "datetime", "2026-10-22T06:30"},
+      {"Took meds", "none", ""},
+      {label.c_str(), "datetime", text.c_str()},
+      {"x", "text", commas.c_str()},
+      {"workout", "list", "Run, easy"},
+  };
+  for (const auto& c : cases) {
+    std::string line = row(ts, c[0], c[1], c[2]);
+    ASSERT_EQ(line.back(), '\n');
+    line.pop_back();
+    CsvRow r;
+    ASSERT_TRUE(parseRow(line, r)) << line;
+    EXPECT_STREQ(r.timestamp, ts);
+    EXPECT_STREQ(r.key, c[0]);
+    EXPECT_STREQ(r.type, c[1]);
+    EXPECT_STREQ(r.value, c[2]);
+  }
+}
+
+TEST(TrackingRow, RejectsMalformed) {
+  CsvRow r;
+  EXPECT_FALSE(parseRow("", r));
+  EXPECT_FALSE(parseRow("a,b,c", r));
+  EXPECT_FALSE(parseRow("a,b,c,d,e", r));
+  EXPECT_FALSE(parseRow("a,b,c,d,", r));
+  EXPECT_FALSE(parseRow("t,k,text,\"unterminated", r));
+  EXPECT_FALSE(parseRow("t,\"k,text,v", r));
+  EXPECT_FALSE(parseRow("t,\"k\"x,text,v", r));  // text after the closing quote
+  EXPECT_FALSE(parseRow("t,k\"x,text,v", r));    // quote inside an unquoted field
+  EXPECT_FALSE(parseRow("t,k,text,v\"", r));
+  EXPECT_FALSE(parseRow("t,k,text,\"v\" ", r));
+}
+
+TEST(TrackingRow, FieldCaps) {
+  CsvRow r;
+  const std::string ts19 = "2026-10-22T07:05:09";
+  const std::string key63(MAX_LABEL_BYTES, 'k');
+  const std::string value128(MAX_TEXT_BYTES, 'v');
+  ASSERT_TRUE(parseRow(ts19 + "," + key63 + ",datetime," + value128, r));
+  EXPECT_EQ(std::string(r.key), key63);
+  EXPECT_EQ(std::string(r.value), value128);
+  // Quoting does not count against the cap; only the unquoted text does.
+  const std::string quoted128 = "\"" + std::string(2 * MAX_TEXT_BYTES, '"') + "\"";
+  ASSERT_TRUE(parseRow(ts19 + ",k,text," + quoted128, r));
+  EXPECT_EQ(std::string(r.value), std::string(MAX_TEXT_BYTES, '"'));
+
+  EXPECT_FALSE(parseRow(ts19 + "0,k,text,v", r));
+  EXPECT_FALSE(parseRow(ts19 + "," + key63 + "k,text,v", r));
+  EXPECT_FALSE(parseRow(ts19 + ",k,datetimes,v", r));
+  EXPECT_FALSE(parseRow(ts19 + ",k,text," + value128 + "v", r));
+  EXPECT_FALSE(parseRow(ts19 + ",k,text,\"" + value128 + "v\"", r));
+}
+
+TEST(TrackingLastEntry, MatchInLastLine) {
+  const std::string log = withHeader(
+      "2026-10-20T08:00:00,Mood,stars,2\n"
+      "2026-10-21T08:00:00,Weight,number,71\n"
+      "2026-10-22T08:00:00,Mood,stars,4\n");
+  const LastEntry e = scanAllChunkings(log, "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-22T08:00:00");
+  EXPECT_STREQ(e.value, "4");
+}
+
+TEST(TrackingLastEntry, NewestMatchWinsOverEarlierOnes) {
+  const std::string log = withHeader(
+      "2026-10-19T08:00:00,Weight,number,73\n"
+      "2026-10-20T08:00:00,Weight,number,72.5\n"
+      "2026-10-21T08:00:00,Mood,stars,2\n"
+      "2026-10-22T08:00:00,Journal,text,\"Weight, 70\"\n");
+  const LastEntry e = scanAllChunkings(log, "Weight");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-20T08:00:00");
+  EXPECT_STREQ(e.value, "72.5");
+}
+
+TEST(TrackingLastEntry, KeyMatchesOnlyTheKeyColumnExactly) {
+  const std::string log = withHeader(
+      "2026-10-20T08:00:00,Weigh,number,1\n"
+      "2026-10-21T08:00:00,Weight2,number,2\n"
+      "2026-10-22T08:00:00,Note,text,Weight\n"
+      "2026-10-22T09:00:00,Weight,text,x\n"
+      "2026-10-23T08:00:00, Weight,number,3\n");
+  EXPECT_FALSE(scanAllChunkings(log, "Wei").found);
+  EXPECT_FALSE(scanAllChunkings(log, "Weights").found);
+  EXPECT_FALSE(scanAllChunkings(log, "text").found);
+  EXPECT_FALSE(scanAllChunkings(log, "2026-10-22T08:00:00").found);
+  const LastEntry e = scanAllChunkings(log, "Weight");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-22T09:00:00");
+  EXPECT_STREQ(e.value, "x");
+  const LastEntry quoted = scanAllChunkings(withHeader("2026-10-22T08:00:00,\"a,\"\"b\"\"\",text,v\n"), "a,\"b\"");
+  ASSERT_TRUE(quoted.found);
+  EXPECT_STREQ(quoted.value, "v");
+}
+
+TEST(TrackingLastEntry, EmptyHeaderOnlyAndNoMatch) {
+  EXPECT_FALSE(scanAllChunkings("", "Mood").found);
+  EXPECT_FALSE(scanAllChunkings(std::string(CSV_HEADER), "Mood").found);
+  EXPECT_FALSE(scanAllChunkings(withHeader(""), "Mood").found);
+  EXPECT_FALSE(scanAllChunkings(withHeader("2026-10-22T08:00:00,Weight,number,1\n"), "Mood").found);
+  // The header is never taken for a row, even for an item keyed "label".
+  EXPECT_FALSE(scanAllChunkings(withHeader(""), "label").found);
+  EXPECT_FALSE(scanAllChunkings("\xEF\xBB\xBF" + withHeader(""), "label").found);
+  EXPECT_FALSE(scanAllChunkings(std::string(CSV_HEADER) + "\r\n", "label").found);
+  // A blank file is just blank lines.
+  EXPECT_FALSE(scanAllChunkings("\n\n\r\n", "Mood").found);
+}
+
+TEST(TrackingLastEntry, NoneRowHasEmptyValue) {
+  const LastEntry e = scanAllChunkings(
+      withHeader("2026-10-22T08:00:00,Took meds,none,\n2026-10-22T09:00:00,Mood,stars,1\n"), "Took meds");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-22T08:00:00");
+  EXPECT_STREQ(e.value, "");
+}
+
+TEST(TrackingLastEntry, LineEndings) {
+  // CRLF throughout, as a spreadsheet re-save leaves it.
+  const std::string crlf =
+      std::string(CSV_HEADER) + "\r\n2026-10-21T08:00:00,Mood,stars,2\r\n2026-10-22T08:00:00,Mood,stars,3\r\n";
+  LastEntry e = scanAllChunkings(crlf, "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "3");
+  // A hand-edited last line without a line end.
+  e = scanAllChunkings(withHeader("2026-10-21T08:00:00,Mood,stars,2\n2026-10-22T08:00:00,Mood,stars,5"), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "5");
+  e = scanAllChunkings(withHeader("2026-10-21T08:00:00,Mood,stars,2\r\n2026-10-22T08:00:00,Mood,stars,5\r"), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "5");
+  // Blank lines between and after rows.
+  e = scanAllChunkings(withHeader("\n2026-10-21T08:00:00,Mood,stars,1\n\n\r\n\n"), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "1");
+  // A first line that is a row (no header) still counts.
+  e = scanAllChunkings("2026-10-21T08:00:00,Mood,stars,1", "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "1");
+  // Only a CR right before the LF is dropped; one mid-line is data.
+  e = scanAllChunkings(withHeader("2026-10-21T08:00:00,Mood,stars,1\r2\r\n"), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "1\r2");
+}
+
+TEST(TrackingLastEntry, OverlongLineSkippedOthersStillFound) {
+  const std::string tooLong = "2026-10-23T08:00:00,Mood,text," + std::string(ROW_BYTES, 'x');
+  const std::string tooLongMatching = "2026-10-23T08:00:00,Mood,stars,9" + std::string(ROW_BYTES, ' ');
+  const std::string log = withHeader("2026-10-20T08:00:00,Mood,stars,1\n" + tooLong + "\n" + tooLongMatching +
+                                     "\n2026-10-24T08:00:00,Other,stars,2\n");
+  LastEntry e = scanAllChunkings(log, "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-20T08:00:00");
+  EXPECT_STREQ(e.value, "1");
+  // Overlong as the newline-less last line, and as the first line.
+  e = scanAllChunkings(withHeader("2026-10-20T08:00:00,Mood,stars,1\n" + tooLong), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "1");
+  EXPECT_FALSE(scanAllChunkings(tooLong + "\n2026-10-24T08:00:00,Other,stars,2\n", "Mood").found);
+}
+
+TEST(TrackingLastEntry, LongestRealRowIsKept) {
+  const std::string label(MAX_LABEL_BYTES, '"');
+  const std::string text(MAX_TEXT_BYTES, '"');
+  const std::string worst = row("2026-10-22T08:00:00", label.c_str(), "datetime", text.c_str());
+  const std::string log = withHeader(worst + "2026-10-23T08:00:00,Mood,stars,1\r\n");
+  const LastEntry e = scanAllChunkings(log, label.c_str());
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-22T08:00:00");
+  EXPECT_EQ(std::string(e.value), text);
+}
+
+TEST(TrackingLastEntry, QuotedNewlineSkippedEarlierRowsIntact) {
+  // A PC edit put a line break inside a quoted value: its pieces fail to
+  // parse and are skipped, and older rows are still found.
+  const std::string log = withHeader(
+      "2026-10-20T08:00:00,Journal,text,older\n"
+      "2026-10-21T08:00:00,Journal,text,\"two\nlines, \"\"quoted\"\"\"\n"
+      "2026-10-22T08:00:00,Mood,stars,3\n");
+  const LastEntry e = scanAllChunkings(log, "Journal");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "2026-10-20T08:00:00");
+  EXPECT_STREQ(e.value, "older");
+  const LastEntry mood = scanAllChunkings(log, "Mood");
+  ASSERT_TRUE(mood.found);
+  EXPECT_STREQ(mood.value, "3");
+}
+
+TEST(TrackingLastEntry, StopsAtNewestMatch) {
+  // Bytes before the match are never needed: garbage there is not reached.
+  auto scanner = std::make_unique<LastEntryScanner>("Mood");
+  const std::string tail = "\n2026-10-22T08:00:00,Mood,stars,4\n2026-10-23T08:00:00,Other,none,\n";
+  EXPECT_TRUE(scanner->feedBackward(tail.data(), tail.size()));
+  const std::string older = withHeader("2026-10-21T08:00:00,Mood,stars,1");
+  EXPECT_TRUE(scanner->feedBackward(older.data(), older.size()));
+  scanner->finishAtFileStart();
+  EXPECT_STREQ(scanner->result().value, "4");
+}
+
+TEST(TrackingLastEntry, LargeLogAcrossManyChunks) {
+  std::string rows;
+  for (int i = 0; i < 2000; i++) {
+    rows += row("2026-10-22T08:00:00", i % 3 == 0 ? "Mood" : "Weight", "number", std::to_string(i).c_str());
+  }
+  const LastEntry e = scanAllChunkings(withHeader(rows), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "1998");
+  const LastEntry w = scanAllChunkings(withHeader(rows), "Weight");
+  ASSERT_TRUE(w.found);
+  EXPECT_STREQ(w.value, "1999");
+}
+
+TEST(TrackingLastEntry, TimestampMustBeExact) {
+  const std::string older = "2026-10-20T08:00:00,Mood,stars,1\n";
+  for (const char* ts : {"", "t", "2026-10-22 08:00:00", "2026-10-22T08:00", "2026/10/22T08:00:00",
+                         "20a6-10-22T08:00:00", "2026-10-22T08:00:0x", "2026-10-22T08-00:00", "\"2026-10-22T08:00\""}) {
+    const LastEntry e = scanAllChunkings(withHeader(older + ts + ",Mood,stars,5\n"), "Mood");
+    ASSERT_TRUE(e.found) << ts;
+    EXPECT_STREQ(e.value, "1") << ts;
+  }
+  // Quoting is not part of the timestamp.
+  const LastEntry quoted = scanAllChunkings(withHeader(older + "\"2026-10-22T08:00:00\",Mood,stars,5\n"), "Mood");
+  EXPECT_STREQ(quoted.value, "5");
+}
+
+TEST(TrackingLastEntry, UnsetClockSentinelRowStillShows) {
+  // appendEntry writes 1970-01-01T00:00:00 when the clock is unset; the shape
+  // check must not reject it.
+  const LastEntry e = scanAllChunkings(withHeader("1970-01-01T00:00:00,Mood,stars,3\n"), "Mood");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.timestamp, "1970-01-01T00:00:00");
+  EXPECT_STREQ(e.value, "3");
+}
+
+TEST(TrackingLastEntry, QuotedNewlineFragmentThatParsesIsSkipped) {
+  // The middle piece "b,Journal,text,c" is a well-formed row but has no timestamp.
+  const std::string log = withHeader(
+      "2026-10-20T08:00:00,Journal,text,older\n"
+      "2026-10-21T08:00:00,Journal,text,\"a\nb,Journal,text,c\n\"\n");
+  const LastEntry e = scanAllChunkings(log, "Journal");
+  ASSERT_TRUE(e.found);
+  EXPECT_STREQ(e.value, "older");
+}
+
+TEST(TrackingLogTail, CapBoundary) {
+  const std::string match = "2026-10-22T08:00:00,Mood,stars,4\n";
+  const std::string head = withHeader("2026-10-21T08:00:00,Mood,stars,1\n");
+  const std::string log = head + match + fillerLog(5000).substr(sizeof(CSV_HEADER));
+  const size_t fromMatch = log.size() - head.size();  // bytes from the match's first byte to the end
+  for (size_t chunk : {1u, 7u, 512u, 700u, 4096u}) {
+    // The line end before the match is inside the cap: the whole line is seen.
+    TailScan r = scanTail(log, "Mood", chunk, fromMatch + 1);
+    ASSERT_TRUE(r.ok);
+    ASSERT_TRUE(r.entry.found) << "chunk " << chunk;
+    EXPECT_STREQ(r.entry.value, "4");
+    // Only the match's bytes are inside: they could be the tail of a longer
+    // line, so they are not taken, and nothing older is read.
+    r = scanTail(log, "Mood", chunk, fromMatch);
+    ASSERT_TRUE(r.ok);
+    EXPECT_FALSE(r.entry.found) << "chunk " << chunk;
+    r = scanTail(log, "Mood", chunk, fromMatch - 1);
+    ASSERT_TRUE(r.ok);
+    EXPECT_FALSE(r.entry.found) << "chunk " << chunk;
+    size_t lowest = SIZE_MAX;
+    for (const auto& read : r.reads) lowest = std::min(lowest, read.first);
+    EXPECT_EQ(lowest, log.size() - (fromMatch - 1)) << "chunk " << chunk;
+  }
+}
+
+TEST(TrackingLogTail, DeviceCapOnALargeLog) {
+  const size_t cap = 256 * 1024;
+  const std::string old = withHeader("2026-10-01T08:00:00,Mood,stars,1\n");
+  const std::string filler = fillerLog(cap).substr(sizeof(CSV_HEADER));
+  EXPECT_FALSE(scanTail(old + filler, "Mood", 4096, cap).entry.found);
+  const TailScan r = scanTail(old + filler + "2026-10-02T08:00:00,Mood,stars,2\n", "Mood", 4096, cap);
+  ASSERT_TRUE(r.ok);
+  ASSERT_TRUE(r.entry.found);
+  EXPECT_STREQ(r.entry.value, "2");
+}
+
+TEST(TrackingLogTail, FileOfExactlyOneAndTwoChunks) {
+  for (size_t size : {size_t{4096}, size_t{8192}}) {
+    // The match is the first line (no header), so only finishAtFileStart() finds it.
+    std::string log = "2026-10-22T08:00:00,Mood,stars,3\n";
+    while (log.size() + 200 < size) log += row("2026-10-01T08:00:00", "Filler", "number", "1");
+    const std::string pad = "2026-10-01T08:00:00,Pad,text,";
+    log += pad + std::string(size - log.size() - pad.size() - 1, 'x') + "\n";
+    ASSERT_EQ(log.size(), size);
+    const TailScan r = scanTail(log, "Mood");
+    ASSERT_TRUE(r.ok);
+    ASSERT_TRUE(r.entry.found) << size;
+    EXPECT_STREQ(r.entry.value, "3");
+    ASSERT_EQ(r.reads.size(), size / 4096);
+    for (size_t i = 0; i < r.reads.size(); i++) {
+      EXPECT_EQ(r.reads[i].first, size - (i + 1) * 4096);
+      EXPECT_EQ(r.reads[i].second, 4096u);
+    }
+    EXPECT_FALSE(scanTail(log, "Other").entry.found);
+  }
+}
+
+TEST(TrackingLogTail, FileSmallerThanOneChunk) {
+  const std::string log = withHeader("2026-10-22T08:00:00,Mood,stars,3\n");
+  const TailScan r = scanTail(log, "Mood");
+  ASSERT_TRUE(r.ok);
+  ASSERT_TRUE(r.entry.found);
+  ASSERT_EQ(r.reads.size(), 1u);
+  EXPECT_EQ(r.reads[0], std::make_pair(size_t{0}, log.size()));
+  // Empty file: no read at all.
+  const TailScan empty = scanTail("", "Mood");
+  EXPECT_TRUE(empty.ok);
+  EXPECT_FALSE(empty.entry.found);
+  EXPECT_TRUE(empty.reads.empty());
+}
+
+TEST(TrackingLogTail, FailedReadGivesNoHint) {
+  const std::string log = withHeader("2026-10-20T08:00:00,Mood,stars,1\n") +
+                          fillerLog(20000).substr(sizeof(CSV_HEADER)) + "2026-10-22T08:00:00,Weight,number,70\n";
+  TailScan r = scanTail(log, "Mood", 4096, SIZE_MAX, 0);
+  EXPECT_FALSE(r.ok);
+  EXPECT_FALSE(r.entry.found);
+  r = scanTail(log, "Mood", 4096, SIZE_MAX, 2);  // fails before the match's chunk
+  EXPECT_FALSE(r.ok);
+  EXPECT_FALSE(r.entry.found);
+  // A failure after the match is never reached.
+  r = scanTail(log, "Weight", 4096, SIZE_MAX, 1);
+  EXPECT_TRUE(r.ok);
+  EXPECT_TRUE(r.entry.found);
+}
+
+TEST(TrackingLogTail, ReadsAreAlignedContiguousAndBounded) {
+  const std::string log = fillerLog(30000) + "2026-10-22T08:00:00,Weight,number,70\n";
+  ASSERT_NE(log.size() % LOG_READ_ALIGN, 0u);
+  for (size_t cap : {SIZE_MAX, size_t{12345}, size_t{8192}}) {
+    for (size_t chunk : {size_t{512}, size_t{1024}, size_t{4096}}) {
+      const TailScan r = scanTail(log, "Mood", chunk, cap);
+      ASSERT_TRUE(r.ok);
+      const size_t scanStart = cap < log.size() ? log.size() - cap : 0;
+      size_t end = log.size();
+      for (const auto& read : r.reads) {
+        EXPECT_EQ(read.first + read.second, end);
+        EXPECT_LE(read.second, chunk);
+        EXPECT_GT(read.second, 0u);
+        if (read.first != scanStart) {
+          EXPECT_EQ(read.first % LOG_READ_ALIGN, 0u) << read.first;
+        }
+        end = read.first;
+      }
+      EXPECT_EQ(end, scanStart) << "cap " << cap << " chunk " << chunk;
+    }
+  }
+}
+
+TEST(TrackingLogTail, AlignmentLosesNoRows) {
+  // Shift every row across the 512-byte grid; every chunking finds the same rows.
+  std::string rows;
+  for (int i = 0; i < 300; i++) {
+    rows += row("2026-10-22T08:00:00", i % 7 == 0 ? "Mood" : "Weight", "number", std::to_string(i).c_str());
+  }
+  for (size_t shift = 0; shift < 2 * LOG_READ_ALIGN; shift += 37) {
+    const std::string log = withHeader(std::string(shift, '\n') + "2026-10-21T08:00:00,Rare,none,\n" + rows);
+    EXPECT_STREQ(scanAllChunkings(log, "Mood").value, "294") << shift;
+    EXPECT_TRUE(scanAllChunkings(log, "Rare").found) << shift;
+    EXPECT_FALSE(scanAllChunkings(log, "Absent").found) << shift;
+  }
 }
