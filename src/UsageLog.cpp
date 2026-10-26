@@ -39,7 +39,7 @@ constexpr char CSV_HEADER[] = "datetime,millis,event,pct,mv,chg,aux,detail\n";
 // stack buffer in writeRow().
 const char* const EVENT_NAMES[] = {"BOOT",     "SLEEP",    "PAGE",   "FL_ON",  "FL_OFF",  "NIGHT_ON", "NIGHT_OFF",
                                    "WIFI_ON",  "WIFI_OFF", "DROP",   "CHG_ON", "CHG_OFF", "FR",       "BOOK_OPEN",
-                                   "BOOK_RDY", "CH_START", "CH_RDY", "LS",     "LSN",     "PT"};
+                                   "BOOK_RDY", "CH_START", "CH_RDY", "LS",     "LSN",     "EPDLOST",  "PT"};
 
 // Battery access mirrors HalPowerManager/HalGPIO: one function-local static
 // monitor for the process, constructed on first use so BoardConfig::ACTIVE is
@@ -254,6 +254,9 @@ void UsageLog::pollState() {
 void UsageLog::pollRefreshes() {
   const uint32_t refreshes = HalDisplay::takeFullRefreshCount();
   if (refreshes > 0) record(EV_FR, 0, refreshes);
+  const uint32_t lost = freeink::takeLostActivationCount();
+  const uint32_t glitches = freeink::takeBusyGlitchCount();
+  if (lost > 0 || glitches > 0) record(EV_EPDLOST, static_cast<uint8_t>(lost > 255 ? 255 : lost), glitches);
 }
 
 bool UsageLog::flush() {
