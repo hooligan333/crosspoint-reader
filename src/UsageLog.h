@@ -124,6 +124,11 @@
 //              Waveform time is in neither. No row when the turn's render
 //              painted no page (error screens) or nothing painted within the
 //              90 s _RDY deadline.
+//   EPDLOST    display-driver diagnostics since the previous EPDLOST row, from
+//              the SDK's counters (freeink::take*Count()): aux = UC8179 PON/DRF
+//              activations whose BUSY_N was never seen (capped at 255; each
+//              forced the next refresh to a full clear), detail = BUSY_N
+//              release glitches the bus wait rejected. No row while both are 0.
 //   DROP       the ring buffer overflowed while the card was unwritable,
 //              aux = entries lost (see the flush notes below)
 //
@@ -312,6 +317,7 @@ class UsageLog {
     EV_CH_RDY,
     EV_LS,
     EV_LSN,
+    EV_EPDLOST,
     EV_PT,
   };
 
@@ -342,7 +348,8 @@ class UsageLog {
   void record(uint8_t event, uint8_t aux, uint32_t detail = 0);
   void sampleBattery();
   void pollState();
-  // Drain HalDisplay's flashing-refresh counter into one FR row. Called from
+  // Drain HalDisplay's flashing-refresh counter into one FR row, and the SDK's
+  // display diagnostics into one EPDLOST row. Called from
   // tick() and once more from noteSleep(), so the sleep screen's own refresh is
   // in the log before the card goes away.
   void pollRefreshes();
