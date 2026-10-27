@@ -286,8 +286,9 @@ void EpubReaderActivity::onExit() {
 
 void EpubReaderActivity::prepareForSleep() {
   ReaderActivity::prepareForSleep();
-  // Quick Resume and Transparent sleep keep the framebuffer as the sleep
-  // frame: the moon icon or the popup is drawn onto it, Quick Resume saves it
+  // Quick Resume and Current Screen (formerly Transparent; since #3770 its
+  // overlay is a separate toggle) sleep keep the framebuffer as the sleep
+  // frame: the moon icon or the overlay is drawn onto it, Quick Resume saves it
   // to SD and restores it on wake. A tick that lent the framebuffer leaves it
   // white while the glass still shows the page (pageBufferStale), and the
   // redraw is only queued for this activity's next loop(), which never comes on
@@ -956,7 +957,8 @@ void EpubReaderActivity::bgBuildTaskLoop() {
       // goes through renderBook()'s makeRoomForChapterBuild(), which stops the radio for it.
       if (!lock.ownsLock()) {
         workPlausible = true;
-      } else if (section && section->isBuilding() && overlay == Overlay::None && radioAllowsBgBuildTick()) {
+      } else if (section && section->isBuilding() && currentSpineIndex != backgroundBuildFailedSpine &&
+                 overlay == Overlay::None && radioAllowsBgBuildTick()) {
         // Not under an open toolbar or panel (upstream #3802): those repaint
         // straight onto the page in the framebuffer, which a tick may lend. Read
         // under the lock, and openOverlay() re-checks pageBufferStale under it,
@@ -1835,6 +1837,13 @@ void EpubReaderActivity::loop() {
   if (bgBuildFailedNotify.exchange(false, std::memory_order_acq_rel)) {
     RenderLock lock;
     LOG_ERR("ERS", "Background section build failed");
+    // Upstream #4040's failure latch, same as backgroundBuildTick(): the error would likely
+    // recur, so from now on this spine is built only as far as the reader goes (the task gates
+    // its tick on it too), and the rebuild reopens on the page the reader was on.
+    if (section) {
+      backgroundBuildFailedSpine = currentSpineIndex;
+      nextPageNumber = section->currentPage;
+    }
     section.reset();
     requestUpdate();
   }

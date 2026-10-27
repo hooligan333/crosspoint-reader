@@ -309,11 +309,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // tick size as the loop pump — the lock is held per 2-page tick, never across
   // a chapter — but ticks run back-to-back on an otherwise idle core, so a
   // chapter finalizes in seconds of background time instead of tracking reading
-  // pace, and the BUILD_WINDOW_AHEAD throttle (which exists to ration loop-task
-  // time on a single core) does not apply. Completion/failure are handed back
+  // pace. (Upstream #4040 retired the BUILD_WINDOW_AHEAD throttle too: its
+  // loop-task backgroundBuildTick() now also builds to the end of the chapter,
+  // in idle loop frames at full CPU clock.) Completion/failure are handed back
   // to the loop task via atomics so reposition/reset/requestUpdate keep running
-  // in their usual task context. If task creation fails, the loop-tick pump
-  // remains as a runtime fallback (gated on bgBuildTaskHandle == nullptr).
+  // in their usual task context; a failure latches backgroundBuildFailedSpine
+  // like upstream's tick does. If task creation fails, upstream's loop tick
+  // remains as a runtime fallback (it returns at once while bgBuildTaskHandle
+  // is set, so the two never step the same Section).
   //
   // The idle wait is notification-driven, not a poll: a permanent 25 ms tick
   // would be 40 wakes/s on core 0 for the whole reading session and would hold
