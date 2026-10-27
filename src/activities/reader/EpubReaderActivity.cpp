@@ -296,10 +296,17 @@ void EpubReaderActivity::prepareForSleep() {
   //
   // Called only from enterDeepSleep() (via ActivityManager::prepareForSleep),
   // on the loop task, with the RenderLock held, before anything there draws.
-  // Stopping the task first is what makes the check final: with it joined and
-  // the render task shut out by the lock, nothing can lend again before the
-  // sleep screen paints. stopBgBuildTask() expects exactly this context (it is
-  // what onExit() runs under) and is a no-op when onExit() later repeats it.
+  // Stopping the task is not by itself enough to make the check final:
+  // goToSleep() then runs a nested ActivityManager::loop() with this reader
+  // still current, and in that pass the loop's own build paths -- upstream's
+  // idle-frame tick (backgroundBuildTick()) and the deferred partial-extension
+  // start -- could start or step a build and lend the framebuffer again, with
+  // no redraw to follow. sleepPrepared shuts both off for the rest of the
+  // sleep entry; with the task joined, that and the render task being shut out
+  // by the lock leave nothing that can lend before the sleep screen paints.
+  // stopBgBuildTask() expects exactly this context (it is what onExit() runs
+  // under) and is a no-op when onExit() later repeats it.
+  sleepPrepared = true;
   stopBgBuildTask();
   // Only while the reader's page is what the frame is meant to hold: a screen
   // pushed on top owns the framebuffer (and since the tick stopped lending
@@ -535,9 +542,12 @@ bool EpubReaderActivity::anyButtonPressed() const {
 
 void EpubReaderActivity::backgroundBuildTick() {
 #ifdef CROSSPOINT_BG_BUILD_TASK
-  // The core-0 build task owns the pump; this loop tick is only its fallback for a failed task
-  // creation. Never both: they would step the same Section from two tasks.
-  if (bgBuildTaskHandle != nullptr) return;
+  // The core-0 build task owns the pump; this loop tick is only its fallback for a FAILED task
+  // creation. Never both: they would step the same Section from two tasks. Not keyed on a null
+  // bgBuildTaskHandle: prepareForSleep() stops the task deliberately and goToSleep() then runs a
+  // nested ActivityManager::loop() with this reader current, where a tick here could lend the
+  // framebuffer that the sleep screen is about to keep (see sleepPrepared).
+  if (!bgBuildTaskCreateFailed || sleepPrepared) return;
 #endif
   RenderLock lock(RenderLock::Mode::Try);
   // Not under an open toolbar or panel: those repaint straight onto the page in the framebuffer.
@@ -849,6 +859,7 @@ void EpubReaderActivity::startBgBuildTask() {
   bgBuildExited.store(false, std::memory_order_relaxed);
   bgBuildCompleteNotify.store(false, std::memory_order_relaxed);
   bgBuildFailedNotify.store(false, std::memory_order_relaxed);
+  bgBuildFailedSpineReport.store(-1, std::memory_order_relaxed);
   bgPageStaleNotify.store(false, std::memory_order_relaxed);
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
   // The pre-decode interlock is process-global, not per-task, and a previous
@@ -875,7 +886,10 @@ void EpubReaderActivity::startBgBuildTask() {
   constexpr uint32_t kStack = 12288;
   if (xTaskCreatePinnedToCore(&bgBuildTaskTrampoline, "ErsBgBuild", kStack, this, 1, &bgBuildTaskHandle, 0) != pdPASS) {
     bgBuildTaskHandle = nullptr;
+    bgBuildTaskCreateFailed = true;
     LOG_ERR("ERS", "Failed to create background build task; falling back to loop ticks");
+  } else {
+    bgBuildTaskCreateFailed = false;
   }
 }
 
@@ -999,7 +1013,10 @@ void EpubReaderActivity::bgBuildTaskLoop() {
           }
           if (!mayLend) section->setMayLendFrameBuffer(true);
           if (!built) {
-            // Reset/redraw belong to the loop task; just report the failure.
+            // Reset/redraw belong to the loop task; just report the failure, naming the spine
+            // this step built (read under the lock held for it) so the loop never acts on a
+            // chapter the reader has since moved to.
+            bgBuildFailedSpineReport.store(currentSpineIndex, std::memory_order_relaxed);
             bgBuildFailedNotify.store(true, std::memory_order_release);
           } else {
             didWork = true;
@@ -1079,11 +1096,12 @@ void EpubReaderActivity::bgBuildTaskLoop() {
 #ifdef CROSSPOINT_NEXT_SECTION_PREBUILD
 bool EpubReaderActivity::renderSpecEquals(const ReaderRenderSpec& a, const ReaderRenderSpec& b) {
   return a.fontId == b.fontId && a.lineCompression == b.lineCompression &&
-         a.extraParagraphSpacing == b.extraParagraphSpacing && a.characterSpacing == b.characterSpacing &&
-         a.wordSpacingPercent == b.wordSpacingPercent && a.paragraphAlignment == b.paragraphAlignment &&
-         a.viewportWidth == b.viewportWidth && a.viewportHeight == b.viewportHeight &&
-         a.hyphenationEnabled == b.hyphenationEnabled && a.embeddedStyle == b.embeddedStyle &&
-         a.imageRendering == b.imageRendering && a.focusReadingEnabled == b.focusReadingEnabled;
+         a.extraParagraphSpacing == b.extraParagraphSpacing && a.paragraphIndentSpaces == b.paragraphIndentSpaces &&
+         a.characterSpacing == b.characterSpacing && a.wordSpacingPercent == b.wordSpacingPercent &&
+         a.paragraphAlignment == b.paragraphAlignment && a.viewportWidth == b.viewportWidth &&
+         a.viewportHeight == b.viewportHeight && a.hyphenationEnabled == b.hyphenationEnabled &&
+         a.embeddedStyle == b.embeddedStyle && a.imageRendering == b.imageRendering &&
+         a.focusReadingEnabled == b.focusReadingEnabled;
 }
 
 void EpubReaderActivity::discardPrebuiltSection() {
@@ -1761,7 +1779,11 @@ void EpubReaderActivity::loop() {
     RenderLock lock(RenderLock::Mode::Try);
     // Never next to the radio: once the reader reaches the watermark, the build starts in
     // renderBook(), which stops the radio first.
-    if (lock.ownsLock() && section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
+    if (lock.ownsLock() &&
+#ifdef CROSSPOINT_BG_BUILD_TASK
+        !sleepPrepared &&  // on the way into deep sleep (see prepareForSleep())
+#endif
+        section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
         !partialRebuildStartFailed && !bleturner::holdsHeap() &&
         section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
 #ifdef CROSSPOINT_BG_IMAGE_DECODE
@@ -1834,24 +1856,34 @@ void EpubReaderActivity::loop() {
     bgRadioGatesClosed = closed;
   }
 #endif
+  // A remembered first failure belongs to the chapter it happened in (BgBuildFailLatch.h).
+  bgBuildFailLatch.onSpine(currentSpineIndex);
   if (bgBuildFailedNotify.exchange(false, std::memory_order_acq_rel)) {
     RenderLock lock;
-    LOG_ERR("ERS", "Background section build failed");
-    // Upstream #4040's failure latch, same as backgroundBuildTick(): the error would likely
-    // recur, so from now on this spine is built only as far as the reader goes (the task gates
-    // its tick on it too), and the rebuild reopens on the page the reader was on.
-    if (section) {
-      backgroundBuildFailedSpine = currentSpineIndex;
+    const int failedSpine = bgBuildFailedSpineReport.load(std::memory_order_relaxed);
+    if (!bg_build_fail::appliesTo(failedSpine, static_cast<bool>(section), currentSpineIndex)) {
+      // The reader left that chapter (or its section is already gone) before this pass: the
+      // failed build went with it, and the open section is not the one that failed.
+      LOG_DBG("ERS", "Background build failure of spine %d no longer current", failedSpine);
+    } else {
+      LOG_ERR("ERS", "Background section build failed");
+      // Upstream #4040's failure latch (backgroundBuildTick() latches on the first failure): a
+      // latched spine is built only as far as the reader goes (the task gates its tick on it).
+      // The fork latches on the SECOND failure of the spine -- this task also builds under child
+      // screens, where a transient OOM is likelier; see BgBuildFailLatch.h. Either way the rebuild
+      // reopens on the page the reader was on.
+      if (bgBuildFailLatch.onFailure(failedSpine)) backgroundBuildFailedSpine = failedSpine;
       nextPageNumber = section->currentPage;
+      section.reset();
+      requestUpdate();
     }
-    section.reset();
-    requestUpdate();
   }
   if (bgBuildCompleteNotify.exchange(false, std::memory_order_acq_rel)) {
     RenderLock lock;
     // cppcheck-suppress knownConditionTrueFalse
-    if (section && section->isBuildComplete() && applyDeferredReposition()) {
-      requestUpdate();
+    if (section && section->isBuildComplete()) {
+      bgBuildFailLatch.onBuildComplete(currentSpineIndex);
+      if (applyDeferredReposition()) requestUpdate();
     }
   }
 #endif
@@ -2926,7 +2958,9 @@ bool EpubReaderActivity::skipLoopDelay() {
   // The short-circuit also keeps buildHeapPaused a single-writer field: with the
   // task alive, only that task calls buildTickHeapGate() — its active-section
   // ticks and its prebuild ticks alike, both on the same thread.
-  if (bgBuildTaskHandle != nullptr) return false;
+  // Keyed like backgroundBuildTick(): a task stopped on purpose (sleep entry)
+  // is not a failed one, and nothing will pump then.
+  if (!bgBuildTaskCreateFailed || sleepPrepared) return false;
 #endif
   // The main loop holds the render lock while querying this hint. It keeps yielding while a button
   // is down: a press that starts inside a long build step gets its second debounce sample ~5 ms

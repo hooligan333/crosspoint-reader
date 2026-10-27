@@ -106,6 +106,7 @@ add_subdirectory(ble_link_note_title)
 add_subdirectory(ble_chapter_build_gate)
 add_subdirectory(ble_remote_turn_gate)
 add_subdirectory(ble_radio_policy)
+add_subdirectory(bg_build_fail_latch)
 
 add_subdirectory(${REPO_ROOT}/lib/BlePageTurner/test BlePageTurnerTests)
 

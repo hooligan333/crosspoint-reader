@@ -33,6 +33,7 @@
 #include <optional>
 #include <vector>
 
+#include "BgBuildFailLatch.h"
 #include "BookmarkEntry.h"
 #include "ChapterPosition.h"
 #include "ClipSelectionActivity.h"
@@ -327,6 +328,20 @@ class EpubReaderActivity final : public ReaderActivity {
   std::atomic<bool> bgBuildExited{false};
   std::atomic<bool> bgBuildCompleteNotify{false};
   std::atomic<bool> bgBuildFailedNotify{false};
+  // The spine the failed step was building, stored by the task under the RenderLock it held for
+  // that step, before bgBuildFailedNotify. The loop acts on a failure only while that spine is
+  // still the open one (bg_build_fail::appliesTo): the reader may have turned chapters since.
+  std::atomic<int> bgBuildFailedSpineReport{-1};
+  // Second-failure latch for the task's failures (BgBuildFailLatch.h); loop task only.
+  bg_build_fail::Latch bgBuildFailLatch;
+  // xTaskCreatePinnedToCore() failed in startBgBuildTask(): only then does upstream's loop tick
+  // (backgroundBuildTick()) pump the build. A null bgBuildTaskHandle alone does not mean that --
+  // prepareForSleep() and onExit() stop the task deliberately, with the reader still current.
+  bool bgBuildTaskCreateFailed = false;
+  // Set by prepareForSleep(): the way into deep sleep is under way. goToSleep() still runs a
+  // nested ActivityManager::loop() with this reader current; no build may start or step there
+  // (a step can lend the framebuffer, and nothing would redraw it before the sleep frame is kept).
+  bool sleepPrepared = false;
   // Upstream #3802 for the task: a build tick lent the framebuffer (an image
   // probe), so the page in it is gone while the panel still shows it. The task
   // sets pageBufferStale itself; the loop task consumes this and requestUpdate()s,
