@@ -177,7 +177,10 @@ class HalGPIO {
   // armed, so it is left unarmed and the round falls back to the loop's stock
   // 50 ms cadence — which is also the floor for how fast this can return. A
   // held level can therefore neither busy-loop the caller nor hide an input
-  // behind the full cap.
+  // behind the full cap. The touch INT is re-queried from the SDK on every call
+  // (never cached): while the SDK withdraws it (status register unreachable on
+  // I2C) it is left out like an asserted pin, the buttons still arm, and it is
+  // armed again on the first call after the SDK offers it back.
   bool waitForInput(uint32_t maxMs);
 
   // True while ANY wake-capable pin sits at its wake level, i.e. a contact is in
@@ -185,7 +188,8 @@ class HalGPIO {
   // pin unarmed and floors the pass at 50 ms -- and 50 ms between polls is what
   // costs #3463 its sub-50 ms presses, since InputManager only commits a press
   // when a second poll >= DEBOUNCE_DELAY later agrees. Callers use this to fall
-  // back to the 10 ms slice poll for the duration of the press.
+  // back to the 10 ms slice poll for the duration of the press. A touch INT the
+  // SDK has withdrawn is not counted (re-queried per call, like waitForInput()).
   bool anyWakePinAsserted() const;
 #endif
 
