@@ -1052,7 +1052,9 @@ void setup() {
 #ifdef CROSSPOINT_TOUCH_INT_WAKE
   // Runs on loopTask, which is also what waitForInput() blocks below, and after
   // gpio.begin() has probed the touch controller — so the GT911 INT is already
-  // either configured as a level hold or reported unusable.
+  // either configured as a level hold or refused. Whether it is armed is still
+  // re-asked before every wait (the SDK can withdraw it for an I2C fault and
+  // offer it back), so this only reserves its slot.
   gpio.beginInputWake();
 #endif
 

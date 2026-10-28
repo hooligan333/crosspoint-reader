@@ -350,6 +350,17 @@ WakePin wakePins[MAX_WAKE_PINS];
 uint8_t wakePinCount = 0;
 bool wakePinOverflow = false;
 bool wakeUsable = false;
+// Index of the touch INT in wakePins, or -1. The SLOT is reserved once, at
+// setup, but whether it is ARMED is decided again before every wait (and every
+// anyWakePinAsserted() read) from InputManager::touchWakeIrqPin(): the SDK
+// withdraws the line (-1) while it cannot read or clear the GT911 status
+// register — a pending report would then hold INT asserted indefinitely and a
+// level wake on it would pin the loop awake — and offers it again once a poll
+// gets through. A withdrawn slot is treated exactly like an already-asserted
+// pin: left unarmed, and the round falls back to the stock LOOP_FLOOR_MS
+// cadence, so touch keeps working through the ordinary poll while the buttons
+// still wake the wait. Recovery re-arms on the next wait, with no reboot.
+int8_t touchWakeSlot = -1;
 // Written once on loopTask (before any wake interrupt is ever enabled), read
 // from the ISR: atomic so the ISR/task sharing is formally synchronised, not
 // merely benign-by-ordering. Relaxed is enough — there is no dependent data.
@@ -395,25 +406,34 @@ void IRAM_ATTR inputWakeIsr(void* arg) {
   }
 }
 
-void addWakePin(const int8_t pin, const bool activeLow) {
+// Returns the pin's slot in wakePins, or -1 when it was not added.
+int8_t addWakePin(const int8_t pin, const bool activeLow) {
   if (pin < 0) {
-    return;
+    return -1;
   }
   for (uint8_t i = 0; i < wakePinCount; ++i) {
-    if (wakePins[i].pin == static_cast<gpio_num_t>(pin)) return;  // shared pin (confirm/power)
+    if (wakePins[i].pin == static_cast<gpio_num_t>(pin)) return static_cast<int8_t>(i);  // shared (confirm/power)
   }
   if (wakePinCount >= MAX_WAKE_PINS) {
     // Silently dropping a pin would leave the wait deaf to that input for up to
     // a full second. Fail the whole mechanism closed instead; the caller then
     // keeps the stock 50 ms poll, which sees every button.
     wakePinOverflow = true;
-    return;
+    return -1;
   }
-  wakePins[wakePinCount++] = {static_cast<gpio_num_t>(pin), activeLow};
+  wakePins[wakePinCount] = {static_cast<gpio_num_t>(pin), activeLow};
+  return static_cast<int8_t>(wakePinCount++);
 }
 
 // True while the pin sits at the level it would wake on.
 bool wakePinAsserted(const WakePin& p) { return digitalRead(p.pin) == (p.activeLow ? LOW : HIGH); }
+
+// Whether the reserved touch slot may be armed right now. A plain getter on
+// InputManager state (no I2C), so asking it on every wait costs nothing; the
+// state it reads is written by update() on this same loop task.
+bool touchWakeSlotLive(const InputManager& input) {
+  return touchWakeSlot < 0 || input.touchWakeIrqPin() == static_cast<int8_t>(wakePins[touchWakeSlot].pin);
+}
 
 }  // namespace
 
@@ -422,6 +442,7 @@ void HalGPIO::beginInputWake() {
   wakePinCount = 0;
   wakePinOverflow = false;
   wakeUsable = false;
+  touchWakeSlot = -1;
 
   // Button pin modes already belong to InputManager::begin() (INPUT_PULLUP for
   // the nav keys, powerActiveHigh for power) and the touch INT's to the GT911
@@ -435,8 +456,24 @@ void HalGPIO::beginInputWake() {
   }
   addWakePin(in.power, !in.powerActiveHigh);
 
-  const int8_t touchIrq = inputMgr.touchWakeIrqPin();
-  addWakePin(touchIrq, inputMgr.touchWakeIrqActiveLow());
+  // Not cached as a decision: touchWakeIrqPin() can read -1 right now only
+  // because the post-config status clear failed (the SDK withdraws the line
+  // until a poll clears it), so reserve the slot whenever the SDK is able to
+  // offer the line at all, and let each wait re-ask (see touchWakeSlot). A
+  // controller that refused the level mode outright leaves the slot reserved
+  // but never armed: every wait then runs at the stock LOOP_FLOOR_MS cadence.
+  // Polarity is the board profile's, a constant, so it is read once.
+  int8_t touchIrq = inputMgr.touchWakeIrqPin();
+#if FREEINK_TOUCH_GT911 && FREEINK_GT911_INT_WAKE
+  if (touchIrq < 0 && inputMgr.hasTouch() &&
+      BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Gt911) {
+    touchIrq = BoardConfig::ACTIVE.touch.irq;
+  }
+#endif
+  const uint8_t countBeforeTouch = wakePinCount;
+  const int8_t touchSlot = addWakePin(touchIrq, inputMgr.touchWakeIrqActiveLow());
+  // Only a slot of its own: a touch INT sharing a button's GPIO stays a button.
+  touchWakeSlot = wakePinCount > countBeforeTouch ? touchSlot : -1;
 
   // Every input the loop can act on has to be something this can arm, or the
   // wait would be deaf to the rest of them for up to its full cap. Boards that
@@ -446,15 +483,17 @@ void HalGPIO::beginInputWake() {
   //   * a board button hook (LilyGo T5 S3's user button on its PCA9535): the
   //     key is behind an I2C expander, invisible to a GPIO interrupt, and the
   //     expander's own INT line is not modeled here;
-  //   * a live touch panel with no level-holding INT: a contact would have no
-  //     way to signal during a long wait (see FREEINK_GT911_INT_WAKE, which is
-  //     what makes touchWakeIrqPin() report a pin at all);
+  //   * a live touch panel with no INT that could ever hold a level: a contact
+  //     would have no way to signal during a long wait (see
+  //     FREEINK_GT911_INT_WAKE, which is what makes touchWakeIrqPin() report a
+  //     pin at all, and touchWakeSlot for an INT that is only withdrawn for now);
   //   * more wake pins than the table holds (see addWakePin).
   const bool navKeysAreGpio =
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::XteinkAdcLadder && !InputManager::hasButtonHook();
   wakeUsable = wakePinCount > 0 && !wakePinOverflow && navKeysAreGpio && (!inputMgr.hasTouch() || touchIrq >= 0);
-  LOG_INF("PWR", "Input wake: %u pin(s), touch INT %d, gpioKeys=%d usable=%d", static_cast<unsigned>(wakePinCount),
-          static_cast<int>(touchIrq), static_cast<int>(navKeysAreGpio), static_cast<int>(wakeUsable));
+  LOG_INF("PWR", "Input wake: %u pin(s), touch INT %d (offered now %d), gpioKeys=%d usable=%d",
+          static_cast<unsigned>(wakePinCount), static_cast<int>(touchIrq), static_cast<int>(inputMgr.touchWakeIrqPin()),
+          static_cast<int>(navKeysAreGpio), static_cast<int>(wakeUsable));
   if (!wakeUsable) {
     wakePinCount = 0;
     return;
@@ -487,8 +526,12 @@ bool HalGPIO::waitForInput(const uint32_t maxMs) {
   // the line lets go, which is the busy loop LOOP_FLOOR_MS exists to bound;
   // leaving it disarmed costs nothing, because the poll that runs immediately
   // after this call is what reads its state anyway.
+  // The touch INT is re-asked for every wait; a withdrawn one is left out the
+  // same way, so this round runs at the stock cadence (see touchWakeSlot).
+  const bool touchLive = touchWakeSlotLive(inputMgr);
   uint8_t armedCount = 0;
   for (uint8_t i = 0; i < wakePinCount; ++i) {
+    if (i == touchWakeSlot && !touchLive) continue;
     if (wakePinAsserted(wakePins[i])) continue;
     gpio_wakeup_enable(wakePins[i].pin, wakePins[i].activeLow ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
     gpio_intr_enable(wakePins[i].pin);
@@ -534,7 +577,13 @@ bool HalGPIO::waitForInput(const uint32_t maxMs) {
 }
 
 bool HalGPIO::anyWakePinAsserted() const {
+  // A withdrawn touch INT may be held asserted by a report the poll cannot
+  // clear; counting it would hold the caller in its 10 ms slice poll for as
+  // long as the I2C fault lasts. It is not a wake source this round, so it is
+  // not a contact in progress either — touch is still read by the poll.
+  const bool touchLive = touchWakeSlotLive(inputMgr);
   for (uint8_t i = 0; i < wakePinCount; ++i) {
+    if (i == touchWakeSlot && !touchLive) continue;
     if (wakePinAsserted(wakePins[i])) return true;
   }
   return false;
