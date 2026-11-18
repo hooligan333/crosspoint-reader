@@ -76,8 +76,18 @@ void ClipSelectionActivity::onEnter() {
   lookupAvailable =
       mode == Mode::DefinitionLookup || DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryPath);
   fontId = SETTINGS.getReaderFontId();
-  lineHeight = renderer.getLineHeight(fontId);
-  const bool extracted = extractWords();
+  bool extracted = false;
+  {
+    // Measure the reader font under the RenderLock, like DictionaryDefinitionActivity::onEnter(). onEnter() runs
+    // after ActivityManager released its own lock, and a Push does not stop the reader underneath: its background
+    // build can still be laying out the chapter on the other core, and Section::finalizeBuild() releases the SD
+    // font caches (advance tables, glyph minis, TTF variants) that extractWords() reads and fills here. Nothing
+    // in this scope takes the lock again or waits on another task, so the blocking acquire only serializes with
+    // that build tick (or a render in flight).
+    RenderLock lock;
+    lineHeight = renderer.getLineHeight(fontId);
+    extracted = extractWords();
+  }
   if (!extracted && mode == Mode::DefinitionLookup) {
     static constexpr StrId OPTIONS[] = {StrId::STR_BACK};
     actionPopup.show(StrId::STR_DICT_LOW_MEMORY, OPTIONS, 1, 0, [this](int) { cancel(); });

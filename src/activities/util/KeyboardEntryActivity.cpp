@@ -434,6 +434,15 @@ bool KeyboardEntryActivity::cursorPositionFromPoint(const int x, const int y, si
   // never the text field, so skip the wrap/measure work entirely.
   if (y >= keyboardRect().y) return false;
 
+  // The measurements below go through UI_12's SD/TTF fallback for scripts the
+  // built-in UI font lacks, which can be the reader's own SD font. A reader
+  // below this screen may still be building its chapter on the other core and
+  // release those caches at the end of the build, under the RenderLock. Don't
+  // block the input loop for it: when the lock is busy, treat the tap as a
+  // miss (the cursor stays put; the user can tap again).
+  RenderLock lock(RenderLock::Mode::Try);
+  if (!lock.ownsLock()) return false;
+
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Text and cursor hit-testing live in the same bezel-safe content box the
   // field underline (drawTextField) and keyboard use; deriving the margin from
