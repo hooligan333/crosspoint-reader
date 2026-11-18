@@ -215,12 +215,21 @@ void UsageLog::sampleBattery() {
   lastChg = monitor().isCharging();
 }
 
-void UsageLog::pollState() {
+void UsageLog::noteFrontlightRestored() {
+  if (!started) return;
+  pollFrontlight();
+}
+
+void UsageLog::pollFrontlight() {
   const bool frontlightOn = Frontlight.present() && Frontlight.isOn();
   if (frontlightOn != lastFrontlightOn) {
     lastFrontlightOn = frontlightOn;
     record(frontlightOn ? EV_FL_ON : EV_FL_OFF, frontlightOn ? Frontlight.brightness() : 0);
   }
+}
+
+void UsageLog::pollState() {
+  pollFrontlight();
 
   const bool nightMode = SETTINGS.screenInverted != 0;
   if (nightMode != lastNightMode) {

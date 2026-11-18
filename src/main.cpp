@@ -892,8 +892,8 @@ void setup() {
   // state read what those established. Ahead of the wake classification below,
   // so a rejected wake still leaves its BOOT + SLEEP pair. Upstream #4407 moved
   // the frontlight restore after that classification (rejected wakes stay
-  // dark), so the light is not restored yet here: a restored light is recorded
-  // as FL_ON by the first tick() instead of by the seed.
+  // dark), so the light is not restored yet here: noteFrontlightRestored()
+  // right after Frontlight.begin() below records it.
   usageLog.begin();
 #endif
 
@@ -956,6 +956,11 @@ void setup() {
                                   ? gpio.isToggleSwitchOn()
                                   : (SETTINGS.frontlightOn != 0 && SETTINGS.frontlightRestoreOnWake != 0);
   Frontlight.begin(SETTINGS.frontlightBrightness, SETTINGS.frontlightWarmth, restoreLightOn);
+#ifdef CROSSPOINT_USAGE_LOG
+  // A restored light gets its FL_ON row now, within milliseconds of BOOT, not
+  // on the first tick() after the rest of setup.
+  usageLog.noteFrontlightRestored();
+#endif
   // No light to toggle: drop the action so single clicks do not wait for a double click.
   if (!Frontlight.present() && SETTINGS.doublePwrBtn == CrossPointSettings::PWR_FRONTLIGHT) {
     SETTINGS.doublePwrBtn = CrossPointSettings::IGNORE;

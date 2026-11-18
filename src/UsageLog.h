@@ -219,10 +219,19 @@ extern UsageLog usageLog;  // Singleton
 class UsageLog {
  public:
   // Call once from setup(), after Storage.begin() succeeded and after SETTINGS
-  // and the frontlight have been restored (the seed rows read both). Rotates a
-  // log that is oversized OR carries an older schema (see the migration note at
-  // the top), then records BOOT plus the initial FL/NIGHT/WIFI/CHG state.
+  // have been restored (the seed rows read them). Rotates a log that is
+  // oversized OR carries an older schema (see the migration note at the top),
+  // then records BOOT plus the initial FL/NIGHT/WIFI/CHG state.
   void begin();
+
+  // Call once right after Frontlight.begin(), which runs after begin() and the
+  // wake classification (upstream #4407: rejected wakes stay dark). Records a
+  // light restored at boot as FL_ON within milliseconds of BOOT, as begin()'s
+  // seed did before #4407, instead of on the first tick() after the whole
+  // setup tail -- analysis (probe3.py) reads an FL_ON more than 3 s after BOOT
+  // as a user toggle. The same compare-and-record as tick()'s poll, so a light
+  // seen here is not recorded a second time. No-op before begin().
+  void noteFrontlightRestored();
 
   // Call on every loop() pass; rate-limits itself to POLL_INTERVAL_MS. Refreshes
   // the battery cache, emits FL/NIGHT/WIFI change rows, and flushes once the
@@ -348,6 +357,7 @@ class UsageLog {
   void record(uint8_t event, uint8_t aux, uint32_t detail = 0);
   void sampleBattery();
   void pollState();
+  void pollFrontlight();
   // Drain HalDisplay's flashing-refresh counter into one FR row, and the SDK's
   // display diagnostics into one EPDLOST row. Called from
   // tick() and once more from noteSleep(), so the sleep screen's own refresh is
