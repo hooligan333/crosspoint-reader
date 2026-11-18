@@ -8,6 +8,7 @@
 
 #include <Arduino.h>
 #include <HalDisplay.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 #include <InflateReader.h>
 #include <Logging.h>
@@ -367,7 +368,14 @@ void PcLinkActivity::forwardInput() {
         pclink::buildInput(payload, pclink::INPUT_SRC_BUTTON, code, 1, pclink::COORD_NONE, pclink::COORD_NONE, now);
         send(MsgType::Input, payload, sizeof(payload));
       }
-      if (mappedInput.wasReleased(button)) {
+      // Power's release from the raw edge: since upstream #4435 the mapped
+      // wasReleased(Power) is false whenever the power double click is bound
+      // (the X4 Pro default) -- clicks are classified into one-frame actions
+      // instead -- and the host would never see the button come back up.
+      // Same edge mapButton() reads for Power, which bypasses remapping.
+      const bool released = button == MappedInputManager::Button::Power ? gpio.wasReleased(HalGPIO::BTN_POWER)
+                                                                        : mappedInput.wasReleased(button);
+      if (released) {
         pclink::buildInput(payload, pclink::INPUT_SRC_BUTTON, code, 0, pclink::COORD_NONE, pclink::COORD_NONE, now);
         send(MsgType::Input, payload, sizeof(payload));
       }
@@ -599,6 +607,12 @@ void PcLinkActivity::buildStatusScreen(UiScreen& screen) const {
 void PcLinkActivity::restartToHome() {
   if (restartRequested) return;
   restartRequested = true;
+  // A power press or hold that ends the session must not reach the restarted
+  // firmware as a fresh hold, which would sleep the device once it passed the
+  // sleep threshold. Consumed here, armSilentReboot() carries the suppression
+  // across the reboot (upstream #4407's SILENT_REBOOT_SUPPRESS_POWER), exactly
+  // as UsbDriveActivity's power exit does.
+  if (mappedInput.isPowerHeld()) mappedInput.consumePowerGesture();
   LOG_INF("PCL", "PC Link exit: %lu frames, %lu refreshes", static_cast<unsigned long>(stats.frames),
           static_cast<unsigned long>(stats.refreshes));
   // A reboot, as every exclusive-loop activity exits: it also restores the
