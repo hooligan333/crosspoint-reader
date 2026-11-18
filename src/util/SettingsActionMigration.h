@@ -46,4 +46,20 @@ inline bool remapHomeGoBack(const bool stamped, const uint8_t storedGoBack, cons
   return !stamped || storedGoBack != goBack;
 }
 
+// Double-click power button (CROSSPOINT_PWR_TOGGLE_LIGHT builds). Upstream
+// #4435 replaced the r10-and-earlier "doubleClickPwrLight" toggle (on = a power
+// double click toggles the frontlight; absent = on) with "doublePwrBtn", and
+// reads the old key only when the new one is absent. A flagged build also
+// writes the old key, derived from doublePwrBtn, so an r10 image rolled back
+// onto this file keeps the user's choice instead of falling back to its
+// default (on). r10 has no other double-click action, so anything but the
+// frontlight is written as off: r10 then adds no double-click wait to single
+// clicks. Never read back while doublePwrBtn is present. PWR_FRONTLIGHT is
+// pinned to the CrossPointSettings enum by static_assert in CrossPointSettings.cpp.
+inline constexpr uint8_t DOUBLE_PWR_FRONTLIGHT = 10;
+
+inline constexpr uint8_t legacyDoubleClickPwrLight(const uint8_t doublePwrBtn) {
+  return doublePwrBtn == DOUBLE_PWR_FRONTLIGHT ? 1 : 0;
+}
+
 }  // namespace settings_migration

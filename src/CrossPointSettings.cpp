@@ -178,6 +178,13 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["longPressMenuFunction"] = longPressMenuFunction;
   doc["shortPwrBtn"] = shortPwrBtn;
   doc["doublePwrBtn"] = doublePwrBtn;
+#ifdef CROSSPOINT_PWR_TOGGLE_LIGHT
+  // Rollback compat, like clockDstRule above: r10 and earlier fork images read
+  // only the legacy toggle, and without it they default to on, re-enabling the
+  // double-click frontlight. See settings_migration::legacyDoubleClickPwrLight().
+  static_assert(PWR_FRONTLIGHT == settings_migration::DOUBLE_PWR_FRONTLIGHT);
+  doc["doubleClickPwrLight"] = settings_migration::legacyDoubleClickPwrLight(doublePwrBtn);
+#endif
 #ifdef CROSSPOINT_HOME_TAP_GO_BACK
   // The value GoBack has in THIS build, so a later fork build whose GoBack moved
   // again (upstream appending actions) can remap it on load. See fromJson().

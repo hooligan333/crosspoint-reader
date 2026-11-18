@@ -1,7 +1,8 @@
 // Fork (r8): the persisted-enum migrations CrossPointSettings::fromJson() runs
 // on a loaded settings.json -- short-power Toggle Light 6 -> 11 on touch boards
 // and 10 -> 11 everywhere (r11), and Home-key Go Back 11 -> 13 keyed on the
-// "homeGoBackAction" stamp (12 -> 13 for r8-r10 stamps, r11).
+// "homeGoBackAction" stamp (12 -> 13 for r8-r10 stamps, r11) -- plus the
+// rollback-only legacy doubleClickPwrLight key r11 writes next to doublePwrBtn.
 //
 // load() below mirrors exactly what fromJson() does with these keys: the stamp
 // is "present or not" plus its value (HOME_GO_BACK_LEGACY_VALUE when absent),
@@ -192,4 +193,28 @@ TEST(SettingsActionMigration, StampedFileBrowserStaysFileBrowser) {
   EXPECT_EQ(s.tap, u8(A::FileBrowser));
   EXPECT_EQ(s.longPress, u8(A::GoBack));
   EXPECT_FALSE(s.needsResave);
+}
+
+TEST(SettingsActionMigration, R11WritesLegacyDoubleClickLightForRollback) {
+  // r11 writes doublePwrBtn plus the legacy doubleClickPwrLight derived from it
+  // (toJson(), CROSSPOINT_PWR_TOGGLE_LIGHT). r10 reads only the legacy key, as a
+  // toggle: nonzero = a power double click toggles the frontlight. Absent, it
+  // defaults to on -- the silent re-enable this key prevents. After a rollback,
+  // r10 resaves only the legacy key, and r11 then reads it through upstream's
+  // fallback (fromJson(): doublePwrBtn absent -> nonzero ? PWR_FRONTLIGHT :
+  // IGNORE), mirrored here.
+  EXPECT_EQ(settings_migration::DOUBLE_PWR_FRONTLIGHT, PWR_FRONTLIGHT);
+  const auto r11ReadsLegacy = [](const uint8_t legacy) { return legacy ? PWR_FRONTLIGHT : IGNORE; };
+  for (uint8_t doublePwrBtn = 0; doublePwrBtn <= PWR_FRONTLIGHT; ++doublePwrBtn) {
+    const uint8_t legacy = settings_migration::legacyDoubleClickPwrLight(doublePwrBtn);
+    EXPECT_LE(legacy, 1) << "r10's toggle row holds 0/1 only";
+    const bool r10DoubleClickLight = legacy != 0;
+    EXPECT_EQ(r10DoubleClickLight, doublePwrBtn == PWR_FRONTLIGHT) << "doublePwrBtn " << int{doublePwrBtn};
+    // Back on r11 from an r10-resaved file: the frontlight/off choice survives;
+    // other double-click actions (r10 has none) come back as off.
+    EXPECT_EQ(r11ReadsLegacy(legacy), doublePwrBtn == PWR_FRONTLIGHT ? PWR_FRONTLIGHT : IGNORE);
+  }
+  // Double-click light = off (or on) survives r10 -> r11 -> r10.
+  EXPECT_EQ(settings_migration::legacyDoubleClickPwrLight(r11ReadsLegacy(0)), 0);
+  EXPECT_EQ(settings_migration::legacyDoubleClickPwrLight(r11ReadsLegacy(1)), 1);
 }
