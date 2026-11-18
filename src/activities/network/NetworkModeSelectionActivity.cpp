@@ -38,7 +38,14 @@ NetworkModeSelectionActivity::NetworkModeSelectionActivity(GfxRenderer& renderer
     : UiListActivity("NetworkModeSelection", renderer, mappedInput) {
   // Home shows OPDS in its Plugins slot while plugins are off and a server
   // exists, so the row is listed here only in the other cases.
+#ifdef CROSSPOINT_NO_PLUGINS_ROW
+  // Fork: Home's slot never shows Plugins on these builds (HomeActivity::onEnter
+  // forces hasPlugins off), so it shows OPDS whenever a server exists, whatever
+  // the plugin setting says. Keep this row its exact complement.
+  const bool opdsOnHome = OPDS_STORE.hasServers();
+#else
   const bool opdsOnHome = !SETTINGS.pluginsEnabled && OPDS_STORE.hasServers();
+#endif
   // Static for the screen's lifetime, so built once here rather than every
   // buildScreen() call.
   for (const ModeRow& row : MODE_ROWS) {
