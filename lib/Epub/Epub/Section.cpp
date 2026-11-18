@@ -908,7 +908,13 @@ bool Section::finalizeBuild() {
   partialPageCount_ = 0;
   pageCount = builtPageCount_;
   // Drop caches grown beside parser allocations so prewarming can reuse the freed space.
-  if (auto* fontCache = renderer.getFontCacheManager()) {
+  // Fork: not while the build is still a speculative prebuild of the NEXT spine
+  // (CROSSPOINT_NEXT_SECTION_PREBUILD; see startBuild()'s mayReleaseFontCaches in the
+  // header). Those caches belong to the page the reader is on; the core-0 build task
+  // finishes the prebuild under the RenderLock, so this is about locality, not
+  // lifetime. An adopted prebuild is no longer speculative (setMayLendFrameBuffer)
+  // and releases like any foreground build. Always false without the prebuild flag.
+  if (auto* fontCache = speculativeBuild_ ? nullptr : renderer.getFontCacheManager()) {
     fontCache->releaseSdFontCaches();
   }
   return true;

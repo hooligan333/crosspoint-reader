@@ -122,7 +122,9 @@ class Section {
   // resident caches -- smaller than before, still a real page-turn cost. Pass false
   // from a background/speculative caller; it declines on its own heap floors
   // instead (see EpubReaderActivity's PREBUILD_BUILD_MIN_* gates), and a
-  // declined prebuild costs nothing.
+  // declined prebuild costs nothing. Upstream #4469 releases the same caches
+  // again when a build finalizes; finalizeBuild() skips that while the build is
+  // still speculative (mayLendFrameBuffer=false, not yet adopted).
   // mayLendFrameBuffer: upstream #3802 lets the chapter parser's image probe retry
   // and its whole-image extraction borrow the framebuffer (FrameBufferLoan), which
   // returns it white while the panel still shows the page; the caller of a lending
